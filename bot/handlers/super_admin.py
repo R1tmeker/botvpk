@@ -6,8 +6,8 @@ from aiogram.filters import Command
 from aiogram.filters.command import CommandObject
 from aiogram.types import Message
 
-from ..context import BotContext
 from ..config_loader import load_config, update_config
+from ..context import BotContext
 from ..services.exceptions import NotFoundError, ValidationServiceError
 from ..utils.audit import log_action
 from ..utils.roles import Role
@@ -17,7 +17,7 @@ router = Router(name="super_admin")
 
 async def _check_super_admin(message: Message, context: BotContext) -> bool:
     if message.from_user.id != context.config.super_admin_id:
-        await message.answer("Только супер-админ может выполнять эту команду.")
+        await message.answer("Эта команда доступна только супер-админу.")
         return False
     return True
 
@@ -27,11 +27,11 @@ async def set_role(message: Message, context: BotContext, command: CommandObject
     if not await _check_super_admin(message, context):
         return
     if not command.args:
-        await message.answer("Использование: /set_role &lt;id&gt; &lt;ROLE&gt;")
+        await message.answer("Использование: /set_role ID ROLE (ROLE: SUPER_ADMIN, ADMIN, LEAD, USER_CONFIRMED, USER_PENDING).")
         return
     parts = command.args.split()
     if len(parts) != 2:
-        await message.answer("Использование: /set_role &lt;id&gt; &lt;ROLE&gt;")
+        await message.answer("Использование: /set_role ID ROLE")
         return
     try:
         member_id = int(parts[0])
@@ -40,7 +40,7 @@ async def set_role(message: Message, context: BotContext, command: CommandObject
         return
     role = parts[1].upper()
     if role not in [r.value for r in Role]:
-        await message.answer("Недопустимая роль.")
+        await message.answer("Неизвестная роль. Допустимые: SUPER_ADMIN, ADMIN, LEAD, USER_CONFIRMED, USER_PENDING.")
         return
     try:
         member = context.roster_service.set_role(member_id, role)
@@ -55,11 +55,11 @@ async def set_status(message: Message, context: BotContext, command: CommandObje
     if not await _check_super_admin(message, context):
         return
     if not command.args:
-        await message.answer("Использование: /set_status &lt;id&gt; active|removed")
+        await message.answer("Использование: /set_status ID active|removed")
         return
     parts = command.args.split()
     if len(parts) != 2:
-        await message.answer("Использование: /set_status &lt;id&gt; active|removed")
+        await message.answer("Использование: /set_status ID active|removed")
         return
     try:
         member_id = int(parts[0])
@@ -68,7 +68,7 @@ async def set_status(message: Message, context: BotContext, command: CommandObje
         return
     status = parts[1].lower()
     if status not in {"active", "removed"}:
-        await message.answer("Статус: active или removed.")
+        await message.answer("Статус может быть только active или removed.")
         return
     try:
         member = context.roster_service.set_status(member_id, status)
@@ -83,11 +83,11 @@ async def set_timezone(message: Message, context: BotContext, command: CommandOb
     if not await _check_super_admin(message, context):
         return
     if not command.args:
-        await message.answer("Использование: /set_tz &lt;Timezone&gt;")
+        await message.answer("Использование: /set_tz Europe/Moscow (любой идентификатор из базы tzdata).")
         return
     tz_name = command.args.strip()
     if tz_name not in pytz.all_timezones:
-        await message.answer("Неверный идентификатор часового пояса.")
+        await message.answer("Неизвестный часовой пояс. Проверьте написание.")
         return
     update_config(context.config_path, {"TZ": tz_name})
     context.config = load_config(context.config_path)
@@ -108,7 +108,7 @@ async def set_dryrun(message: Message, context: BotContext, command: CommandObje
         return
     value = command.args.strip().lower()
     if value not in {"on", "off"}:
-        await message.answer("Используйте on или off.")
+        await message.answer("Допустимые значения: on или off.")
         return
     dryrun_value = value == "on"
     update_config(context.config_path, {"DRYRUN": "true" if dryrun_value else "false"})
@@ -134,5 +134,6 @@ async def set_leap_policy(message: Message, context: BotContext, command: Comman
     context.config = load_config(context.config_path)
     context.birthday_scheduler.update_settings(leap_policy=value)
     await context.birthday_scheduler.refresh()
-    await message.answer(f"Политика високосного дня сохранена: {value}")
+    await message.answer(f"Политика поздравления для 29 февраля: {value}.")
     log_action(context, message.from_user.id, "set_leap_policy", value)
+

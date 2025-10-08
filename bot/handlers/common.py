@@ -33,14 +33,14 @@ async def handle_start(message: Message, context: BotContext, member) -> None:
         "Привет! Это «ВПК-бот».",
         "Доступные действия:",
         "• Мой статус — посмотреть свою роль и отделение.",
-        "• Моё отделение / Полный состав — актуальные списки личного состава.",
-        "• ДР сегодня / ДР ближайшие 7 дней — кого поздравляем.",
+        "• Моё отделение / Полный состав — списки из актуального реестра.",
+        "• ДР сегодня / ДР ближайшие 7 дней — напоминания о днях рождения.",
         "Если ещё не привязан, нажми «Помощь» или команду /link.",
     ]
     if member:
         intro_lines.insert(1, f"Твой статус: {member.role}, отделение: {member.department}")
     else:
-        intro_lines.append("Для привязки введи своё ФИО точь-в-точь как в реестре и выполни /link.")
+        intro_lines.append("Для привязки введи своё ФИО точь‑в‑точь из списка и выполни /link.")
 
     await message.answer(
         "\n".join(intro_lines),
@@ -76,10 +76,10 @@ def _help_text(member, context: BotContext) -> str:
         "🆘 Помощь",
         "",
         "🔹 Общие команды:",
-        "• /link — связать себя с записью в реестре по ФИО.",
+        "• /link — привязка к реестру по ФИО.",
         "• Мой статус — показывает ваши данные.",
-        "• Моё отделение / Полный состав / Все отделения — читают data/members.csv (папка backups/ содержит только резервные копии).",
-        "• ДР сегодня / ДР ближайшие 7 дней — ищут именинников по data/members.csv и шаблонам из data/greetings.txt.",
+        "• Моё отделение / Полный состав / Все отделения — читают файл data/members.csv (backups/ хранит только резервные копии).",
+        "• ДР сегодня / ДР ближайшие 7 дней — напоминания на основе data/members.csv и шаблонов data/greetings.txt.",
     ]
 
     if is_admin:
@@ -87,9 +87,11 @@ def _help_text(member, context: BotContext) -> str:
             [
                 "",
                 "🔹 Администраторам:",
-                "• /add_poll, /list_polls, /toggle_poll, /delete_poll — управление опросами (data/polls.csv).",
-                "• /upload_roster, /export_roster, /import_sheet — обновление реестра; перед заменой создаётся копия в backups/.",
-                "• /set_polls_chat, /set_birthdays_chat — назначение чатов и тем для автоматических сообщений.",
+                "• /add_poll, /list_polls, /toggle_poll, /delete_poll, /edit_poll — управление опросами (data/polls.csv).",
+                "• /upload_roster, /export_roster, /import_sheet — обновление реестра. Перед заменой создаётся копия в backups/.",
+                "• /add_member — добавить нового участника (бот подскажет шаги).",
+                "• /remove_member ID / /restore_member ID — исключить или вернуть участника без перезагрузки CSV.",
+                "• /set_polls_chat, /set_birthdays_chat — настроить чаты и темы для автоматических сообщений.",
             ]
         )
 
@@ -98,14 +100,14 @@ def _help_text(member, context: BotContext) -> str:
             [
                 "",
                 "🔹 Супер-админу:",
-                "• /set_role ID ROLE — выдать роль (SUPER_ADMIN, ADMIN, LEAD, USER_CONFIRMED, USER_PENDING).",
-                "• /set_status ID active|removed — временно исключить или вернуть участника.",
+                "• /set_role ID ROLE — назначить роль (SUPER_ADMIN, ADMIN, LEAD, USER_CONFIRMED, USER_PENDING).",
+                "• /set_status ID active|removed — изменить статус участника.",
                 "• /set_tz Timezone, /dryrun on|off, /set_leap_policy 28|01 — настройки расписаний.",
                 "",
                 "⚙️ Как выдать или забрать права:",
-                "1. Узнайте ID участника (команда «Полный состав» показывает его в первой колонке).",
-                "2. Выполните /set_role ID ROLE, чтобы назначить новую роль. Для возврата в ожидание — укажите USER_PENDING.",
-                "3. Чтобы исключить участника, выполните /set_status ID removed. Вернуть — /set_status ID active.",
+                "1. Найдите ID участника (команда «Полный состав» показывает его в первой колонке).",
+                "2. Выполните /set_role ID ROLE. Пример: `/set_role 17 ADMIN`.",
+                "3. Чтобы исключить участника, выполните `/set_status 17 removed`; вернуть — `/set_status 17 active`.",
             ]
         )
 
@@ -113,7 +115,7 @@ def _help_text(member, context: BotContext) -> str:
         lines.extend(
             [
                 "",
-                "ℹ️ Все рабочие данные бот берет из папки data/. Папка backups/ нужна только для отката при ошибках.",
+                "ℹ️ Все рабочие данные бот берёт из папки data/. Папка backups/ нужна только для восстановления после ошибок.",
             ]
         )
 
@@ -183,7 +185,7 @@ async def handle_polls_button(message: Message, context: BotContext, member) -> 
         "• /list_polls — показать список опросов.\n"
         "• /toggle_poll ID — включить или выключить опрос.\n"
         "• /delete_poll ID — удалить опрос.\n"
-        "• /edit_poll ID — изменить параметры существующего опроса."
+        "• /edit_poll ID — изменить существующий опрос."
     )
 
 
@@ -195,7 +197,7 @@ async def handle_broadcast_button(message: Message, context: BotContext, member)
     await message.answer(
         "Массовые рассылки:\n"
         "• /broadcast — запустить мастер рассылки.\n"
-        "Можно выбрать отделение, роль и подтвердить отправку перед стартом."
+        "Можно выбрать отделение, роль и подтверждать отправку перед стартом."
     )
 
 
@@ -209,7 +211,9 @@ async def handle_roster_admin_button(message: Message, context: BotContext, memb
         "• /upload_roster — заменить данные CSV-файлом.\n"
         "• /export_roster — получить текущий реестр.\n"
         "• /import_sheet CSV_URL — загрузить из Google Sheets.\n"
-        "Перед любой заменой автоматически создаётся резервная копия в backups/."
+        "• /add_member — добавить участника через бот.\n"
+        "• /remove_member ID / /restore_member ID — удалить или вернуть участника.\n"
+        "Перед любой заменой создаётся резервная копия в папке backups/."
     )
 
 
@@ -223,6 +227,6 @@ async def handle_settings_button(message: Message, context: BotContext, member) 
         "• /set_role ID ROLE — назначить роль участнику.\n"
         "• /set_status ID active|removed — изменить статус участника.\n"
         "• /set_tz Timezone — сменить часовой пояс расписаний.\n"
-        "• /dryrun on|off — включить или отключить режим проверки без отправки сообщений.\n"
+        "• /dryrun on|off — включить или отключить режим проверки без отправки.\n"
         "• /set_leap_policy 28|01 — выбрать дату поздравления для 29 февраля."
     )

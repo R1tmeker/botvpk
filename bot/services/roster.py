@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from io import StringIO
 from typing import Iterable, Optional
 
+from ..storage.errors import ValidationError as StorageValidationError
 from ..storage.members import (
     ALLOWED_ROLES,
     ALLOWED_STATUS,
@@ -13,7 +14,6 @@ from ..storage.members import (
     Member,
     MembersStorage,
 )
-from ..storage.errors import ValidationError as StorageValidationError
 from ..utils.roles import Role
 from .exceptions import LinkAmbiguityError, NotFoundError, ValidationServiceError
 
@@ -28,9 +28,7 @@ class RosterService:
     def __init__(self, storage: MembersStorage):
         self.storage = storage
 
-    # ---------------------------
-    # Basic accessors
-    # ---------------------------
+    # --------- базовые операции ---------
     def list_members(self) -> list[Member]:
         return self.storage.list_members()
 
@@ -43,15 +41,13 @@ class RosterService:
     def get_member_by_id(self, member_id: int) -> Member:
         member = self.storage.find_by_id(member_id)
         if not member:
-            raise NotFoundError(f"Member with id {member_id} not found")
+            raise NotFoundError(f"Участник с id {member_id} не найден.")
         return member
 
     def find_by_fio(self, fio: str) -> list[Member]:
         return self.storage.find_by_fio(fio)
 
-    # ---------------------------
-    # Linking / updating members
-    # ---------------------------
+    # --------- привязка и обновление ---------
     def link_member(self, fio: str, tg_user_id: int, tg_username: Optional[str]) -> LinkResult:
         matches = self.storage.find_by_fio(fio)
         if not matches:
@@ -61,7 +57,7 @@ class RosterService:
             raise ValidationServiceError("Пользователь найден, но имеет статус removed.")
         if len(active_matches) > 1:
             raise LinkAmbiguityError(
-                "Найдено несколько совпадений, укажите ID.",
+                "Найдено несколько совпадений — укажите ID.",
                 candidates=[member.id for member in active_matches],
             )
 
@@ -114,16 +110,36 @@ class RosterService:
         self.storage.update_member(updated)
         return updated
 
-    # ---------------------------
-    # CSV operations
-    # ---------------------------
+    def add_member(self, fio: str, birth_date: str, department: str, tg_username: Optional[str]) -> Member:
+        try:
+            birth = datetime.strptime(birth_date, "%d.%m.%Y").date()
+        except ValueError as exc:
+            raise ValidationServiceError("Дата рождения должна быть в формате ДД.ММ.ГГГГ.") from exc
+
+        members = self.storage.list_members()
+        next_id = max((m.id for m in members), default=0) + 1
+        new_member = Member(
+            id=next_id,
+            fio=fio.strip(),
+            birth_date=birth,
+            department=department.strip(),
+            tg_username=(tg_username or None),
+            tg_user_id=None,
+            role=Role.USER_PENDING.value,
+            status="active",
+        )
+        members.append(new_member)
+        members.sort(key=lambda m: m.id)
+        self.storage.save_members(members)
+        return new_member
+
+    # --------- операции с CSV ---------
     def import_from_csv_text(self, csv_text: str) -> list[Member]:
         try:
             reader = csv.DictReader(StringIO(csv_text))
             self._validate_headers(reader.fieldnames)
-            members = self.storage.parse_rows(list(reader), line_offset=2)
-            self.storage.add_or_replace_members(members)
-            return members
+            imported = self.storage.parse_rows(list(reader), line_offset=2)
+            return self._merge_import(imported)
         except StorageValidationError as exc:
             raise ValidationServiceError(str(exc)) from exc
 
@@ -136,9 +152,7 @@ class RosterService:
             writer.writerow(member.to_csv_row())
         return buffer.getvalue()
 
-    # ---------------------------
-    # Helpers
-    # ---------------------------
+    # --------- вспомогательные методы ---------
     def _validate_headers(self, fieldnames: Iterable[str] | None) -> None:
         if not fieldnames:
             raise ValidationServiceError("CSV не содержит заголовок.")
@@ -175,9 +189,7 @@ class RosterService:
                     result.append(member)
         return result
 
-    # ---------------------------
-    # Internal helper
-    # ---------------------------
+    # --------- внутренние вспомогательные ---------
     def _build_member(
         self,
         member: Member,
@@ -197,6 +209,32 @@ class RosterService:
             role=role if role is not None else member.role,
             status=status if status is not None else member.status,
         )
+
+    def _merge_import(self, imported: list[Member]) -> list[Member]:
+        existing = self.storage.list_members()
+        existing_by_id = {member.id: member for member in existing}
+        merged: list[Member] = []
+
+        for incoming in imported:
+            if incoming.id in existing_by_id:
+                current = existing_by_id.pop(incoming.id)
+                merged.append(
+                    self._build_member(
+                        incoming,
+                        tg_user_id=current.tg_user_id,
+                        tg_username=current.tg_username,
+                        role=current.role,
+                        status=current.status,
+                    )
+                )
+            else:
+                merged.append(incoming)
+
+        # участники, которых нет в новом файле, сохраняются как есть
+        merged.extend(existing_by_id.values())
+        merged.sort(key=lambda m: m.id)
+        self.storage.add_or_replace_members(merged)
+        return merged
 
 
 def _is_leap_year(year: int) -> bool:

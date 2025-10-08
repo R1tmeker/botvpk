@@ -1,18 +1,20 @@
 from __future__ import annotations
 
-from aiogram import Router, F
+from datetime import datetime
+
+from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.filters.command import CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, FSInputFile
+from aiogram.types import FSInputFile, KeyboardButton, Message, ReplyKeyboardMarkup, ReplyKeyboardRemove
 
+from ..config_loader import load_config, update_config
 from ..context import BotContext
-from ..config_loader import update_config, load_config
 from ..services.exceptions import ValidationServiceError
 from ..utils.access import ensure_role
-from ..utils.roles import ADMIN_ROLES
 from ..utils.audit import log_action
+from ..utils.roles import ADMIN_ROLES
 
 router = Router(name="admin_roster")
 
@@ -21,26 +23,44 @@ class UploadRosterState(StatesGroup):
     waiting_file = State()
 
 
+class AddMemberStates(StatesGroup):
+    fio = State()
+    birth_date = State()
+    department = State()
+    username = State()
+    confirm = State()
+
+
+def _skip_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Пропустить")]],
+        resize_keyboard=True,
+    )
+
+
 @router.message(Command("upload_roster"))
 async def upload_roster_start(message: Message, member, context: BotContext, state: FSMContext) -> None:
     if not await ensure_role(message, getattr(member, "role", None), ADMIN_ROLES):
         return
-    await message.answer("Пришлите CSV-файл с реестром в ответ на это сообщение.")
+    await message.answer("Пришлите CSV-файл с новым реестром в ответ на это сообщение.")
     await state.set_state(UploadRosterState.waiting_file)
 
 
 @router.message(UploadRosterState.waiting_file, F.document)
 async def upload_roster_file(message: Message, state: FSMContext, context: BotContext) -> None:
     document = message.document
-    if not document.file_name.endswith(".csv"):
-        await message.answer("Нужен CSV-файл.")
+    if not document.file_name.lower().endswith(".csv"):
+        await message.answer("Нужен файл в формате CSV.")
         return
-    file = await message.bot.get_file(document.file_id)
-    file_bytes = await message.bot.download_file(file.file_path)
+    file = await context.bot.get_file(document.file_id)
+    file_bytes = await context.bot.download_file(file.file_path)
     try:
         processed = context.sheet_importer.import_from_bytes(file_bytes.read())
         log_action(context, message.from_user.id, "upload_roster", f"records={processed}")
-        await message.answer(f"Импорт завершён. Всего записей: {processed}.")
+        await message.answer(
+            f"Импорт завершён. Прочитано строк: {processed}. "
+            "Роли, статусы и привязки существующих участников сохранены."
+        )
     except ValidationServiceError as exc:
         await message.answer(f"Ошибка импорта: {exc}")
     finally:
@@ -49,7 +69,7 @@ async def upload_roster_file(message: Message, state: FSMContext, context: BotCo
 
 @router.message(UploadRosterState.waiting_file)
 async def upload_roster_not_file(message: Message) -> None:
-    await message.answer("Ожидаю документ CSV.")
+    await message.answer("Ожидаю CSV-файл.")
 
 
 @router.message(Command("export_roster"))
@@ -73,9 +93,145 @@ async def import_sheet(message: Message, member, context: BotContext, command: C
     try:
         total = context.sheet_importer.import_from_url(url)
         log_action(context, message.from_user.id, "import_sheet", f"url={url or 'stored'};records={total}")
-        await message.answer(f"Импортировано записей: {total}.")
+        await message.answer(
+            f"Импортировано записей: {total}. Роли, статусы и Telegram-привязки сохранены."
+        )
     except ValidationServiceError as exc:
         await message.answer(f"Ошибка импорта: {exc}")
+
+
+@router.message(Command("add_member"))
+async def add_member_start(message: Message, member, context: BotContext, state: FSMContext) -> None:
+    if not await ensure_role(message, getattr(member, "role", None), ADMIN_ROLES):
+        return
+    await message.answer("Введите ФИО нового участника.")
+    await state.set_state(AddMemberStates.fio)
+
+
+@router.message(AddMemberStates.fio)
+async def add_member_fio(message: Message, state: FSMContext) -> None:
+    fio = message.text.strip()
+    if len(fio.split()) < 2:
+        await message.answer("Укажите ФИО полностью, например: Иванов Иван Иванович.")
+        return
+    await state.update_data(fio=fio)
+    await state.set_state(AddMemberStates.birth_date)
+    await message.answer("Введите дату рождения (ДД.ММ.ГГГГ).")
+
+
+@router.message(AddMemberStates.birth_date)
+async def add_member_birth_date(message: Message, state: FSMContext) -> None:
+    try:
+        birth = datetime.strptime(message.text.strip(), "%d.%m.%Y").strftime("%d.%m.%Y")
+    except ValueError:
+        await message.answer("Неверный формат. Пример: 24.05.2008")
+        return
+    await state.update_data(birth_date=birth)
+    await state.set_state(AddMemberStates.department)
+    await message.answer("Укажите отделение (текстом).")
+
+
+@router.message(AddMemberStates.department)
+async def add_member_department(message: Message, state: FSMContext) -> None:
+    department = message.text.strip()
+    if not department:
+        await message.answer("Отделение не может быть пустым.")
+        return
+    await state.update_data(department=department)
+    await state.set_state(AddMemberStates.username)
+    await message.answer(
+        "Введите username (без @), если он есть. Если хотите пропустить — нажмите «Пропустить».",
+        reply_markup=_skip_keyboard(),
+    )
+
+
+@router.message(AddMemberStates.username)
+async def add_member_username(message: Message, state: FSMContext) -> None:
+    username = message.text.strip()
+    if username.lower() == "пропустить":
+        username = ""
+    if username.startswith("@"):
+        username = username[1:]
+    await state.update_data(username=username or None)
+    data = await state.get_data()
+    summary = [
+        "Проверь данные:",
+        f"ФИО: {data['fio']}",
+        f"Дата рождения: {data['birth_date']}",
+        f"Отделение: {data['department']}",
+        f"Username: @{data['username']}" if data["username"] else "Username: не указан",
+        "",
+        "Добавить участника? (да/нет)",
+    ]
+    await state.set_state(AddMemberStates.confirm)
+    await message.answer("\n".join(summary), reply_markup=ReplyKeyboardRemove())
+
+
+@router.message(AddMemberStates.confirm)
+async def add_member_confirm(message: Message, state: FSMContext, context: BotContext) -> None:
+    answer = message.text.strip().lower()
+    if answer not in {"да", "нет"}:
+        await message.answer("Ответьте «да» или «нет».")
+        return
+    if answer == "нет":
+        await message.answer("Добавление отменено.")
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    try:
+        member = context.roster_service.add_member(
+            fio=data["fio"],
+            birth_date=data["birth_date"],
+            department=data["department"],
+            tg_username=data["username"],
+        )
+        log_action(context, message.from_user.id, "add_member", f"id={member.id}")
+        await message.answer(f"Участник добавлен. Новый ID: {member.id}")
+    except ValidationServiceError as exc:
+        await message.answer(f"Ошибка: {exc}")
+    finally:
+        await state.clear()
+
+
+@router.message(Command("remove_member"))
+async def remove_member(message: Message, member, context: BotContext, command: CommandObject) -> None:
+    if not await ensure_role(message, getattr(member, "role", None), ADMIN_ROLES):
+        return
+    if not command.args:
+        await message.answer("Использование: /remove_member ID (меняет статус на removed).")
+        return
+    try:
+        member_id = int(command.args.split()[0])
+    except ValueError:
+        await message.answer("ID должен быть числом.")
+        return
+    try:
+        updated = context.roster_service.set_status(member_id, "removed")
+        log_action(context, message.from_user.id, "remove_member", f"id={member_id}")
+        await message.answer(f"Участник {updated.fio} помечен как removed.")
+    except (ValidationServiceError, NotFoundError) as exc:
+        await message.answer(str(exc))
+
+
+@router.message(Command("restore_member"))
+async def restore_member(message: Message, member, context: BotContext, command: CommandObject) -> None:
+    if not await ensure_role(message, getattr(member, "role", None), ADMIN_ROLES):
+        return
+    if not command.args:
+        await message.answer("Использование: /restore_member ID (возвращает статус active).")
+        return
+    try:
+        member_id = int(command.args.split()[0])
+    except ValueError:
+        await message.answer("ID должен быть числом.")
+        return
+    try:
+        updated = context.roster_service.set_status(member_id, "active")
+        log_action(context, message.from_user.id, "restore_member", f"id={member_id}")
+        await message.answer(f"Участник {updated.fio} снова активен.")
+    except (ValidationServiceError, NotFoundError) as exc:
+        await message.answer(str(exc))
 
 
 @router.message(Command("set_birthdays_chat"))
@@ -92,10 +248,7 @@ async def set_birthdays_chat(message: Message, member, context: BotContext) -> N
         },
     )
     context.config = load_config(context.config_path)
-    context.birthday_scheduler.update_settings(
-        chat_id=chat_id,
-        thread_id=thread_id,
-    )
+    context.birthday_scheduler.update_settings(chat_id=chat_id, thread_id=thread_id)
     await message.answer(f"Чат для поздравлений сохранён: {chat_id}, топик: {thread_id or '-'}")
     log_action(context, message.from_user.id, "set_birthdays_chat", f"chat_id={chat_id};thread_id={thread_id}")
 
@@ -106,12 +259,7 @@ async def set_polls_chat(message: Message, member, context: BotContext) -> None:
         return
     chat_id = message.chat.id
     thread_id = message.message_thread_id or ""
-    update_config(
-        context.config_path,
-        {
-            "DEFAULT_POLL_CHAT_ID": str(chat_id),
-        },
-    )
+    update_config(context.config_path, {"DEFAULT_POLL_CHAT_ID": str(chat_id)})
     context.config = load_config(context.config_path)
     await message.answer(f"Чат по умолчанию для опросов: {chat_id}. Топик: {thread_id or '-'}")
     log_action(context, message.from_user.id, "set_polls_chat", f"chat_id={chat_id};thread_id={thread_id}")

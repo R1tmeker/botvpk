@@ -1,14 +1,21 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from aiogram import F, Router
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
 
 from ..context import BotContext
+from ..utils.audit import log_action
 from ..utils.keyboards import main_menu_keyboard
 from ..utils.roles import ADMIN_ROLES, Role
 
 router = Router(name="common")
+
+
+class ReportStates(StatesGroup):
+    waiting_text = State()
 
 
 def _is_super_admin(member, context: BotContext) -> bool:
@@ -79,7 +86,8 @@ def _help_text(member, context: BotContext) -> str:
         "• /link — привязка к реестру по ФИО.",
         "• Мой статус — показывает ваши данные.",
         "• Моё отделение / Полный состав / Все отделения — читают файл data/members.csv (backups/ хранит только резервные копии).",
-        "• ДР сегодня / ДР ближайшие 7 дней — напоминания на основе data/members.csv и шаблонов data/greetings.txt.",
+        "• ДР сегодня / ДР ближайшие 7 дней — дни рождения по data/members.csv и data/greetings.txt.",
+        "• ДОНОС — отправить жалобу супер-админам.",
     ]
 
     if is_admin:
@@ -88,10 +96,11 @@ def _help_text(member, context: BotContext) -> str:
                 "",
                 "🔹 Администраторам:",
                 "• /add_poll, /list_polls, /toggle_poll, /delete_poll, /edit_poll — управление опросами (data/polls.csv).",
-                "• /upload_roster, /export_roster, /import_sheet — обновление реестра. Перед заменой создаётся копия в backups/.",
+                "• /upload_roster, /export_roster, /import_sheet — обновление реестра (перед заменой создаётся копия в backups/).",
                 "• /add_member — добавить нового участника (бот подскажет шаги).",
                 "• /remove_member ID / /restore_member ID — исключить или вернуть участника без перезагрузки CSV.",
                 "• /set_polls_chat, /set_birthdays_chat — настроить чаты и темы для автоматических сообщений.",
+                "• /delete_member ID — полностью удалить участника из реестра.",
             ]
         )
 
@@ -133,6 +142,57 @@ async def handle_help(message: Message, context: BotContext, member) -> None:
             is_super_admin=_is_super_admin(member, context),
         ),
     )
+
+
+@router.message(Command("report"))
+@router.message(F.text.casefold() == "донос")
+async def report_start(message: Message, context: BotContext, member, state: FSMContext) -> None:
+    await message.answer(
+        "Опиши проблему или жалобу. Напиши «Отмена», чтобы прервать отправку.")
+    await state.set_state(ReportStates.waiting_text)
+
+
+@router.message(ReportStates.waiting_text)
+async def report_submit(message: Message, context: BotContext, member, state: FSMContext) -> None:
+    text = message.text.strip()
+    if text.lower() == "отмена":
+        await message.answer("Отправка жалобы отменена.")
+        await state.clear()
+        return
+
+    reporter = message.from_user
+    recipients = {context.config.super_admin_id}
+    for roster_member in context.roster_service.list_members():
+        if roster_member.role == Role.SUPER_ADMIN.value and roster_member.tg_user_id:
+            recipients.add(roster_member.tg_user_id)
+
+    payload = [
+        "📣 Новый донос",
+        f"От: {reporter.full_name} (ID {reporter.id})",
+    ]
+    if reporter.username:
+        payload[-1] += f" @{reporter.username}"
+    if member:
+        payload.extend(
+            [
+                f"ФИО по реестру: {member.fio}",
+                f"Отделение: {member.department}",
+                f"Роль: {member.role}",
+            ]
+        )
+    payload.append("")
+    payload.append(text)
+    message_text = "\n".join(payload)
+
+    for admin_id in recipients:
+        try:
+            await context.bot.send_message(admin_id, message_text)
+        except Exception:  # noqa: BLE001
+            continue
+
+    log_action(context, reporter.id, "report", None)
+    await message.answer("Жалоба отправлена супер-админам. Спасибо!")
+    await state.clear()
 
 
 @router.message(F.text.casefold() == "мой статус")
@@ -214,6 +274,7 @@ async def handle_roster_admin_button(message: Message, context: BotContext, memb
         "• /import_sheet CSV_URL — загрузить из Google Sheets.\n"
         "• /add_member — добавить участника через бот.\n"
         "• /remove_member ID / /restore_member ID — удалить или вернуть участника.\n"
+        "• /delete_member ID — полностью удалить участника из реестра.\n"
         "Перед любой заменой создаётся резервная копия в папке backups/."
     )
 
@@ -227,7 +288,7 @@ async def handle_settings_button(message: Message, context: BotContext, member) 
         "Настройки супер-админа:\n"
         "• /set_role ID ROLE — назначить роль участнику.\n"
         "• /set_status ID active|removed — изменить статус участника.\n"
-        "• /reset_account ID — отвязать Telegram-аккаунт и username участника.\n"
+        "• /reset_account ID — отвязать Telegram-аккаунт участника.\n"
         "• /set_tz Timezone — сменить часовой пояс расписаний.\n"
         "• /dryrun on|off — включить или отключить режим проверки без отправки.\n"
         "• /set_leap_policy 28|01 — выбрать дату поздравления для 29 февраля."

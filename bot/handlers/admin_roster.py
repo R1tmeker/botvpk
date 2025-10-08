@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime
 
@@ -11,7 +11,7 @@ from aiogram.types import FSInputFile, KeyboardButton, Message, ReplyKeyboardMar
 
 from ..config_loader import load_config, update_config
 from ..context import BotContext
-from ..services.exceptions import ValidationServiceError
+from ..services.exceptions import NotFoundError, ValidationServiceError
 from ..utils.access import ensure_role
 from ..utils.audit import log_action
 from ..utils.roles import ADMIN_ROLES
@@ -199,7 +199,7 @@ async def remove_member(message: Message, member, context: BotContext, command: 
     if not await ensure_role(message, getattr(member, "role", None), ADMIN_ROLES):
         return
     if not command.args:
-        await message.answer("Использование: /remove_member ID (меняет статус на removed).")
+        await message.answer("Использование: /remove_member ID (переводит участника в статус removed).")
         return
     try:
         member_id = int(command.args.split()[0])
@@ -234,6 +234,26 @@ async def restore_member(message: Message, member, context: BotContext, command:
         await message.answer(str(exc))
 
 
+@router.message(Command("delete_member"))
+async def delete_member(message: Message, member, context: BotContext, command: CommandObject) -> None:
+    if not await ensure_role(message, getattr(member, "role", None), ADMIN_ROLES):
+        return
+    if not command.args:
+        await message.answer("Использование: /delete_member ID (удаляет запись из реестра).")
+        return
+    try:
+        member_id = int(command.args.split()[0])
+    except ValueError:
+        await message.answer("ID должен быть числом.")
+        return
+    try:
+        removed = context.roster_service.delete_member(member_id)
+        log_action(context, message.from_user.id, "delete_member", f"id={member_id}")
+        await message.answer(f"Участник {removed.fio} удалён из реестра.")
+    except NotFoundError as exc:
+        await message.answer(str(exc))
+
+
 @router.message(Command("set_birthdays_chat"))
 async def set_birthdays_chat(message: Message, member, context: BotContext) -> None:
     if not await ensure_role(message, getattr(member, "role", None), ADMIN_ROLES):
@@ -263,3 +283,4 @@ async def set_polls_chat(message: Message, member, context: BotContext) -> None:
     context.config = load_config(context.config_path)
     await message.answer(f"Чат по умолчанию для опросов: {chat_id}. Топик: {thread_id or '-'}")
     log_action(context, message.from_user.id, "set_polls_chat", f"chat_id={chat_id};thread_id={thread_id}")
+

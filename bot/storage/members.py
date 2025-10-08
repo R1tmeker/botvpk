@@ -105,6 +105,13 @@ class MembersStorage:
         members[index] = updated_member
         self.save_members(members)
 
+    def delete_member(self, member_id: int) -> None:
+        members = self.list_members()
+        filtered = [member for member in members if member.id != member_id]
+        if len(filtered) == len(members):
+            raise ValidationError(f"Member with id {member_id} not found")
+        self.save_members(filtered)
+
     def add_or_replace_members(self, members: Iterable[Member]) -> None:
         member_list = list(members)
         self._validate_unique_ids(member_list)

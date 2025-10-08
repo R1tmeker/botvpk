@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
@@ -28,7 +28,7 @@ class RosterService:
     def __init__(self, storage: MembersStorage):
         self.storage = storage
 
-    # --------- базовые операции ---------
+    # -------- basic queries --------
     def list_members(self) -> list[Member]:
         return self.storage.list_members()
 
@@ -47,11 +47,11 @@ class RosterService:
     def find_by_fio(self, fio: str) -> list[Member]:
         return self.storage.find_by_fio(fio)
 
-    # --------- привязка и обновление ---------
+    # -------- linking and updates --------
     def link_member(self, fio: str, tg_user_id: int, tg_username: Optional[str]) -> LinkResult:
         existing = self.get_member_by_user_id(tg_user_id)
         if existing and existing.fio.strip().lower() != fio.strip().lower():
-            raise ValidationServiceError("Этот Telegram‑аккаунт уже привязан к другому участнику.")
+            raise ValidationServiceError("Этот Telegram-аккаунт уже привязан к другому участнику.")
 
         matches = self.storage.find_by_fio(fio)
         if not matches:
@@ -67,7 +67,7 @@ class RosterService:
 
         member = active_matches[0]
         if member.tg_user_id and member.tg_user_id != tg_user_id:
-            raise ValidationServiceError("Запись уже привязана к другому Telegram‑аккаунту.")
+            raise ValidationServiceError("Запись уже привязана к другому Telegram-аккаунту.")
 
         updated = self._build_member(
             member,
@@ -82,13 +82,14 @@ class RosterService:
     def link_member_by_id(self, member_id: int, tg_user_id: int, tg_username: Optional[str]) -> LinkResult:
         existing = self.get_member_by_user_id(tg_user_id)
         if existing and existing.id != member_id:
-            raise ValidationServiceError("Этот Telegram‑аккаунт уже привязан к другому участнику.")
+            raise ValidationServiceError("Этот Telegram-аккаунт уже привязан к другому участнику.")
 
         member = self.get_member_by_id(member_id)
         if member.status != "active":
             raise ValidationServiceError("Этот участник помечен как removed.")
         if member.tg_user_id and member.tg_user_id != tg_user_id:
-            raise ValidationServiceError("Запись уже привязана к другому Telegram‑аккаунту.")
+            raise ValidationServiceError("Запись уже привязана к другому Telegram-аккаунту.")
+
         updated = self._build_member(
             member,
             tg_user_id=tg_user_id,
@@ -142,7 +143,7 @@ class RosterService:
             fio=fio.strip(),
             birth_date=birth,
             department=department.strip(),
-            tg_username=(tg_username or None),
+            tg_username=tg_username or None,
             tg_user_id=None,
             role=Role.USER_PENDING.value,
             status="active",
@@ -152,7 +153,12 @@ class RosterService:
         self.storage.save_members(members)
         return new_member
 
-    # --------- операции с CSV ---------
+    def delete_member(self, member_id: int) -> Member:
+        member = self.get_member_by_id(member_id)
+        self.storage.delete_member(member_id)
+        return member
+
+    # -------- CSV operations --------
     def import_from_csv_text(self, csv_text: str) -> list[Member]:
         try:
             reader = csv.DictReader(StringIO(csv_text))
@@ -171,7 +177,7 @@ class RosterService:
             writer.writerow(member.to_csv_row())
         return buffer.getvalue()
 
-    # --------- вспомогательные методы ---------
+    # -------- helpers --------
     def _validate_headers(self, fieldnames: Iterable[str] | None) -> None:
         if not fieldnames:
             raise ValidationServiceError("CSV не содержит заголовок.")
@@ -208,7 +214,7 @@ class RosterService:
                     result.append(member)
         return result
 
-    # --------- внутренние вспомогательные ---------
+    # internal helpers
     def _build_member(
         self,
         member: Member,
@@ -249,7 +255,6 @@ class RosterService:
             else:
                 merged.append(incoming)
 
-        # участники, которых нет в новом файле, сохраняются как есть
         merged.extend(existing_by_id.values())
         merged.sort(key=lambda m: m.id)
         self.storage.add_or_replace_members(merged)

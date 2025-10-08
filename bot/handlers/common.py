@@ -45,7 +45,7 @@ async def handle_start(message: Message, context: BotContext, member) -> None:
         "Если ещё не привязан, нажми «Помощь» или команду /link.",
     ]
     if member:
-        intro_lines.insert(1, f"Твой статус: {member.role}, отделение: {member.department}")
+        intro_lines.insert(1, f"Отделение: {member.department}")
     else:
         intro_lines.append("Для привязки введи своё ФИО точь‑в‑точь из списка и выполни /link.")
 
@@ -148,7 +148,7 @@ async def handle_help(message: Message, context: BotContext, member) -> None:
 @router.message(F.text.casefold() == "донос")
 async def report_start(message: Message, context: BotContext, member, state: FSMContext) -> None:
     await message.answer(
-        "Опиши проблему или жалобу. Напиши «Отмена», чтобы прервать отправку.")
+        "Опиши проблему или жалобу, можешь написать про кого угодно, всё конфиденциально! Если хочешь чтобы жалоба напрямую дошла подполковнику напиши вначале жалобы «ПОДПОЛКОВНИКУ» и начни писать свое сообщение. Напиши «Отмена», чтобы прервать отправку.")
     await state.set_state(ReportStates.waiting_text)
 
 
@@ -191,7 +191,7 @@ async def report_submit(message: Message, context: BotContext, member, state: FS
             continue
 
     log_action(context, reporter.id, "report", None)
-    await message.answer("Жалоба отправлена супер-админам. Спасибо!")
+    await message.answer("Жалоба отправлена. Спасибо!")
     await state.clear()
 
 

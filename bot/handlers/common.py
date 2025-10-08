@@ -45,7 +45,7 @@ async def handle_start(message: Message, context: BotContext, member) -> None:
         "Если ещё не привязан, нажми «Помощь» или команду /link.",
     ]
     if member:
-        intro_lines.insert(1, f"Отделение: {member.department}")
+        intro_lines.insert(1, f"Твоё: {member.department}")
     else:
         intro_lines.append("Для привязки введи своё ФИО точь‑в‑точь из списка и выполни /link.")
 
@@ -65,9 +65,7 @@ async def handle_whoami(message: Message, member, context: BotContext) -> None:
         return
     details = [
         f"ФИО: {member.fio}",
-        f"Отделение: {member.department}",
-        f"Роль: {member.role}",
-        f"Статус: {member.status}",
+        f"Твоё: {member.department}",
     ]
     if member.tg_username:
         details.append(f"Username: @{member.tg_username}")

@@ -1,5 +1,5 @@
 id,fio,birth_date,department,tg_username,tg_user_id,role,status
-1,Антонов Дмитрий Владимирович,12.02.2007,2 год - 1 отделение,Wuw_i,6858647704,USER_CONFIRMED,active
+1,Антонов Дмитрий Владимирович,12.02.2007,2 год - 1 отделение,Wuw_i,6858647704,SUPER_ADMIN,active
 2,Мишкин Сергей Владимирович,02.02.2007,2 год - 1 отделение,,,USER_PENDING,active
 3,Семыкин Макар Максимович,22.10.2006,2 год - 1 отделение,,,USER_PENDING,active
 4,Максимов Данил Николаевич,23.01.2007,2 год - 1 отделение,,,USER_PENDING,active

@@ -1,0 +1,6 @@
+aiogram==3.0.0b7
+APScheduler==3.10.1
+pytz
+python-dateutil
+requests
+

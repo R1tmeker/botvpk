@@ -102,6 +102,7 @@ def _help_text(member, context: BotContext) -> str:
                 "🔹 Супер-админу:",
                 "• /set_role ID ROLE — назначить роль (SUPER_ADMIN, ADMIN, LEAD, USER_CONFIRMED, USER_PENDING).",
                 "• /set_status ID active|removed — изменить статус участника.",
+                "• /reset_account ID — отвязать Telegram-аккаунт и username участника.",
                 "• /set_tz Timezone, /dryrun on|off, /set_leap_policy 28|01 — настройки расписаний.",
                 "",
                 "⚙️ Как выдать или забрать права:",
@@ -197,7 +198,7 @@ async def handle_broadcast_button(message: Message, context: BotContext, member)
     await message.answer(
         "Массовые рассылки:\n"
         "• /broadcast — запустить мастер рассылки.\n"
-        "Можно выбрать отделение, роль и подтверждать отправку перед стартом."
+        "Можно выбрать отделение, роль и подтвердить отправку перед стартом."
     )
 
 
@@ -226,6 +227,7 @@ async def handle_settings_button(message: Message, context: BotContext, member) 
         "Настройки супер-админа:\n"
         "• /set_role ID ROLE — назначить роль участнику.\n"
         "• /set_status ID active|removed — изменить статус участника.\n"
+        "• /reset_account ID — отвязать Telegram-аккаунт и username участника.\n"
         "• /set_tz Timezone — сменить часовой пояс расписаний.\n"
         "• /dryrun on|off — включить или отключить режим проверки без отправки.\n"
         "• /set_leap_policy 28|01 — выбрать дату поздравления для 29 февраля."

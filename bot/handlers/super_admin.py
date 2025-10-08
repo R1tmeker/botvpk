@@ -29,18 +29,15 @@ async def set_role(message: Message, context: BotContext, command: CommandObject
     if not command.args:
         await message.answer(
             "Как выдать роль:\n"
-            "1. Найдите ID участника (команда «Полный состав» показывает его в первой колонке).\n"
-            "2. Выполните команду вида `/set_role 17 ADMIN` — сначала числовой ID, затем роль.\n"
+            "1. Узнайте ID участника (например, через «Полный состав»).\n"
+            "2. Введите команду вида `/set_role 17 ADMIN` — сначала ID, затем роль.\n"
             "Допустимые роли: SUPER_ADMIN, ADMIN, LEAD, USER_CONFIRMED, USER_PENDING.",
             parse_mode=None,
         )
         return
     parts = command.args.split()
     if len(parts) != 2:
-        await message.answer(
-            "Нужно указать два аргумента: ID и роль. Пример: `/set_role 17 ADMIN`.",
-            parse_mode=None,
-        )
+        await message.answer("Нужно указать ID и роль. Пример: `/set_role 17 ADMIN`.", parse_mode=None)
         return
     try:
         member_id = int(parts[0])
@@ -49,9 +46,7 @@ async def set_role(message: Message, context: BotContext, command: CommandObject
         return
     role = parts[1].upper()
     if role not in [r.value for r in Role]:
-        await message.answer(
-            "Неизвестная роль. Используйте одну из: SUPER_ADMIN, ADMIN, LEAD, USER_CONFIRMED, USER_PENDING."
-        )
+        await message.answer("Неизвестная роль. Допустимые: SUPER_ADMIN, ADMIN, LEAD, USER_CONFIRMED, USER_PENDING.")
         return
     try:
         member = context.roster_service.set_role(member_id, role)
@@ -68,17 +63,14 @@ async def set_status(message: Message, context: BotContext, command: CommandObje
     if not command.args:
         await message.answer(
             "Как изменить статус:\n"
-            "1. Найдите ID участника (например, через «Полный состав»).\n"
-            "2. Выполните команду `/set_status 17 active` или `/set_status 17 removed`.",
+            "1. Найдите ID участника.\n"
+            "2. Выполните `/set_status 17 active` или `/set_status 17 removed`.",
             parse_mode=None,
         )
         return
     parts = command.args.split()
     if len(parts) != 2:
-        await message.answer(
-            "Нужно указать ID и статус. Пример: `/set_status 17 active`.",
-            parse_mode=None,
-        )
+        await message.answer("Укажите ID и статус. Пример: `/set_status 17 removed`.", parse_mode=None)
         return
     try:
         member_id = int(parts[0])
@@ -97,13 +89,39 @@ async def set_status(message: Message, context: BotContext, command: CommandObje
         await message.answer(str(exc))
 
 
+@router.message(Command("reset_account"))
+async def reset_account(message: Message, context: BotContext, command: CommandObject) -> None:
+    if not await _check_super_admin(message, context):
+        return
+    if not command.args:
+        await message.answer(
+            "Как отвязать Telegram-аккаунт участника: выполните команду `/reset_account ID`.\n"
+            "После сброса пользователю нужно снова пройти /link.",
+            parse_mode=None,
+        )
+        return
+    try:
+        member_id = int(command.args.strip().split()[0])
+    except ValueError:
+        await message.answer("ID должен быть числом. Пример: `/reset_account 17`.", parse_mode=None)
+        return
+    try:
+        member = context.roster_service.reset_account(member_id)
+        await message.answer(
+            f"Привязка сброшена: {member.fio}. Telegram-аккаунт и username очищены, участнику нужно заново выполнить /link."
+        )
+        log_action(context, message.from_user.id, "reset_account", f"id={member_id}")
+    except (ValidationServiceError, NotFoundError) as exc:
+        await message.answer(str(exc))
+
+
 @router.message(Command("set_tz"))
 async def set_timezone(message: Message, context: BotContext, command: CommandObject) -> None:
     if not await _check_super_admin(message, context):
         return
     if not command.args:
         await message.answer(
-            "Как сменить часовой пояс: напишите `/set_tz Europe/Moscow` (или любой другой идентификатор из базы tzdata).",
+            "Как сменить часовой пояс: отправьте `/set_tz Europe/Moscow` (поддерживаются идентификаторы tzdata).",
             parse_mode=None,
         )
         return
@@ -126,10 +144,7 @@ async def set_dryrun(message: Message, context: BotContext, command: CommandObje
     if not await _check_super_admin(message, context):
         return
     if not command.args:
-        await message.answer(
-            "Как включить или выключить режим проверки: `/dryrun on` или `/dryrun off`.",
-            parse_mode=None,
-        )
+        await message.answer("Режим проверки без отправки: `/dryrun on` или `/dryrun off`.", parse_mode=None)
         return
     value = command.args.strip().lower()
     if value not in {"on", "off"}:
@@ -150,7 +165,7 @@ async def set_leap_policy(message: Message, context: BotContext, command: Comman
         return
     if not command.args:
         await message.answer(
-            "Как выбрать дату поздравления для 29 февраля: отправьте `/set_leap_policy 28` (чтобы поздравлять 28.02) "
+            "Как поздравлять тех, кто родился 29 февраля: отправьте `/set_leap_policy 28` (чтобы поздравлять 28.02) "
             "или `/set_leap_policy 01` (чтобы поздравлять 01.03).",
             parse_mode=None,
         )

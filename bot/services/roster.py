@@ -49,6 +49,10 @@ class RosterService:
 
     # --------- привязка и обновление ---------
     def link_member(self, fio: str, tg_user_id: int, tg_username: Optional[str]) -> LinkResult:
+        existing = self.get_member_by_user_id(tg_user_id)
+        if existing and existing.fio.strip().lower() != fio.strip().lower():
+            raise ValidationServiceError("Этот Telegram‑аккаунт уже привязан к другому участнику.")
+
         matches = self.storage.find_by_fio(fio)
         if not matches:
             raise NotFoundError("ФИО не найдено в реестре.")
@@ -62,6 +66,9 @@ class RosterService:
             )
 
         member = active_matches[0]
+        if member.tg_user_id and member.tg_user_id != tg_user_id:
+            raise ValidationServiceError("Запись уже привязана к другому Telegram‑аккаунту.")
+
         updated = self._build_member(
             member,
             tg_user_id=tg_user_id,
@@ -73,9 +80,15 @@ class RosterService:
         return LinkResult(member=updated, newly_confirmed=newly_confirmed)
 
     def link_member_by_id(self, member_id: int, tg_user_id: int, tg_username: Optional[str]) -> LinkResult:
+        existing = self.get_member_by_user_id(tg_user_id)
+        if existing and existing.id != member_id:
+            raise ValidationServiceError("Этот Telegram‑аккаунт уже привязан к другому участнику.")
+
         member = self.get_member_by_id(member_id)
         if member.status != "active":
             raise ValidationServiceError("Этот участник помечен как removed.")
+        if member.tg_user_id and member.tg_user_id != tg_user_id:
+            raise ValidationServiceError("Запись уже привязана к другому Telegram‑аккаунту.")
         updated = self._build_member(
             member,
             tg_user_id=tg_user_id,
@@ -107,6 +120,12 @@ class RosterService:
         if member.tg_username == normalized:
             return member
         updated = self._build_member(member, tg_username=normalized)
+        self.storage.update_member(updated)
+        return updated
+
+    def reset_account(self, member_id: int) -> Member:
+        member = self.get_member_by_id(member_id)
+        updated = self._build_member(member, tg_user_id=None, tg_username=None)
         self.storage.update_member(updated)
         return updated
 
@@ -239,4 +258,3 @@ class RosterService:
 
 def _is_leap_year(year: int) -> bool:
     return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
-

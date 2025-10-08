@@ -13,6 +13,9 @@ class MemberLoaderMiddleware(BaseMiddleware):
         member = None
         if from_user:
             member = context.roster_service.get_member_by_user_id(from_user.id)
+            if member is not None:
+                new_username = from_user.username or None
+                if member.tg_username != new_username:
+                    member = context.roster_service.update_username(member, new_username)
         data["member"] = member
         return await handler(event, data)
-

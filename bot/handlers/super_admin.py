@@ -27,11 +27,11 @@ async def set_role(message: Message, context: BotContext, command: CommandObject
     if not await _check_super_admin(message, context):
         return
     if not command.args:
-        await message.answer("Использование: /set_role <id> <ROLE>")
+        await message.answer("Использование: /set_role &lt;id&gt; &lt;ROLE&gt;")
         return
     parts = command.args.split()
     if len(parts) != 2:
-        await message.answer("Использование: /set_role <id> <ROLE>")
+        await message.answer("Использование: /set_role &lt;id&gt; &lt;ROLE&gt;")
         return
     try:
         member_id = int(parts[0])
@@ -55,11 +55,11 @@ async def set_status(message: Message, context: BotContext, command: CommandObje
     if not await _check_super_admin(message, context):
         return
     if not command.args:
-        await message.answer("Использование: /set_status <id> active|removed")
+        await message.answer("Использование: /set_status &lt;id&gt; active|removed")
         return
     parts = command.args.split()
     if len(parts) != 2:
-        await message.answer("Использование: /set_status <id> active|removed")
+        await message.answer("Использование: /set_status &lt;id&gt; active|removed")
         return
     try:
         member_id = int(parts[0])
@@ -83,7 +83,7 @@ async def set_timezone(message: Message, context: BotContext, command: CommandOb
     if not await _check_super_admin(message, context):
         return
     if not command.args:
-        await message.answer("Использование: /set_tz <Timezone>")
+        await message.answer("Использование: /set_tz &lt;Timezone&gt;")
         return
     tz_name = command.args.strip()
     if tz_name not in pytz.all_timezones:

@@ -2390,6 +2390,10 @@ function ProfileView({
             <dt>Отделение</dt>
             <dd>{profile.squad_id ?? "не назначено"}</dd>
           </div>
+          <div className={styles.profileRow}>
+            <dt>Telegram ID</dt>
+            <dd>{profile.telegram_id}</dd>
+          </div>
           {profile.phone && (
             <div className={styles.profileRow}>
               <dt>Телефон</dt>

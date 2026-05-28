@@ -647,6 +647,19 @@ export function useUploadFile() {
   });
 }
 
+export function useUpdateMe() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: Partial<{ full_name: string; phone: string; city: string; education_place: string; birth_date: string }>) => {
+      const { data } = await api.patch<UserProfile>("/me", payload);
+      return data;
+    },
+    onSuccess: (profile) => {
+      queryClient.setQueryData(["me"], profile);
+    },
+  });
+}
+
 export function useUploadAvatar() {
   const queryClient = useQueryClient();
   return useMutation({

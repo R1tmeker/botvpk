@@ -105,6 +105,24 @@ async def get_me(current_user: CurrentUser = Depends(get_current_user)) -> UserP
     )
 
 
+@router.patch("/me", response_model=UserProfile)
+async def update_me(
+    payload: dict,
+    current_user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> UserProfile:
+    if current_user.user is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User profile is required.")
+    allowed = {"full_name", "phone", "city", "education_place", "birth_date"}
+    for field, value in payload.items():
+        if field in allowed and value is not None:
+            setattr(current_user.user, field, value or None)
+    current_user.user.updated_at = datetime.now(timezone.utc)
+    await session.commit()
+    await session.refresh(current_user.user)
+    return _profile_from_user(current_user.user)
+
+
 @router.post("/me/avatar", response_model=UserProfile)
 async def upload_my_avatar(
     upload: UploadFile = UploadParam(...),

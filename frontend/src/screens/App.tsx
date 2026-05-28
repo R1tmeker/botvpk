@@ -50,6 +50,7 @@ import {
   useSubmitNormative,
   useTelegramAuth,
   useUpdateDashboardSettings,
+  useUpdateMe,
   useUploadAvatar,
   useUploadFile,
   useUsers,
@@ -2396,6 +2397,33 @@ function ProfileView({
   isAvatarUploading: boolean;
 }) {
   const avatarInputRef = useRef<HTMLInputElement>(null);
+  const [editing, setEditing] = useState(false);
+  const [editForm, setEditForm] = useState({ full_name: "", phone: "", city: "", education_place: "", birth_date: "" });
+  const [editPhone, setEditPhone] = useState("+7");
+  const updateMe = useUpdateMe();
+
+  const startEdit = () => {
+    setEditForm({
+      full_name: profile.full_name ?? "",
+      phone: profile.phone ?? "",
+      city: (profile as unknown as Record<string, string>).city ?? "",
+      education_place: (profile as unknown as Record<string, string>).education_place ?? "",
+      birth_date: (profile as unknown as Record<string, string>).birth_date ?? "",
+    });
+    setEditPhone(profile.phone ? formatPhoneDisplay(profile.phone) : "+7");
+    setEditing(true);
+  };
+
+  const saveEdit = () => {
+    updateMe.mutate(
+      { ...editForm, phone: editForm.phone || undefined },
+      {
+        onSuccess: () => { setEditing(false); toast("Профиль сохранён", "success"); },
+        onError: () => toast("Не удалось сохранить", "error"),
+      },
+    );
+  };
+
   const items = attendanceStats?.items ?? [];
   const presentItem = items.find((i) => (i as Record<string, unknown>).status_code === "PRESENT");
   const absentItem = items.find((i) => (i as Record<string, unknown>).status_code === "ABSENT");
@@ -2410,7 +2438,9 @@ function ProfileView({
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
         <h2>Профиль</h2>
-        <span>{roleLabels[profile.role_code]}</span>
+        <button type="button" className={styles.editProfileBtn} onClick={editing ? () => setEditing(false) : startEdit}>
+          {editing ? "Отмена" : "Редактировать"}
+        </button>
       </div>
       <div className={styles.profileCard}>
         <div className={styles.profileAvatarUpload} onClick={() => !isAvatarUploading && avatarInputRef.current?.click()}>
@@ -2433,42 +2463,85 @@ function ProfileView({
             }}
           />
         </div>
-        <dl>
-          <div className={styles.profileRow}>
-            <dt>ФИО</dt>
-            <dd>{profile.full_name}</dd>
+
+        {editing ? (
+          <div className={styles.formBlock}>
+            <input
+              placeholder="ФИО *"
+              value={editForm.full_name}
+              onChange={(e) => setEditForm({ ...editForm, full_name: e.target.value })}
+            />
+            <input
+              type="tel"
+              inputMode="numeric"
+              placeholder="+7 999 000 11 22"
+              value={editPhone}
+              onChange={(e) => {
+                const masked = applyPhoneMask(e.target.value);
+                setEditPhone(masked);
+                setEditForm({ ...editForm, phone: phoneInputToRaw(masked) });
+              }}
+            />
+            <input
+              placeholder="Город или район"
+              value={editForm.city}
+              onChange={(e) => setEditForm({ ...editForm, city: e.target.value })}
+            />
+            <input
+              placeholder="Группа (например, 1ИСП-21)"
+              value={editForm.education_place}
+              onChange={(e) => setEditForm({ ...editForm, education_place: e.target.value })}
+            />
+            <label className={styles.fieldLabel}>
+              <span>Дата рождения</span>
+              <input
+                type="date"
+                value={editForm.birth_date}
+                onChange={(e) => setEditForm({ ...editForm, birth_date: e.target.value })}
+              />
+            </label>
+            <button type="button" disabled={!editForm.full_name.trim() || updateMe.isPending} onClick={saveEdit}>
+              {updateMe.isPending ? "Сохранение..." : "Сохранить"}
+            </button>
           </div>
-          <div className={styles.profileRow}>
-            <dt>Должность</dt>
-            <dd>{roleLabels[profile.role_code]}</dd>
-          </div>
-          <div className={styles.profileRow}>
-            <dt>Отделение</dt>
-            <dd>{profile.squad_id ?? "не назначено"}</dd>
-          </div>
-          <div className={styles.profileRow}>
-            <dt>Telegram ID</dt>
-            <dd>{profile.telegram_id}</dd>
-          </div>
-          {profile.phone && (
+        ) : (
+          <dl>
             <div className={styles.profileRow}>
-              <dt>Телефон</dt>
-              <dd>{formatPhoneDisplay(profile.phone)}</dd>
+              <dt>ФИО</dt>
+              <dd>{profile.full_name}</dd>
             </div>
-          )}
-          {profile.birth_date && (
             <div className={styles.profileRow}>
-              <dt>Дата рождения</dt>
-              <dd>{formatDateFull(profile.birth_date)}</dd>
+              <dt>Должность</dt>
+              <dd>{roleLabels[profile.role_code]}</dd>
             </div>
-          )}
-          {profile.username && (
             <div className={styles.profileRow}>
-              <dt>Telegram</dt>
-              <dd>@{profile.username}</dd>
+              <dt>Отделение</dt>
+              <dd>{profile.squad_id ?? "не назначено"}</dd>
             </div>
-          )}
-        </dl>
+            <div className={styles.profileRow}>
+              <dt>Telegram ID</dt>
+              <dd>{profile.telegram_id}</dd>
+            </div>
+            {profile.phone && (
+              <div className={styles.profileRow}>
+                <dt>Телефон</dt>
+                <dd>{formatPhoneDisplay(profile.phone)}</dd>
+              </div>
+            )}
+            {profile.birth_date && (
+              <div className={styles.profileRow}>
+                <dt>Дата рождения</dt>
+                <dd>{formatDateFull(profile.birth_date)}</dd>
+              </div>
+            )}
+            {profile.username && (
+              <div className={styles.profileRow}>
+                <dt>Telegram</dt>
+                <dd>@{profile.username}</dd>
+              </div>
+            )}
+          </dl>
+        )}
       </div>
       {total > 0 && (
         <>

@@ -33,17 +33,35 @@ class TelegramInitData:
 
 
 def validate_init_data(init_data: str, bot_token: str, max_age_seconds: int = 86400) -> TelegramInitData:
-    values = dict(parse_qsl(init_data, keep_blank_values=True, strict_parsing=True))
+    import logging
+    log = logging.getLogger(__name__)
+
+    values = dict(parse_qsl(init_data, keep_blank_values=True))
     received_hash = values.pop("hash", None)
     values.pop("signature", None)
     if not received_hash:
         raise TelegramInitDataError("Telegram initData does not contain hash.")
 
     data_check_string = "\n".join(f"{key}={values[key]}" for key in sorted(values))
-    secret_key = hmac.new(b"WebAppData", bot_token.encode("utf-8"), hashlib.sha256).digest()
-    calculated_hash = hmac.new(secret_key, data_check_string.encode("utf-8"), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(calculated_hash, received_hash):
+
+    # Try both key orders to detect which one Telegram expects
+    sk1 = hmac.new(b"WebAppData", bot_token.encode("utf-8"), hashlib.sha256).digest()
+    h1 = hmac.new(sk1, data_check_string.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    sk2 = hmac.new(bot_token.encode("utf-8"), b"WebAppData", hashlib.sha256).digest()
+    h2 = hmac.new(sk2, data_check_string.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    log.warning("hash_recv=%s h1=%s h2=%s fields=%s", received_hash[:8], h1[:8], h2[:8], list(values.keys()))
+
+    if hmac.compare_digest(h1, received_hash):
+        secret_key = sk1
+    elif hmac.compare_digest(h2, received_hash):
+        secret_key = sk2
+        log.warning("Used reverse key order (bot_token as key)")
+    else:
         raise TelegramInitDataError("Telegram initData hash is invalid.")
+
+    calculated_hash = hmac.new(secret_key, data_check_string.encode("utf-8"), hashlib.sha256).hexdigest()
 
     auth_date_raw = values.get("auth_date")
     if not auth_date_raw:

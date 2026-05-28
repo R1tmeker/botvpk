@@ -51,7 +51,7 @@ def validate_init_data(init_data: str, bot_token: str, max_age_seconds: int = 86
     sk2 = hmac.new(bot_token.encode("utf-8"), b"WebAppData", hashlib.sha256).digest()
     h2 = hmac.new(sk2, data_check_string.encode("utf-8"), hashlib.sha256).hexdigest()
 
-    log.warning("hash_recv=%s h1=%s h2=%s fields=%s", received_hash[:8], h1[:8], h2[:8], list(values.keys()))
+    log.warning("hash_recv=%s h1=%s h2=%s fields=%s dcs=%r", received_hash[:8], h1[:8], h2[:8], list(values.keys()), data_check_string[:200])
 
     if hmac.compare_digest(h1, received_hash):
         secret_key = sk1

@@ -188,6 +188,11 @@
   background: #f8f9fc;
   padding: 16px;
   box-shadow: 0 4px 20px rgba(18, 32, 68, 0.07);
+  overflow-x: hidden;
+}
+
+.tabs {
+  width: 100%;
 }
 
 .subPanel,

@@ -481,10 +481,14 @@ export function App({ webApp }: Props) {
     });
   }, []);
 
+  const navCodes = new Set(["dashboard", "schedule", "attendance", "normatives", "profile", "admin"]);
+
   const cards = useMemo(() => {
     const apiMenu = menu.data?.map((card) => ({ ...card, code: normalizeView(card.code) }));
     const source = apiMenu?.length ? apiMenu : roleMenu(profile);
-    return source.filter((card) => canAccessView(normalizeView(card.code), level));
+    return source
+      .filter((card) => canAccessView(normalizeView(card.code), level))
+      .filter((card) => !navCodes.has(normalizeView(card.code)));
   }, [menu.data, profile, level]);
 
   const visibleSchedule = schedule.data ?? [];

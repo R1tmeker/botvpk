@@ -40,7 +40,7 @@ def validate_init_data(init_data: str, bot_token: str, max_age_seconds: int = 86
         raise TelegramInitDataError("Telegram initData does not contain hash.")
 
     data_check_string = "\n".join(f"{key}={values[key]}" for key in sorted(values))
-    secret_key = hmac.new(b"WebAppData", bot_token.encode("utf-8"), hashlib.sha256).digest()
+    secret_key = hmac.new(bot_token.encode("utf-8"), b"WebAppData", hashlib.sha256).digest()
     calculated_hash = hmac.new(secret_key, data_check_string.encode("utf-8"), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(calculated_hash, received_hash):
         raise TelegramInitDataError("Telegram initData hash is invalid.")

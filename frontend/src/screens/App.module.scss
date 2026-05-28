@@ -660,6 +660,65 @@
   }
 }
 
+/* ── Welcome Banner ─────────────────────────── */
+.welcomeBanner {
+  border-radius: 14px;
+  padding: 20px 18px 14px;
+  min-height: 110px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 12px;
+  user-select: none;
+  touch-action: pan-y;
+  cursor: grab;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+
+.bannerContent {
+  display: grid;
+  gap: 6px;
+
+  strong {
+    font-size: 20px;
+    font-weight: 900;
+    line-height: 1.15;
+    color: inherit;
+  }
+
+  span {
+    font-size: 13px;
+    opacity: 0.82;
+    line-height: 1.4;
+    color: inherit;
+  }
+}
+
+.bannerDots {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.bannerDot,
+.bannerDotActive {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: rgba(255, 255, 255, 0.45);
+}
+
+.bannerDotActive {
+  width: 18px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.95);
+}
+
 /* ── Field Label (labeled form field wrapper) ── */
 .fieldLabel {
   display: grid;

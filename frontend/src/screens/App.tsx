@@ -1123,6 +1123,69 @@ function Dashboard({
   );
 }
 
+/* ─────────── WelcomeBanner ─────────── */
+function WelcomeBanner({ blocks }: { blocks: PromoBlock[] }) {
+  const slides = [
+    { title: "Добро пожаловать в ВПК «Звезда»", body: "Заполните анкету и станьте частью команды", style: "PROMO" as const },
+    ...blocks.filter((b) => b.is_active).map((b) => ({ title: b.title, body: b.body ?? "", style: (b.style_code ?? "DEFAULT") as string })),
+  ];
+  const [idx, setIdx] = useState(0);
+  const touchStartX = useRef<number | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const goTo = useCallback((i: number) => {
+    setIdx((i + slides.length) % slides.length);
+  }, [slides.length]);
+
+  useEffect(() => {
+    timerRef.current = setTimeout(() => goTo(idx + 1), 4500);
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [idx, goTo]);
+
+  const themes: Record<string, { bg: string; color: string }> = {
+    PROMO:   { bg: "linear-gradient(135deg, #1a2f5a, #2c4a8a)", color: "#fff" },
+    INFO:    { bg: "linear-gradient(135deg, #2980b9, #1f6fa8)", color: "#fff" },
+    SUCCESS: { bg: "linear-gradient(135deg, #27ae60, #1e9450)", color: "#fff" },
+    WARNING: { bg: "linear-gradient(135deg, #e67e22, #d46010)", color: "#fff" },
+    DANGER:  { bg: "linear-gradient(135deg, #e74c3c, #c0392b)", color: "#fff" },
+    DEFAULT: { bg: "linear-gradient(135deg, #1a2f5a, #2c4a8a)", color: "#fff" },
+  };
+
+  const current = slides[idx];
+  const theme = themes[current.style] ?? themes.DEFAULT;
+
+  return (
+    <div
+      className={styles.welcomeBanner}
+      style={{ background: theme.bg, color: theme.color }}
+      onTouchStart={(e) => { touchStartX.current = e.touches[0].clientX; }}
+      onTouchEnd={(e) => {
+        if (touchStartX.current === null) return;
+        const diff = touchStartX.current - e.changedTouches[0].clientX;
+        if (Math.abs(diff) > 40) goTo(idx + (diff > 0 ? 1 : -1));
+        touchStartX.current = null;
+      }}
+    >
+      <div className={styles.bannerContent}>
+        <strong>{current.title}</strong>
+        {current.body && <span>{current.body}</span>}
+      </div>
+      {slides.length > 1 && (
+        <div className={styles.bannerDots}>
+          {slides.map((_, i) => (
+            <button
+              key={i}
+              type="button"
+              className={i === idx ? styles.bannerDotActive : styles.bannerDot}
+              onClick={() => goTo(i)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─────────── PrivacyModal ─────────── */
 function PrivacyModal({ onClose }: { onClose: () => void }) {
   return (
@@ -1179,14 +1242,7 @@ function PublicScreen({
 
   return (
     <div className={styles.panel}>
-      <div className={styles.panelHeader}>
-        <h2>{content?.title ?? "ВПК «Звезда»"}</h2>
-        <span>публичный режим</span>
-      </div>
-      <div className={styles.publicIntro}>
-        <p>{content?.description ?? "Подайте заявку, посмотрите ближайшие открытые мероприятия и материалы для подготовки."}</p>
-      </div>
-      <LegacyPromoStrip items={content?.promo_blocks ?? []} />
+      <WelcomeBanner blocks={content?.promo_blocks ?? []} />
       <CandidateEventsView events={events} readonly onRespond={() => undefined} compact />
       <MiniList title="Материалы для вступления" items={(content?.materials ?? []).map((item) => item.title).slice(0, 4)} />
       <div className={styles.formBlock}>

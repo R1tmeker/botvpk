@@ -893,7 +893,7 @@ function ResponseButtons({
             placeholder="Другая причина (текст)"
             value={customReason}
             onChange={(e) => setCustomReason(e.target.value)}
-            style={{ border: "1px solid #d9deea", borderRadius: 10, padding: "8px 12px", fontSize: 12, fontFamily: "inherit", color: "#1a2f5a" }}
+            style={{ border: "1px solid #d9deea", borderRadius: 10, padding: "8px 12px", fontSize: 16, fontFamily: "inherit", color: "#1a2f5a" }}
           />
           {customReason.trim().length >= 2 && (
             <button
@@ -1125,7 +1125,10 @@ function PublicScreen({
       <MiniList title="Материалы для вступления" items={(content?.materials ?? []).map((item) => item.title).slice(0, 4)} />
       <div className={styles.formBlock}>
         <input placeholder="ФИО *" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} />
-        <input type="date" aria-label="Дата рождения" value={form.birth_date} onChange={(e) => setForm({ ...form, birth_date: e.target.value })} />
+        <label className={styles.fieldLabel}>
+          <span>Дата рождения</span>
+          <input type="date" value={form.birth_date} onChange={(e) => setForm({ ...form, birth_date: e.target.value })} />
+        </label>
         <input placeholder="Телефон" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
         <input placeholder="Город или район" value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} />
         <input placeholder="Учебное заведение" value={form.education_place} onChange={(e) => setForm({ ...form, education_place: e.target.value })} />
@@ -1625,7 +1628,7 @@ function NormativesView({
                   placeholder="Комментарий к сдаче..."
                   value={comments[item.id] ?? ""}
                   onChange={(e) => setComments((prev) => ({ ...prev, [item.id]: e.target.value }))}
-                  style={{ border: "1px solid #d9deea", borderRadius: 10, padding: "8px 12px", fontSize: 12, width: "100%", fontFamily: "inherit", color: "#1a2f5a" }}
+                  style={{ border: "1px solid #d9deea", borderRadius: 10, padding: "8px 12px", fontSize: 16, width: "100%", fontFamily: "inherit", color: "#1a2f5a" }}
                 />
                 <button
                   className={styles.iconAction}

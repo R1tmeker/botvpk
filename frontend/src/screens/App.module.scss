@@ -405,6 +405,7 @@
     width: 30px;
     height: 30px;
     object-fit: contain;
+    filter: brightness(0) opacity(0.45);
   }
 
   strong,
@@ -511,7 +512,6 @@
     width: 1px;
     height: 1px;
     opacity: 0;
-    pointer-events: none;
   }
 }
 
@@ -652,6 +652,19 @@
   }
 }
 
+/* ── Field Label (labeled form field wrapper) ── */
+.fieldLabel {
+  display: grid;
+  gap: 4px;
+
+  > span {
+    font-size: 11px;
+    font-weight: 800;
+    color: #8a96b0;
+    text-transform: uppercase;
+  }
+}
+
 /* ── Forms ───────────────────────────────────── */
 .formBlock {
   display: grid;
@@ -662,19 +675,29 @@
   textarea,
   select {
     width: 100%;
+    min-width: 0;
+    max-width: 100%;
     border: 1px solid #d9deea;
     border-radius: 10px;
     background: #fff;
     padding: 10px 12px;
     color: #1a2f5a;
     font: inherit;
-    font-size: 13px;
+    font-size: 16px;
 
     &:focus {
       outline: 2px solid #1a2f5a;
       outline-offset: -1px;
     }
   }
+
+  input[type="date"] {
+    appearance: none;
+    -webkit-appearance: none;
+    display: block;
+    min-height: 44px;
+  }
+
 
   select {
     min-height: 42px;
@@ -751,7 +774,7 @@
     border-radius: 10px;
     padding: 10px 12px;
     font: inherit;
-    font-size: 13px;
+    font-size: 16px;
     color: #1a2f5a;
   }
 
@@ -829,7 +852,7 @@
     color: #1a2f5a;
     padding: 7px 9px;
     font: inherit;
-    font-size: 12px;
+    font-size: 16px;
     font-weight: 800;
   }
 }
@@ -925,7 +948,6 @@
     width: 1px;
     height: 1px;
     opacity: 0;
-    pointer-events: none;
   }
 }
 
@@ -1067,7 +1089,12 @@
     width: 24px;
     height: 24px;
     object-fit: contain;
+    filter: brightness(0) opacity(0.45);
   }
+}
+
+button[data-active="true"] .navIcon img {
+  filter: brightness(0) saturate(100%) invert(14%) sepia(65%) saturate(1000%) hue-rotate(201deg) brightness(86%) contrast(98%);
 }
 
 .navBadge {
@@ -1120,6 +1147,12 @@
 }
 
 /* ── Reports ─────────────────────────────────── */
+.reportTableWrapper {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 .reportTable {
   width: 100%;
   border-collapse: collapse;
@@ -1296,6 +1329,18 @@
     button[data-active="true"] { color: #e8edf5; background: rgba(255,255,255,0.08); }
   }
 
+  .navIcon img {
+    filter: brightness(0) invert(1) opacity(0.45);
+  }
+
+  button[data-active="true"] .navIcon img {
+    filter: brightness(0) invert(1) opacity(0.95);
+  }
+
+  .row > img {
+    filter: brightness(0) invert(1) opacity(0.45);
+  }
+
   .avatarUploadButton {
     background: #2a3244;
     border-color: #3a4a60;
@@ -1307,6 +1352,10 @@
     background: #2a3244;
     border-color: #3a4a60;
     color: #e8edf5;
+  }
+
+  .fieldLabel > span {
+    color: #6b7a96;
   }
 
   .empty {
@@ -1377,7 +1426,7 @@
     border-radius: 12px;
     background: #fff;
     font: inherit;
-    font-size: 13px;
+    font-size: 16px;
     color: #1a2f5a;
     transition: border-color 0.2s, box-shadow 0.2s;
 
@@ -1459,8 +1508,12 @@
 
 .statsGrid4 {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
+
+  @media (max-width: 320px) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 /* ── Normative Progress ──────────────────────── */

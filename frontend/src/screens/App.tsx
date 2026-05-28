@@ -313,6 +313,32 @@ function menuCard(code: string, title: string, description: string, icon: string
   };
 }
 
+function formatPhoneDisplay(raw: string | null | undefined): string {
+  if (!raw) return "—";
+  const digits = raw.replace(/\D/g, "");
+  const local = digits.startsWith("7") || digits.startsWith("8") ? digits.slice(1) : digits;
+  if (local.length !== 10) return raw;
+  return `+7 ${local.slice(0, 3)} ${local.slice(3, 6)} ${local.slice(6, 8)} ${local.slice(8, 10)}`;
+}
+
+function phoneInputToRaw(display: string): string {
+  const digits = display.replace(/\D/g, "");
+  const local = digits.startsWith("7") || digits.startsWith("8") ? digits.slice(1) : digits;
+  return local.length > 0 ? "+7" + local.slice(0, 10) : "";
+}
+
+function applyPhoneMask(value: string): string {
+  const digits = value.replace(/\D/g, "");
+  const local = digits.startsWith("7") || digits.startsWith("8") ? digits.slice(1) : digits;
+  const d = local.slice(0, 10);
+  let result = "+7";
+  if (d.length > 0) result += " " + d.slice(0, 3);
+  if (d.length > 3) result += " " + d.slice(3, 6);
+  if (d.length > 6) result += " " + d.slice(6, 8);
+  if (d.length > 8) result += " " + d.slice(8, 10);
+  return result;
+}
+
 function formatDate(value: string | null) {
   if (!value) return "без даты";
   return new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
@@ -1147,6 +1173,7 @@ function PublicScreen({
     consent_given: false,
     comment: "",
   });
+  const [phoneDisplay, setPhoneDisplay] = useState("+7");
   const [showPrivacy, setShowPrivacy] = useState(false);
   const canSubmit = form.full_name.trim().length >= 2 && form.consent_given;
 
@@ -1158,11 +1185,6 @@ function PublicScreen({
       </div>
       <div className={styles.publicIntro}>
         <p>{content?.description ?? "Подайте заявку, посмотрите ближайшие открытые мероприятия и материалы для подготовки."}</p>
-        <div className={styles.requirements}>
-          <span>Дисциплина</span>
-          <span>Форма и порядок</span>
-          <span>Готовность учиться</span>
-        </div>
       </div>
       <LegacyPromoStrip items={content?.promo_blocks ?? []} />
       <CandidateEventsView events={events} readonly onRespond={() => undefined} compact />
@@ -1173,7 +1195,31 @@ function PublicScreen({
           <span>Дата рождения</span>
           <input type="date" value={form.birth_date} onChange={(e) => setForm({ ...form, birth_date: e.target.value })} />
         </label>
-        <input placeholder="Телефон" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+        <input
+          type="tel"
+          placeholder="+7 999 000 11 22"
+          value={phoneDisplay}
+          inputMode="numeric"
+          onChange={(e) => {
+            const raw = e.target.value;
+            // Allow clearing completely
+            if (raw === "" || raw === "+") {
+              setPhoneDisplay("+7");
+              setForm({ ...form, phone: "" });
+              return;
+            }
+            const masked = applyPhoneMask(raw);
+            setPhoneDisplay(masked);
+            setForm({ ...form, phone: phoneInputToRaw(masked) });
+          }}
+          onFocus={(e) => {
+            if (e.target.value === "+7") {
+              // Move cursor to end
+              const len = e.target.value.length;
+              setTimeout(() => e.target.setSelectionRange(len, len), 0);
+            }
+          }}
+        />
         <input placeholder="Город или район" value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} />
         <input placeholder="Учебное заведение" value={form.education_place} onChange={(e) => setForm({ ...form, education_place: e.target.value })} />
         <textarea placeholder="Опыт или подготовка" rows={2} value={form.experience_text} onChange={(e) => setForm({ ...form, experience_text: e.target.value })} />
@@ -2351,7 +2397,7 @@ function ProfileView({
           {profile.phone && (
             <div className={styles.profileRow}>
               <dt>Телефон</dt>
-              <dd>{profile.phone}</dd>
+              <dd>{formatPhoneDisplay(profile.phone)}</dd>
             </div>
           )}
           {profile.birth_date && (
@@ -2574,7 +2620,7 @@ function AdminView({
               <img src={iconPath("my_squad")} alt="" />
               <div>
                 <strong>{item.full_name}</strong>
-                <span>{applicationStatusLabels[item.status_code] ?? item.status_code} · {item.phone ?? "телефон не указан"}</span>
+                <span>{applicationStatusLabels[item.status_code] ?? item.status_code} · {item.phone ? formatPhoneDisplay(item.phone) : "телефон не указан"}</span>
               </div>
               {!["ACCEPTED", "REJECTED", "ARCHIVED"].includes(item.status_code) && (
                 <div className={styles.applicationActions}>

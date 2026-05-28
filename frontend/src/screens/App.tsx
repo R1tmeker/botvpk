@@ -101,6 +101,33 @@ import { ToastContainer, toast } from "../components/Toast";
 import { PromoCard, PromoStrip, AdminPromoCard, PromoEditForm } from "../components/PromoCard";
 import { MilestoneToast } from "../components/Confetti";
 
+function FilePicker({ accept, onFile, label = "📎 Прикрепить файл", className }: {
+  accept: string;
+  onFile: (file: File) => void;
+  label?: string;
+  className?: string;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  return (
+    <>
+      <button type="button" className={className} onClick={() => ref.current?.click()}>
+        {label}
+      </button>
+      <input
+        ref={ref}
+        type="file"
+        accept={accept}
+        style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) onFile(file);
+          e.target.value = "";
+        }}
+      />
+    </>
+  );
+}
+
 type Props = {
   webApp: {
     initData: string;
@@ -357,19 +384,9 @@ export function App({ webApp }: Props) {
   const prevStreakRef = useRef<number>(0);
   const hasToken = Boolean(auth.data?.access_token);
 
-  // Apply Telegram color scheme to CSS
+  // Force light theme always
   useEffect(() => {
-    const tg = (window as Window & { Telegram?: { WebApp?: { colorScheme?: string; themeParams?: Record<string, string> } } }).Telegram?.WebApp;
-    if (tg?.colorScheme === "dark") {
-      document.documentElement.setAttribute("data-theme", "dark");
-    }
-    if (tg?.themeParams) {
-      const tp = tg.themeParams;
-      const root = document.documentElement;
-      if (tp.bg_color) root.style.setProperty("--tg-bg", tp.bg_color);
-      if (tp.text_color) root.style.setProperty("--tg-text", tp.text_color);
-      if (tp.button_color) root.style.setProperty("--tg-button", tp.button_color);
-    }
+    document.documentElement.removeAttribute("data-theme");
   }, []);
   const level = roleLevels[profile.role_code];
   const publicMode = hasToken && level < 3;
@@ -1080,6 +1097,32 @@ function Dashboard({
   );
 }
 
+/* ─────────── PrivacyModal ─────────── */
+function PrivacyModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div className={styles.modalOverlay} onClick={onClose}>
+      <div className={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
+        <div className={styles.modalHeader}>
+          <strong>Политика обработки данных</strong>
+          <button type="button" onClick={onClose}>✕</button>
+        </div>
+        <div className={styles.modalBody}>
+          <p><strong>Какие данные мы собираем</strong></p>
+          <p>При подаче заявки: ФИО, дата рождения, номер телефона, город, учебное заведение, Telegram ID, имя пользователя.</p>
+          <p><strong>Для чего используются данные</strong></p>
+          <p>Данные используются исключительно для организации деятельности ВПК «Звезда»: формирование состава, учёт посещаемости, выставление оценок, внутренняя коммуникация.</p>
+          <p><strong>Кто имеет доступ</strong></p>
+          <p>Командиры отделений и взвода ВПК «Звезда». Данные не передаются третьим лицам и не используются в коммерческих целях.</p>
+          <p><strong>Хранение и удаление</strong></p>
+          <p>Данные хранятся на защищённом сервере. По письменному запросу участника данные могут быть удалены из системы.</p>
+          <p><strong>Контакт</strong></p>
+          <p>По вопросам обработки данных обращайтесь к командиру через раздел «Обращения» в приложении.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ─────────── PublicScreen ─────────── */
 function PublicScreen({
   content,
@@ -1104,6 +1147,7 @@ function PublicScreen({
     consent_given: false,
     comment: "",
   });
+  const [showPrivacy, setShowPrivacy] = useState(false);
   const canSubmit = form.full_name.trim().length >= 2 && form.consent_given;
 
   return (
@@ -1138,12 +1182,22 @@ function PublicScreen({
         <textarea placeholder="Комментарий" rows={2} value={form.comment} onChange={(e) => setForm({ ...form, comment: e.target.value })} />
         <label className={styles.checkboxLine}>
           <input type="checkbox" checked={form.consent_given} onChange={(e) => setForm({ ...form, consent_given: e.target.checked })} />
-          <span>Согласен на обработку данных для заявки</span>
+          <span>
+            Согласен на{" "}
+            <button
+              type="button"
+              className={styles.linkButton}
+              onClick={() => setShowPrivacy(true)}
+            >
+              обработку персональных данных
+            </button>
+          </span>
         </label>
         <button type="button" disabled={!canSubmit || isSubmitting} onClick={() => onSubmit(form)}>
           {isSubmitting ? "Отправляем..." : "Подать заявку"}
         </button>
       </div>
+      {showPrivacy && <PrivacyModal onClose={() => setShowPrivacy(false)} />}
     </div>
   );
 }
@@ -1612,17 +1666,11 @@ function NormativesView({
                     <button type="button" onClick={() => setUploadedFiles((prev) => { const next = { ...prev }; delete next[item.id]; return next; })}>✕</button>
                   </div>
                 ) : (
-                  <label className={styles.fileButton}>
-                    📎 Прикрепить файл
-                    <input
-                      type="file"
-                      accept="video/*,image/*,application/pdf"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) handleFileChange(item.id, file);
-                      }}
-                    />
-                  </label>
+                  <FilePicker
+                    accept="video/*,image/*,application/pdf"
+                    onFile={(file) => handleFileChange(item.id, file)}
+                    className={styles.fileButton}
+                  />
                 )}
                 <input
                   placeholder="Комментарий к сдаче..."
@@ -2245,6 +2293,7 @@ function ProfileView({
   onAvatarUpload: (file: File) => void;
   isAvatarUploading: boolean;
 }) {
+  const avatarInputRef = useRef<HTMLInputElement>(null);
   const items = attendanceStats?.items ?? [];
   const presentItem = items.find((i) => (i as Record<string, unknown>).status_code === "PRESENT");
   const absentItem = items.find((i) => (i as Record<string, unknown>).status_code === "ABSENT");
@@ -2262,7 +2311,7 @@ function ProfileView({
         <span>{roleLabels[profile.role_code]}</span>
       </div>
       <div className={styles.profileCard}>
-        <label className={styles.profileAvatarUpload}>
+        <div className={styles.profileAvatarUpload} onClick={() => !isAvatarUploading && avatarInputRef.current?.click()}>
           <span className={styles.profileAvatar}>
             {avatar ? <img src={avatar} alt="" /> : profile.full_name.charAt(0).toUpperCase()}
           </span>
@@ -2270,8 +2319,10 @@ function ProfileView({
             {isAvatarUploading ? "Загрузка..." : avatar ? "Сменить фото" : "Загрузить фото"}
           </span>
           <input
+            ref={avatarInputRef}
             type="file"
             accept="image/*"
+            style={{ position: "absolute", width: 1, height: 1, opacity: 0 }}
             disabled={isAvatarUploading}
             onChange={(e) => {
               const file = e.target.files?.[0];
@@ -2279,7 +2330,7 @@ function ProfileView({
               e.target.value = "";
             }}
           />
-        </label>
+        </div>
         <dl>
           <div className={styles.profileRow}>
             <dt>ФИО</dt>

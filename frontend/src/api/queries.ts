@@ -906,6 +906,55 @@ export function useMyStreak(enabled: boolean) {
   });
 }
 
+export function useAdminSchedule(enabled: boolean) {
+  return useQuery({
+    queryKey: ["admin", "schedule"],
+    queryFn: async () => {
+      const { data } = await api.get<ScheduleEvent[]>("/schedule");
+      return data;
+    },
+    enabled,
+  });
+}
+
+type ScheduleEventPayload = {
+  title: string;
+  start_datetime: string;
+  end_datetime?: string;
+  place?: string;
+  squad_id?: number | null;
+  event_type_code?: string;
+  requires_response?: boolean;
+  description?: string;
+};
+
+export function useCreateScheduleEvent() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: ScheduleEventPayload) => {
+      const { data } = await api.post<ScheduleEvent>("/schedule/events", payload);
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "schedule"] });
+      queryClient.invalidateQueries({ queryKey: ["schedule"] });
+    },
+  });
+}
+
+export function useDeleteScheduleEvent() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: number) => {
+      await api.delete(`/schedule/events/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "schedule"] });
+      queryClient.invalidateQueries({ queryKey: ["schedule"] });
+    },
+  });
+}
+
 export function useActivityFeed(enabled: boolean) {
   return useQuery({
     queryKey: ["reports", "activity-feed"],

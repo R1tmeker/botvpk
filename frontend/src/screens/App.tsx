@@ -62,6 +62,9 @@ import {
   useDeletePromoBlock,
   useAttendanceEvent,
   useUpdateMenuCard,
+  useAdminSchedule,
+  useCreateScheduleEvent,
+  useDeleteScheduleEvent,
   useUpdateSquad,
   useUpdateUser,
 } from "../api/queries";
@@ -2596,7 +2599,7 @@ function AdminView({
   onReject: (id: number, reason?: string) => void;
   isBusy: boolean;
 }) {
-  type AdminTab = "users" | "applications" | "promo" | "menu" | "squads" | "logs";
+  type AdminTab = "users" | "applications" | "squads" | "schedule" | "promo" | "menu" | "logs";
   const [tab, setTab] = useState<AdminTab>("users");
   const [editingPromo, setEditingPromo] = useState<PromoBlock | null | "new">(null);
   const [applicationSquads, setApplicationSquads] = useState<Record<number, string>>({});
@@ -2610,13 +2613,18 @@ function AdminView({
   const createSquad = useCreateSquad();
   const updateSquad = useUpdateSquad();
   const updateMenu = useUpdateMenuCard();
+  const adminSchedule = useAdminSchedule(tab === "schedule");
+  const createEvent = useCreateScheduleEvent();
+  const deleteEvent = useDeleteScheduleEvent();
   const squadMap = new Map(squads.map((s) => [s.id, s.name]));
   const roleOptions = Object.keys(roleLabels) as RoleCode[];
   const statusOptions = ["ACTIVE", "INACTIVE", "ARCHIVED", "BLOCKED"];
+  const [newEvent, setNewEvent] = useState({ title: "", start_datetime: "", end_datetime: "", place: "", squad_id: "", requires_response: true });
   const adminTabs: Array<[AdminTab, string, number]> = [
     ["users", "Люди", 6],
     ["applications", "Заявки", 6],
     ["squads", "Отделения", 6],
+    ["schedule", "Расписание", 6],
     ["promo", "Промо", 6],
     ["menu", "Меню", 6],
     ["logs", "Логи", 8],
@@ -2747,6 +2755,61 @@ function AdminView({
               </div>
             </div>
           )))}
+
+          {tab === "schedule" && (
+            <>
+              <div className={styles.formBlock}>
+                <input placeholder="Название события *" value={newEvent.title} onChange={(e) => setNewEvent({ ...newEvent, title: e.target.value })} />
+                <label className={styles.fieldLabel}>
+                  <span>Начало *</span>
+                  <input type="datetime-local" value={newEvent.start_datetime} onChange={(e) => setNewEvent({ ...newEvent, start_datetime: e.target.value })} />
+                </label>
+                <label className={styles.fieldLabel}>
+                  <span>Конец</span>
+                  <input type="datetime-local" value={newEvent.end_datetime} onChange={(e) => setNewEvent({ ...newEvent, end_datetime: e.target.value })} />
+                </label>
+                <input placeholder="Место проведения" value={newEvent.place} onChange={(e) => setNewEvent({ ...newEvent, place: e.target.value })} />
+                <select value={newEvent.squad_id} onChange={(e) => setNewEvent({ ...newEvent, squad_id: e.target.value })}>
+                  <option value="">Для всех отделений</option>
+                  {squads.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+                <label className={styles.checkboxLine}>
+                  <input type="checkbox" checked={newEvent.requires_response} onChange={(e) => setNewEvent({ ...newEvent, requires_response: e.target.checked })} />
+                  <span>Требуется ответ (приду / не приду)</span>
+                </label>
+                <button
+                  type="button"
+                  disabled={!newEvent.title.trim() || !newEvent.start_datetime || createEvent.isPending}
+                  onClick={() => createEvent.mutate(
+                    {
+                      title: newEvent.title.trim(),
+                      start_datetime: new Date(newEvent.start_datetime).toISOString(),
+                      end_datetime: newEvent.end_datetime ? new Date(newEvent.end_datetime).toISOString() : undefined,
+                      place: newEvent.place || undefined,
+                      squad_id: newEvent.squad_id ? Number(newEvent.squad_id) : null,
+                      requires_response: newEvent.requires_response,
+                    },
+                    { onSuccess: () => { setNewEvent({ title: "", start_datetime: "", end_datetime: "", place: "", squad_id: "", requires_response: true }); toast("Событие создано", "success"); } },
+                  )}
+                >
+                  {createEvent.isPending ? "Создаём..." : "Создать событие"}
+                </button>
+              </div>
+              {adminSchedule.data?.length === 0 && <Empty text="Событий нет" />}
+              {adminSchedule.data?.map((ev) => (
+                <div className={styles.row} key={ev.id}>
+                  <img src={iconPath("schedule")} alt="" />
+                  <div>
+                    <strong>{ev.title}</strong>
+                    <span>{formatDate(ev.start_datetime)}{ev.place ? ` · ${ev.place}` : ""}{ev.squad_id ? ` · ${squadMap.get(ev.squad_id) ?? "отделение"}` : " · все"}</span>
+                  </div>
+                  <button type="button" className={styles.btnNotComing} style={{ gridColumn: "1/-1" }} onClick={() => deleteEvent.mutate(ev.id, { onSuccess: () => toast("Событие удалено", "warning") })}>
+                    Удалить
+                  </button>
+                </div>
+              ))}
+            </>
+          )}
 
           {tab === "applications" && (applications.length === 0 ? <Empty text="Заявок нет" /> : applications.slice(0, 30).map((item) => (
             <article className={styles.row} key={item.id}>

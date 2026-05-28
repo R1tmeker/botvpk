@@ -936,11 +936,16 @@
 }
 
 .memberControls {
-  min-width: min(360px, 100%);
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(0, 1fr));
+  gap: 6px;
 
   select,
   button {
-    min-height: 34px;
+    min-height: 38px;
+    min-width: 0;
+    width: 100%;
   }
 
   button {
@@ -956,6 +961,12 @@
       cursor: not-allowed;
       opacity: 0.55;
     }
+  }
+}
+
+@media (max-width: 420px) {
+  .memberControls {
+    grid-template-columns: 1fr;
   }
 }
 

@@ -1134,7 +1134,7 @@ function PrivacyModal({ onClose }: { onClose: () => void }) {
         </div>
         <div className={styles.modalBody}>
           <p><strong>Какие данные мы собираем</strong></p>
-          <p>При подаче заявки: ФИО, дата рождения, номер телефона, город, учебное заведение, Telegram ID, имя пользователя.</p>
+          <p>При подаче заявки: ФИО, дата рождения, номер телефона, город, группа/класс, Telegram ID, имя пользователя.</p>
           <p><strong>Для чего используются данные</strong></p>
           <p>Данные используются исключительно для организации деятельности ВПК «Звезда»: формирование состава, учёт посещаемости, выставление оценок, внутренняя коммуникация.</p>
           <p><strong>Кто имеет доступ</strong></p>
@@ -1221,7 +1221,7 @@ function PublicScreen({
           }}
         />
         <input placeholder="Город или район" value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} />
-        <input placeholder="Учебное заведение" value={form.education_place} onChange={(e) => setForm({ ...form, education_place: e.target.value })} />
+        <input placeholder="Группа (например, 1ИСП-21)" value={form.education_place} onChange={(e) => setForm({ ...form, education_place: e.target.value })} />
         <textarea placeholder="Опыт или подготовка" rows={2} value={form.experience_text} onChange={(e) => setForm({ ...form, experience_text: e.target.value })} />
         <textarea placeholder="Почему хотите вступить *" rows={3} value={form.motivation_text} onChange={(e) => setForm({ ...form, motivation_text: e.target.value })} />
         <input placeholder="Откуда узнали о ВПК" value={form.source_text} onChange={(e) => setForm({ ...form, source_text: e.target.value })} />
@@ -2383,16 +2383,12 @@ function ProfileView({
             <dd>{profile.full_name}</dd>
           </div>
           <div className={styles.profileRow}>
-            <dt>Роль</dt>
+            <dt>Должность</dt>
             <dd>{roleLabels[profile.role_code]}</dd>
           </div>
           <div className={styles.profileRow}>
             <dt>Отделение</dt>
             <dd>{profile.squad_id ?? "не назначено"}</dd>
-          </div>
-          <div className={styles.profileRow}>
-            <dt>Статус</dt>
-            <dd>{profile.status_code}</dd>
           </div>
           {profile.phone && (
             <div className={styles.profileRow}>

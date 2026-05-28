@@ -653,9 +653,7 @@ export function useUploadAvatar() {
     mutationFn: async (file: File) => {
       const form = new FormData();
       form.append("upload", file);
-      const { data } = await api.post<UserProfile>("/me/avatar", form, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
+      const { data } = await api.post<UserProfile>("/me/avatar", form);
       return data;
     },
     onSuccess: (profile) => {

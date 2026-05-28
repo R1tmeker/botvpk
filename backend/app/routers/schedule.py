@@ -36,6 +36,13 @@ def can_view_event(current_user: CurrentUser, event: ScheduleEvent) -> bool:
     return event.squad_id is None or event.squad_id == current_user.squad_id
 
 
+def serialize_event(event: ScheduleEvent, response_by_event: dict[int, str | None] | None = None) -> ScheduleEventRead:
+    data = ScheduleEventRead.model_validate(event)
+    if response_by_event is not None:
+        data.my_response_code = response_by_event.get(event.id)
+    return data
+
+
 @router.get("", response_model=list[ScheduleEventRead])
 async def list_schedule(
     from_dt: datetime | None = None,
@@ -43,7 +50,7 @@ async def list_schedule(
     squad_id: int | None = None,
     current_user: CurrentUser = Depends(require_role(RoleLevel.PARTICIPANT)),
     session: AsyncSession = Depends(get_db_session),
-) -> list[ScheduleEvent]:
+) -> list[ScheduleEventRead]:
     statement = select(ScheduleEvent).order_by(ScheduleEvent.start_datetime)
     if from_dt:
         statement = statement.where(ScheduleEvent.start_datetime >= from_dt)
@@ -53,14 +60,26 @@ async def list_schedule(
         statement = statement.where(ScheduleEvent.squad_id == squad_id)
     elif current_user.squad_id is not None:
         statement = statement.where((ScheduleEvent.squad_id.is_(None)) | (ScheduleEvent.squad_id == current_user.squad_id))
-    return list((await session.scalars(statement)).all())
+    events = list((await session.scalars(statement)).all())
+    response_by_event: dict[int, str | None] = {}
+    if events and current_user.user_id is not None:
+        response_rows = (
+            await session.execute(
+                select(EventResponse.event_id, EventResponse.response_code).where(
+                    EventResponse.user_id == current_user.user_id,
+                    EventResponse.event_id.in_([event.id for event in events]),
+                )
+            )
+        ).all()
+        response_by_event = {event_id: response_code for event_id, response_code in response_rows}
+    return [serialize_event(event, response_by_event) for event in events]
 
 
 @router.get("/today", response_model=list[ScheduleEventRead])
 async def today_schedule(
     current_user: CurrentUser = Depends(require_role(RoleLevel.PARTICIPANT)),
     session: AsyncSession = Depends(get_db_session),
-) -> list[ScheduleEvent]:
+) -> list[ScheduleEventRead]:
     today = date.today()
     start = datetime.combine(today, time.min)
     end = datetime.combine(today, time.max)
@@ -146,7 +165,7 @@ async def create_event(
     payload: ScheduleEventCreate,
     current_user: CurrentUser = Depends(require_role(RoleLevel.ADMIN)),
     session: AsyncSession = Depends(get_db_session),
-) -> ScheduleEvent:
+) -> ScheduleEventRead:
     if not can_manage_squad(current_user, payload.squad_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot manage this squad.")
     event = ScheduleEvent(created_by_user_id=current_user.user_id, **payload.model_dump())
@@ -162,7 +181,7 @@ async def create_event(
     )
     await session.commit()
     await session.refresh(event)
-    return event
+    return serialize_event(event)
 
 
 @router.patch("/events/{event_id}", response_model=ScheduleEventRead)
@@ -348,10 +367,18 @@ async def event_detail(
     event_id: int,
     current_user: CurrentUser = Depends(require_role(RoleLevel.PARTICIPANT)),
     session: AsyncSession = Depends(get_db_session),
-) -> ScheduleEvent:
+) -> ScheduleEventRead:
     event = await session.get(ScheduleEvent, event_id)
     if not event:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
     if not can_view_event(current_user, event):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot view this event.")
-    return event
+    response_code = None
+    if current_user.user_id is not None:
+        response_code = await session.scalar(
+            select(EventResponse.response_code).where(
+                EventResponse.event_id == event_id,
+                EventResponse.user_id == current_user.user_id,
+            )
+        )
+    return serialize_event(event, {event.id: response_code})

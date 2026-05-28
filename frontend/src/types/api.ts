@@ -16,6 +16,7 @@ export type UserProfile = {
   username: string | null;
   full_name: string;
   squad_id: number | null;
+  avatar_file_id: number | null;
   role_code: RoleCode;
   status_code: string;
   birth_date: string | null;
@@ -58,6 +59,7 @@ export type ScheduleEvent = {
   squad_id: number | null;
   status_code: string;
   requires_response: boolean;
+  my_response_code?: string | null;
 };
 
 export type CandidateEvent = {
@@ -165,12 +167,15 @@ export type Announcement = {
 
 export type LearningMaterial = {
   id: number;
+  course_id: number | null;
   title: string;
   description: string | null;
   type_code: string;
+  file_id: number | null;
   external_url: string | null;
   duration_minutes: number | null;
   audience_code: string;
+  is_active: boolean;
 };
 
 export type LearningCourse = {
@@ -256,5 +261,17 @@ export type Squad = {
   commander_user_id: number | null;
   deputy_user_id: number | null;
   is_active: boolean;
+  created_at: string;
+};
+
+export type AuditLog = {
+  id: number;
+  user_id: number | null;
+  action_code: string;
+  entity_name: string | null;
+  entity_id: number | null;
+  old_value: unknown;
+  new_value: unknown;
+  comment: string | null;
   created_at: string;
 };

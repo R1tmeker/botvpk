@@ -6,12 +6,14 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File as UploadParam, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings, get_settings
 from ..database import get_db_session
 from ..dependencies.auth import CurrentUser, require_role
 from ..models import File as StoredFile
+from ..models import User
 from ..roles import RoleLevel
 from ..schemas.core import FileRead
 from ..utils.audit import record_audit
@@ -34,6 +36,23 @@ def is_allowed_mime(mime_type: str | None) -> bool:
     if not mime_type:
         return False
     return mime_type in ALLOWED_MIME_TYPES or mime_type.startswith(ALLOWED_MIME_PREFIXES)
+
+
+@router.get("/avatars/{file_id}")
+async def download_avatar(
+    file_id: int,
+    session: AsyncSession = Depends(get_db_session),
+):
+    stored = await session.get(StoredFile, file_id)
+    if stored is None or not stored.file_path or not (stored.mime_type or "").startswith("image/"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Avatar not found.")
+    owner_id = await session.scalar(select(User.id).where(User.avatar_file_id == file_id).limit(1))
+    if owner_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Avatar not found.")
+    path = Path(stored.file_path)
+    if not path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Avatar content not found.")
+    return FileResponse(path, media_type=stored.mime_type, filename=stored.original_name or path.name)
 
 
 @router.post("/upload", response_model=FileRead, status_code=status.HTTP_201_CREATED)
@@ -101,4 +120,4 @@ async def download_file(
     path = Path(stored.file_path)
     if not path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File content not found.")
-    return FileResponse(path, media_type=stored.mime_type, filename=stored.original_name)
+    return FileResponse(path, media_type=stored.mime_type, filename=stored.original_name or path.name)

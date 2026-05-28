@@ -1,9 +1,9 @@
 .shell {
   min-height: 100vh;
-  width: 100%;
-  max-width: 430px;
+  width: min(100%, 430px);
+  max-width: 100vw;
   margin: 0 auto;
-  padding: 14px 12px 88px;
+  padding: 14px 12px calc(92px + env(safe-area-inset-bottom));
   color: var(--text);
 }
 
@@ -100,14 +100,29 @@
 
 /* ── Menu Grid ──────────────────────────────── */
 .menuGrid {
+  position: relative;
+  isolation: isolate;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   margin-top: 12px;
+
+  &::before {
+    position: absolute;
+    top: -14px;
+    bottom: -14px;
+    left: 50%;
+    z-index: -1;
+    width: 200vw;
+    transform: translateX(-50%);
+    background: var(--navy);
+    content: "";
+  }
 }
 
 .menuCard {
   display: grid;
+  min-width: 0;
   min-height: 120px;
   align-content: start;
   gap: 8px;
@@ -134,12 +149,14 @@
     font-size: 15px;
     font-weight: 900;
     line-height: 1.1;
+    overflow-wrap: anywhere;
   }
 
   small {
     color: #64708b;
     font-size: 12px;
     line-height: 1.25;
+    overflow-wrap: anywhere;
   }
 
   &[data-code="appeals"] {
@@ -802,6 +819,78 @@
     color: #65708a;
     margin-top: 2px;
   }
+
+  input,
+  select {
+    min-width: 0;
+    border: 1px solid #d9deea;
+    border-radius: 8px;
+    background: #fff;
+    color: #1a2f5a;
+    padding: 7px 9px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 800;
+  }
+}
+
+.memberControls,
+.applicationActions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  align-items: center;
+}
+
+.memberControls {
+  min-width: min(360px, 100%);
+
+  select,
+  button {
+    min-height: 34px;
+  }
+
+  button {
+    border: 0;
+    border-radius: 8px;
+    background: #1a2f5a;
+    color: #fff;
+    padding: 0 10px;
+    font-size: 11px;
+    font-weight: 900;
+
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+  }
+}
+
+.applicationActions {
+  grid-column: 1 / -1;
+
+  select,
+  input,
+  button {
+    min-height: 36px;
+    min-width: 0;
+    border-radius: 10px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 850;
+  }
+
+  select,
+  input {
+    border: 1px solid #d9deea;
+    background: #fff;
+    color: #1a2f5a;
+    padding: 0 10px;
+  }
+
+  button {
+    border: 1.5px solid transparent;
+  }
 }
 
 .roleBadge {
@@ -824,17 +913,54 @@
   padding: 16px;
 }
 
+.profileAvatarUpload {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  justify-self: center;
+  cursor: pointer;
+
+  input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+
 .profileAvatar {
   display: grid;
   place-items: center;
-  width: 64px;
-  height: 64px;
+  width: 78px;
+  height: 78px;
+  overflow: hidden;
+  border: 3px solid #fff;
   border-radius: 50%;
   background: #1a2f5a;
   color: #fff;
-  font-size: 28px;
+  box-shadow: 0 10px 24px rgba(26, 47, 90, 0.18);
+  font-size: 30px;
   font-weight: 900;
-  justify-self: center;
+
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+}
+
+.avatarUploadButton {
+  min-height: 28px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid #d8deea;
+  border-radius: 8px;
+  background: #f8f9fc;
+  color: #1a2f5a;
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 900;
 }
 
 .profileRow {
@@ -877,16 +1003,17 @@
 /* ── Bottom Navigation ───────────────────────── */
 .nav {
   position: fixed;
-  right: 0;
+  right: auto;
   bottom: 0;
-  left: 0;
+  left: 50%;
+  transform: translateX(-50%);
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 4px;
-  width: 100%;
-  max-width: 430px;
+  width: min(100%, 430px);
+  max-width: 100vw;
   margin: 0 auto;
-  padding: 8px 10px 14px;
+  padding: 8px 10px calc(14px + env(safe-area-inset-bottom));
   border-top: 1px solid #d5dbe7;
   background: rgba(248, 249, 252, 0.97);
   backdrop-filter: blur(14px);
@@ -895,19 +1022,23 @@
   button {
     display: grid;
     grid-template-rows: auto auto;
-    gap: 2px;
+    gap: 3px;
     place-items: center;
     min-height: 48px;
+    min-width: 0;
     border: 0;
     border-radius: 10px;
     color: #6b7a96;
     background: transparent;
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 900;
 
-    span:first-child {
-      font-size: 20px;
-      line-height: 1;
+    > span:last-child {
+      max-width: 100%;
+      overflow: hidden;
+      line-height: 1.1;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
   }
 
@@ -918,6 +1049,24 @@
 
   &[data-admin="true"] {
     grid-template-columns: repeat(6, minmax(0, 1fr));
+
+    button {
+      font-size: 9px;
+    }
+  }
+}
+
+.navIcon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+
+  img {
+    width: 24px;
+    height: 24px;
+    object-fit: contain;
   }
 }
 
@@ -927,8 +1076,8 @@
   &::after {
     content: attr(data-count);
     position: absolute;
-    top: 0;
-    right: 0;
+    top: -4px;
+    right: -7px;
     min-width: 16px;
     height: 16px;
     border-radius: 8px;
@@ -1123,6 +1272,10 @@
     }
   }
 
+  .menuGrid::before {
+    background: #0d1526;
+  }
+
   .tabs button {
     background: #2a3244;
     border-color: #3a4a60;
@@ -1141,6 +1294,12 @@
 
     button { color: #6b7a96; }
     button[data-active="true"] { color: #e8edf5; background: rgba(255,255,255,0.08); }
+  }
+
+  .avatarUploadButton {
+    background: #2a3244;
+    border-color: #3a4a60;
+    color: #e8edf5;
   }
 
   .formBlock input, .formBlock textarea, .formBlock select,
@@ -1325,7 +1484,26 @@
 }
 
 /* ── Responsive ──────────────────────────────── */
+@media (max-width: 520px) {
+  .memberRow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .memberControls,
+  .applicationActions {
+    width: 100%;
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 380px) {
+  .nav {
+    gap: 2px;
+    padding-inline: 6px;
+  }
+}
+
+@media (max-width: 340px) {
   .statusPanel,
   .menuGrid,
   .metrics {

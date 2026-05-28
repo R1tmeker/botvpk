@@ -5,6 +5,7 @@ import type {
   Announcement,
   Appeal,
   AppealMessage,
+  AuditLog,
   AttendanceRecord,
   AuthResponse,
   CandidateEvent,
@@ -134,11 +135,11 @@ export function useMyAttendanceStats(enabled: boolean) {
   });
 }
 
-export function useNormatives(enabled: boolean) {
+export function useNormatives(enabled: boolean, includeInactive = false) {
   return useQuery({
-    queryKey: ["normatives"],
+    queryKey: ["normatives", includeInactive],
     queryFn: async () => {
-      const { data } = await api.get<Normative[]>("/normatives");
+      const { data } = await api.get<Normative[]>(`/normatives${includeInactive ? "?active_only=false" : ""}`);
       return data;
     },
     enabled,
@@ -332,6 +333,31 @@ export function useAdminMenu(enabled: boolean) {
   });
 }
 
+export function useAdminAudit(enabled: boolean) {
+  return useQuery({
+    queryKey: ["admin", "audit"],
+    queryFn: async () => {
+      const { data } = await api.get<AuditLog[]>("/admin/audit");
+      return data;
+    },
+    enabled,
+  });
+}
+
+export function useUpdateMenuCard() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, ...payload }: { id: number; is_active?: boolean; sort_order?: number; show_badge?: boolean }) => {
+      const { data } = await api.patch<MenuCard>(`/admin/menu/${id}`, payload);
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "menu"] });
+      queryClient.invalidateQueries({ queryKey: ["menu"] });
+    },
+  });
+}
+
 export function useRespondEvent() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -519,10 +545,16 @@ export function useUsersBySquad(squadId: number | null, enabled: boolean) {
 }
 
 export function useUpdateUser() {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ userId, ...payload }: { userId: number; squad_id?: number | null; role_code?: string; status_code?: string; full_name?: string }) => {
       const { data } = await api.patch<UserRecord>(`/users/${userId}`, payload);
       return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+      queryClient.invalidateQueries({ queryKey: ["squads", "my"] });
     },
   });
 }
@@ -573,6 +605,21 @@ export function useMarkMaterialViewed() {
   });
 }
 
+export function useDownloadFile() {
+  return useMutation({
+    mutationFn: async ({ fileId, fileName }: { fileId: number; fileName: string }) => {
+      const response = await api.get(`/files/${fileId}/download`, { responseType: "blob" });
+      const blob = response.data as Blob;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = fileName || `file-${fileId}`;
+      link.click();
+      URL.revokeObjectURL(url);
+    },
+  });
+}
+
 export function useExportReport() {
   return useMutation({
     mutationFn: async () => {
@@ -591,11 +638,28 @@ export function useUploadFile() {
   return useMutation({
     mutationFn: async (file: File) => {
       const form = new FormData();
-      form.append("file", file);
+      form.append("upload", file);
       const { data } = await api.post<{ id: number; original_name: string; mime_type: string; size_bytes: number }>("/files/upload", form, {
         headers: { "Content-Type": "multipart/form-data" },
       });
       return data;
+    },
+  });
+}
+
+export function useUploadAvatar() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (file: File) => {
+      const form = new FormData();
+      form.append("upload", file);
+      const { data } = await api.post<UserProfile>("/me/avatar", form, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      return data;
+    },
+    onSuccess: (profile) => {
+      queryClient.setQueryData(["me"], profile);
     },
   });
 }
@@ -675,6 +739,34 @@ export function useAdminSquads(enabled: boolean) {
   });
 }
 
+export function useCreateSquad() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: { name: string; commander_user_id?: number | null; deputy_user_id?: number | null; is_active?: boolean }) => {
+      const { data } = await api.post<Squad>("/squads", payload);
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "squads"] });
+    },
+  });
+}
+
+export function useUpdateSquad() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, ...payload }: { id: number; name?: string; commander_user_id?: number | null; deputy_user_id?: number | null; is_active?: boolean }) => {
+      const { data } = await api.patch<Squad>(`/squads/${id}`, payload);
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "squads"] });
+      queryClient.invalidateQueries({ queryKey: ["squads"] });
+      queryClient.invalidateQueries({ queryKey: ["squads", "my"] });
+    },
+  });
+}
+
 export function useMySquad(enabled: boolean) {
   return useQuery({
     queryKey: ["squads", "my"],
@@ -716,19 +808,29 @@ export function useAdminUpdateApplication() {
 }
 
 export function useAdminAcceptApplication() {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ id, squad_id }: { id: number; squad_id?: number | null }) => {
       const { data } = await api.post(`/admin/join/applications/${id}/accept`, { squad_id });
       return data;
     },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "applications"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+    },
   });
 }
 
 export function useAdminRejectApplication() {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ id, decision_reason }: { id: number; decision_reason?: string }) => {
       const { data } = await api.post(`/admin/join/applications/${id}/reject`, { decision_reason });
       return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "applications"] });
     },
   });
 }
@@ -745,10 +847,17 @@ export function useAttendanceEvent(eventId: number | null, enabled: boolean) {
 }
 
 export function useMarkAttendance() {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ eventId, entries }: { eventId: number; entries: Array<{ user_id: number; status_code: string; absence_reason_id?: number | null; comment?: string }> }) => {
-      const { data } = await api.post(`/attendance/events/${eventId}/mark`, entries);
+      const { data } = await api.post(`/attendance/events/${eventId}/mark`, { items: entries });
       return data;
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["attendance", "event", variables.eventId] });
+      queryClient.invalidateQueries({ queryKey: ["attendance", "my"] });
+      queryClient.invalidateQueries({ queryKey: ["attendance", "stats", "my"] });
+      queryClient.invalidateQueries({ queryKey: ["reports", "attendance"] });
     },
   });
 }

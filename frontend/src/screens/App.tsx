@@ -3,6 +3,7 @@ import {
   useAbsenceReasons,
   useActivityFeed,
   useAdminApplications,
+  useAdminAudit,
   useAdminMenu,
   useAdminPromo,
   useAdminSquads,
@@ -15,7 +16,9 @@ import {
   useCreateAppeal,
   useCreateAppealMessage,
   useCreateJoinApplication,
+  useCreateSquad,
   useDashboardSettings,
+  useDownloadFile,
   useExportReport,
   useGradesReport,
   useJoinEvents,
@@ -26,6 +29,7 @@ import {
   useMenu,
   useMyAttendance,
   useMyAttendanceStats,
+  useMarkAttendance,
   useMyNormativeSubmissions,
   useMySquad,
   useNormatives,
@@ -46,6 +50,7 @@ import {
   useSubmitNormative,
   useTelegramAuth,
   useUpdateDashboardSettings,
+  useUploadAvatar,
   useUploadFile,
   useUsers,
   useAdminAcceptApplication,
@@ -54,10 +59,16 @@ import {
   useCreatePromoBlock,
   useUpdatePromoBlock,
   useDeletePromoBlock,
+  useAttendanceEvent,
+  useUpdateMenuCard,
+  useUpdateSquad,
+  useUpdateUser,
 } from "../api/queries";
+import { api } from "../api/client";
 import type {
   Appeal,
   AppealMessage,
+  AuditLog,
   AttendanceRecord,
   CandidateEvent,
   DashboardSetting,
@@ -153,6 +164,7 @@ const fallbackProfile: UserProfile = {
   username: null,
   full_name: "Гость",
   squad_id: null,
+  avatar_file_id: null,
   role_code: "PUBLIC_USER",
   status_code: "ACTIVE",
   birth_date: null,
@@ -209,7 +221,8 @@ const dashboardBlocks: Array<{ code: DashboardBlockCode; title: string; required
 ];
 
 const iconByCode: Record<string, string> = {
-  dashboard: "admin.png",
+  dashboard: "home.png",
+  home: "home.png",
   schedule: "schedule.png",
   attendance: "attendance.png",
   mark_attendance: "mark-attendance.png",
@@ -221,47 +234,14 @@ const iconByCode: Record<string, string> = {
   appeals: "report.png",
   reports: "reports.png",
   admin: "admin.png",
-  profile: "my-squad.png",
+  profile: "profile.png",
   people: "full-roster.png",
+  squads: "full-roster.png",
+  join: "home.png",
   full_roster: "full-roster.png",
   my_squad: "my-squad.png",
   appeal: "report.png",
 };
-
-const navItems: Array<{ view: ViewKey; icon: string; label: string }> = [
-  { view: "dashboard", icon: "🏠", label: "Главная" },
-  { view: "schedule", icon: "📅", label: "Расписание" },
-  { view: "attendance", icon: "✅", label: "Явка" },
-  { view: "normatives", icon: "🏅", label: "Нормативы" },
-  { view: "profile", icon: "👤", label: "Профиль" },
-];
-
-const fallbackSchedule: ScheduleEvent[] = [
-  {
-    id: 1,
-    title: "Строевая подготовка",
-    description: "Плановое занятие отделения",
-    start_datetime: new Date(Date.now() + 86400000).toISOString(),
-    end_datetime: null,
-    place: "Плац",
-    squad_id: null,
-    status_code: "PLANNED",
-    requires_response: true,
-  },
-];
-
-const fallbackNormatives: Normative[] = [
-  {
-    id: 1,
-    title: "Видеоотчёт по строевой стойке",
-    description: "Сдать короткий ролик до проверки командиром.",
-    deadline_at: new Date(Date.now() + 604800000).toISOString(),
-    type_code: "VIDEO",
-    target_audience: "ALL",
-    squad_id: null,
-    is_active: true,
-  },
-];
 
 function roleMenu(profile: UserProfile): MenuCard[] {
   const level = roleLevels[profile.role_code];
@@ -316,9 +296,54 @@ function formatDateFull(value: string | null) {
   return new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "long", year: "numeric" }).format(new Date(value));
 }
 
+type NavItem = {
+  view: ViewKey;
+  iconCode: string;
+  label: string;
+  minLevel: number;
+};
+
+const navItems: NavItem[] = [
+  { view: "dashboard", iconCode: "home", label: "Главная", minLevel: 0 },
+  { view: "schedule", iconCode: "schedule", label: "Расписание", minLevel: 0 },
+  { view: "attendance", iconCode: "attendance", label: "Явка", minLevel: 3 },
+  { view: "normatives", iconCode: "norms", label: "Нормативы", minLevel: 3 },
+  { view: "profile", iconCode: "profile", label: "Профиль", minLevel: 0 },
+];
+
+const adminNavItem: NavItem = { view: "admin", iconCode: "admin", label: "Админка", minLevel: 6 };
+
+const viewMinLevels: Record<ViewKey, number> = {
+  dashboard: 0,
+  schedule: 0,
+  attendance: 3,
+  normatives: 3,
+  learning: 0,
+  notifications: 3,
+  announcements: 4,
+  appeals: 3,
+  reports: 5,
+  people: 3,
+  profile: 0,
+  admin: 6,
+};
+
+function canAccessView(view: ViewKey, level: number) {
+  return level >= viewMinLevels[view];
+}
+
 function iconPath(code: string | null | undefined) {
   const fileName = iconByCode[code ?? ""] ?? "admin.png";
   return `/assets/icons/${fileName}`;
+}
+
+function apiPath(path: string) {
+  const base = (api.defaults.baseURL ?? "").replace(/\/$/, "");
+  return `${base}${path}`;
+}
+
+function avatarPath(fileId: number | null | undefined) {
+  return fileId ? apiPath(`/files/avatars/${fileId}`) : null;
 }
 
 /* ─────────────────────────── App ─────────────────────────── */
@@ -358,7 +383,7 @@ export function App({ webApp }: Props) {
   const schedule = useSchedule(internalMode);
   const attendance = useMyAttendance(internalMode);
   const attendanceStats = useMyAttendanceStats(internalMode);
-  const normatives = useNormatives(internalMode);
+  const normatives = useNormatives(internalMode, level >= 6);
   const mySubmissions = useMyNormativeSubmissions(internalMode);
   const pendingSubmissions = usePendingNormativeSubmissions(hasToken && level >= 4);
   const notifications = useNotifications(internalMode);
@@ -380,6 +405,7 @@ export function App({ webApp }: Props) {
   const adminPromo = useAdminPromo(hasToken && level >= 6);
   const adminMenu = useAdminMenu(hasToken && level >= 6);
   const adminSquads = useAdminSquads(hasToken && level >= 6);
+  const adminAudit = useAdminAudit(hasToken && level >= 8);
 
   const hapticSuccess = () => { webApp.HapticFeedback?.notificationOccurred?.("success"); };
   const hapticError = () => { webApp.HapticFeedback?.notificationOccurred?.("error"); };
@@ -401,6 +427,7 @@ export function App({ webApp }: Props) {
   const createPromo = useCreatePromoBlock();
   const updatePromo = useUpdatePromoBlock();
   const deletePromo = useDeletePromoBlock();
+  const uploadAvatar = useUploadAvatar();
 
   useEffect(() => {
     const initData = webApp.initData;
@@ -412,17 +439,23 @@ export function App({ webApp }: Props) {
 
   const cards = useMemo(() => {
     const apiMenu = menu.data?.map((card) => ({ ...card, code: normalizeView(card.code) }));
-    return apiMenu?.length ? apiMenu : roleMenu(profile);
-  }, [menu.data, profile]);
+    const source = apiMenu?.length ? apiMenu : roleMenu(profile);
+    return source.filter((card) => canAccessView(normalizeView(card.code), level));
+  }, [menu.data, profile, level]);
 
-  const visibleSchedule = schedule.data?.length ? schedule.data : fallbackSchedule;
-  const visibleNormatives = normatives.data?.length ? normatives.data : fallbackNormatives;
+  const visibleSchedule = schedule.data ?? [];
+  const visibleNormatives = normatives.data ?? [];
   const visibleAttendance = attendance.data ?? [];
   const unreadCount = notifications.data?.filter((item) => !item.is_read).length ?? 0;
   const visibleCandidateEvents = joinEvents.data?.length ? joinEvents.data : publicEvents.data ?? [];
 
   const openView = (view: string) => {
     const next = normalizeView(view);
+    if (!canAccessView(next, level)) {
+      setActiveView("dashboard");
+      webApp.BackButton?.hide();
+      return;
+    }
     setPrevView(activeView);
     setActiveView(next);
     webApp.HapticFeedback?.impactOccurred("light");
@@ -433,6 +466,14 @@ export function App({ webApp }: Props) {
       webApp.BackButton?.hide();
     }
   };
+
+  useEffect(() => {
+    if (!canAccessView(activeView, level)) {
+      setActiveView("dashboard");
+      setPrevView(null);
+      webApp.BackButton?.hide();
+    }
+  }, [activeView, level]);
 
   // Trigger milestone confetti when streak hits milestone
   useEffect(() => {
@@ -463,8 +504,10 @@ export function App({ webApp }: Props) {
     return () => webApp.BackButton?.offClick(handler);
   }, [prevView]);
 
-  // show admin nav item if admin+
-  const visibleNav = level >= 8 ? [...navItems, { view: "admin" as ViewKey, icon: "⚙️", label: "Админка" }] : navItems;
+  const visibleNav = [
+    ...navItems.filter((item) => level >= item.minLevel),
+    ...(level >= adminNavItem.minLevel ? [adminNavItem] : []),
+  ];
 
   return (
     <>
@@ -565,6 +608,7 @@ export function App({ webApp }: Props) {
               onSaveSettings={(items) => updateDashboardSettings.mutate(items)}
               onResetSettings={() => resetDashboardSettings.mutate()}
               isSavingSettings={updateDashboardSettings.isPending || resetDashboardSettings.isPending}
+              navigate={openView}
               onRespond={(eventId, responseCode, absenceReasonId, customReason) =>
                 respondEvent.mutate(
                   { eventId, responseCode, absenceReasonId, customReason },
@@ -607,17 +651,20 @@ export function App({ webApp }: Props) {
           )
         )}
 
-        {!auth.isPending && activeView === "attendance" && (
+        {!auth.isPending && activeView === "attendance" && level >= 3 && (
           <AttendanceView
             records={visibleAttendance}
             canManage={level >= 4}
+            managerLevel={level}
+            managerSquadId={profile.squad_id}
             reportItems={attendanceReport.data?.items ?? []}
             stats={attendanceStats.data}
             schedule={schedule.data ?? []}
+            users={allUsers.data ?? []}
           />
         )}
 
-        {!auth.isPending && activeView === "normatives" && (
+        {!auth.isPending && activeView === "normatives" && level >= 3 && (
           <NormativesView
             items={visibleNormatives}
             submissions={mySubmissions.data ?? []}
@@ -655,7 +702,7 @@ export function App({ webApp }: Props) {
           />
         )}
 
-        {!auth.isPending && activeView === "notifications" && (
+        {!auth.isPending && activeView === "notifications" && level >= 3 && (
           <NotificationsView
             items={notifications.data ?? []}
             onRead={(id) => readNotification.mutate(id)}
@@ -664,7 +711,7 @@ export function App({ webApp }: Props) {
           />
         )}
 
-        {!auth.isPending && activeView === "announcements" && (
+        {!auth.isPending && activeView === "announcements" && level >= 4 && (
           <AnnouncementsView
             items={announcements.data ?? []}
             onCreate={(payload) =>
@@ -676,7 +723,7 @@ export function App({ webApp }: Props) {
           />
         )}
 
-        {!auth.isPending && activeView === "appeals" && (
+        {!auth.isPending && activeView === "appeals" && level >= 3 && (
           <AppealsView
             items={appeals.data ?? []}
             currentUserId={profile.id}
@@ -690,15 +737,16 @@ export function App({ webApp }: Props) {
           />
         )}
 
-        {!auth.isPending && activeView === "reports" && (
+        {!auth.isPending && activeView === "reports" && level >= 5 && (
           <ReportsView
+            level={level}
             attendance={attendanceReport.data}
             grades={gradesReport.data}
             normatives={normativesReport.data}
           />
         )}
 
-        {!auth.isPending && activeView === "people" && (
+        {!auth.isPending && activeView === "people" && level >= 3 && (
           <PeopleView
             level={level}
             profile={profile}
@@ -714,10 +762,24 @@ export function App({ webApp }: Props) {
             attendanceStats={attendanceStats.data}
             submissions={mySubmissions.data ?? []}
             streak={myStreak.data ?? null}
+            onAvatarUpload={(file) =>
+              uploadAvatar.mutate(file, {
+                onSuccess: (updatedProfile) => {
+                  setProfile(updatedProfile);
+                  hapticSuccess();
+                  toast("Аватар обновлён", "success");
+                },
+                onError: () => {
+                  hapticError();
+                  toast("Не удалось загрузить аватар", "error");
+                },
+              })
+            }
+            isAvatarUploading={uploadAvatar.isPending}
           />
         )}
 
-        {!auth.isPending && activeView === "admin" && (
+        {!auth.isPending && activeView === "admin" && level >= 6 && (
           <AdminView
             level={level}
             users={adminUsers.data ?? []}
@@ -725,6 +787,7 @@ export function App({ webApp }: Props) {
             promo={adminPromo.data ?? []}
             menu={adminMenu.data ?? []}
             squads={adminSquads.data ?? []}
+            audit={adminAudit.data ?? []}
             onAccept={(id, squadId) =>
               acceptApplication.mutate(
                 { id, squad_id: squadId },
@@ -744,11 +807,11 @@ export function App({ webApp }: Props) {
 
       <nav
         className={styles.nav}
-        data-admin={level >= 8}
+        data-admin={visibleNav.length > 5}
         aria-label="Основная навигация"
         style={{ gridTemplateColumns: `repeat(${visibleNav.length}, minmax(0, 1fr))` }}
       >
-        {visibleNav.map(({ view, icon, label }) => (
+        {visibleNav.map(({ view, iconCode, label }) => (
           <button
             key={view}
             type="button"
@@ -756,10 +819,10 @@ export function App({ webApp }: Props) {
             onClick={() => openView(view)}
           >
             <span
-              className={view === "notifications" && unreadCount > 0 ? styles.navBadge : undefined}
+              className={`${styles.navIcon} ${view === "notifications" && unreadCount > 0 ? styles.navBadge : ""}`}
               data-count={view === "notifications" && unreadCount > 0 ? unreadCount : undefined}
             >
-              {icon}
+              <img src={iconPath(iconCode)} alt="" />
             </span>
             <span>{label}</span>
           </button>
@@ -772,6 +835,8 @@ export function App({ webApp }: Props) {
 
 /* ─────────── normalizeView ─────────── */
 function normalizeView(code: string): ViewKey {
+  if (code === "join") return "dashboard";
+  if (code === "learning_public") return "learning";
   if (code === "norms") return "normatives";
   if (code === "full_roster" || code === "my_squad" || code === "squads") return "people";
   if (code === "appeal") return "appeals";
@@ -901,6 +966,7 @@ function Dashboard({
   onSaveSettings,
   onResetSettings,
   isSavingSettings,
+  navigate,
   onRespond,
 }: {
   level: number;
@@ -916,6 +982,7 @@ function Dashboard({
   onSaveSettings: (items: Array<{ block_code: string; sort_order: number; is_hidden: boolean; is_pinned: boolean; view_mode_code?: string | null }>) => void;
   onResetSettings: () => void;
   isSavingSettings: boolean;
+  navigate: (view: string) => void;
   onRespond: RespondFn;
 }) {
   const availableBlocks = dashboardBlocks.filter((block) => !block.commanderOnly || level >= 4);
@@ -954,7 +1021,12 @@ function Dashboard({
                   </small>
                 </div>
                 {nextEvent?.requires_response && (
-                  <ResponseButtons eventId={nextEvent.id} requiresResponse={nextEvent.requires_response} onRespond={onRespond} />
+                <ResponseButtons
+                  eventId={nextEvent.id}
+                  requiresResponse={nextEvent.requires_response}
+                  currentResponse={nextEvent.my_response_code}
+                  onRespond={onRespond}
+                />
                 )}
               </div>
             );
@@ -994,7 +1066,7 @@ function Dashboard({
           if (block.code === "notifications") {
             return <MiniList key={block.code} title="Непрочитанные" items={notifications.filter((item) => !item.is_read).map((item) => item.title).slice(0, 3)} />;
           }
-          return <PromoStrip key={block.code} blocks={promo} navigate={() => undefined} />;
+          return <PromoStrip key={block.code} blocks={promo} navigate={navigate} />;
         })}
       </div>
       <DashboardCustomizer
@@ -1172,8 +1244,13 @@ function ScheduleView({ events, onRespond }: { events: ScheduleEvent[]; onRespon
     return t >= now - 86400000 && t <= now + 31 * 86400000;
   });
 
-  // filter chips not applicable for archive
-  const filtered = tab === "archive" ? byDate : byDate;
+  const filtered = byDate.filter((event) => {
+    if (tab === "archive" || filter === "all") return true;
+    if (filter === "unanswered") return event.requires_response && !event.my_response_code;
+    if (filter === "coming") return event.my_response_code === "COMING";
+    if (filter === "not_coming") return event.my_response_code === "NOT_COMING";
+    return true;
+  });
 
   return (
     <div className={styles.panel}>
@@ -1204,7 +1281,12 @@ function ScheduleView({ events, onRespond }: { events: ScheduleEvent[]; onRespon
               <span>{formatDate(event.start_datetime)} · {event.place ?? "место уточняется"}</span>
             </div>
             {event.requires_response && event.status_code !== "CANCELLED" && tab !== "archive" && (
-              <ResponseButtons eventId={event.id} requiresResponse={event.requires_response} onRespond={onRespond} />
+              <ResponseButtons
+                eventId={event.id}
+                requiresResponse={event.requires_response}
+                currentResponse={event.my_response_code}
+                onRespond={onRespond}
+              />
             )}
           </article>
         ))}
@@ -1217,23 +1299,60 @@ function ScheduleView({ events, onRespond }: { events: ScheduleEvent[]; onRespon
 function AttendanceView({
   records,
   canManage,
+  managerLevel,
+  managerSquadId,
   reportItems,
   stats,
   schedule,
+  users,
 }: {
   records: AttendanceRecord[];
   canManage: boolean;
+  managerLevel: number;
+  managerSquadId: number | null;
   reportItems: unknown[];
   stats?: ReportSummary;
   schedule: ScheduleEvent[];
+  users: UserRecord[];
 }) {
-  const [tab, setTab] = useState<"chart" | "calendar" | "history">("chart");
+  const [tab, setTab] = useState<"chart" | "calendar" | "history" | "journal">("chart");
+  const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
+  const [draftAttendance, setDraftAttendance] = useState<Record<number, string>>({});
+  const manageableEvents = schedule.filter((event) => event.status_code !== "CANCELLED");
+  const selectedEvent = manageableEvents.find((event) => event.id === selectedEventId) ?? null;
+  const eventAttendance = useAttendanceEvent(selectedEventId, canManage && selectedEventId !== null);
+  const markAttendance = useMarkAttendance();
   const eventMap = new Map(schedule.map((e) => [e.id, e.title]));
+  const scopeSquadId = selectedEvent?.squad_id ?? (managerLevel < 5 ? managerSquadId : null);
+  const targetUsers = users.filter((user) => {
+    if (managerLevel < 5 && scopeSquadId === null) return false;
+    if (typeof user.id !== "number" || user.status_code !== "ACTIVE") return false;
+    if (roleLevels[user.role_code as RoleCode] < roleLevels.PARTICIPANT) return false;
+    if (scopeSquadId !== null && user.squad_id !== scopeSquadId) return false;
+    return true;
+  });
+  const existingAttendance = new Map((eventAttendance.data ?? []).map((item) => [item.user_id, item.status_code]));
 
   const statusLabels: Record<string, string> = {
     PRESENT: "Присутствовал", ABSENT: "Отсутствовал", LATE: "Опоздал",
     EXCUSED: "Уважительная", SICK: "Больничный", RELEASED: "Освобождён", NOT_MARKED: "Не отмечен",
   };
+  const statusOptions = ["PRESENT", "ABSENT", "LATE", "EXCUSED", "SICK", "RELEASED", "NOT_MARKED"];
+
+  useEffect(() => {
+    if (!canManage) return;
+    if (selectedEventId === null && manageableEvents.length > 0) {
+      setSelectedEventId(manageableEvents[0].id);
+    }
+  }, [canManage, selectedEventId, manageableEvents]);
+
+  useEffect(() => {
+    if (tab === "journal" && !canManage) setTab("chart");
+  }, [tab, canManage]);
+
+  useEffect(() => {
+    setDraftAttendance({});
+  }, [selectedEventId]);
   const statusColors: Record<string, string> = {
     PRESENT: "#27ae60", ABSENT: "#e74c3c", LATE: "#f39c12",
     EXCUSED: "#3498db", SICK: "#9b59b6", RELEASED: "#95a5a6", NOT_MARKED: "#bdc3c7",
@@ -1270,7 +1389,12 @@ function AttendanceView({
         <span>{canManage ? "можно отмечать людей" : "только свои"}</span>
       </div>
       <Tabs
-        tabs={[["chart", "Графики"], ["calendar", "Календарь"], ["history", "История"]]}
+        tabs={[
+          ["chart", "Графики"],
+          ["calendar", "Календарь"],
+          ["history", "История"],
+          ...(canManage ? ([["journal", "Журнал"]] as Array<["journal", string]>) : []),
+        ]}
         active={tab}
         onChange={(v) => setTab(v as typeof tab)}
       />
@@ -1316,9 +1440,76 @@ function AttendanceView({
         </div>
       )}
 
-      {canManage && (
+      {tab === "journal" && canManage && (
+        <div className={styles.dashboardStack}>
+          <div className={styles.formBlock}>
+            <select
+              value={selectedEventId ?? ""}
+              onChange={(event) => setSelectedEventId(event.target.value ? Number(event.target.value) : null)}
+            >
+              {manageableEvents.length === 0 && <option value="">Нет доступных событий</option>}
+              {manageableEvents.map((event) => (
+                <option key={event.id} value={event.id}>
+                  {event.title} · {formatDate(event.start_datetime)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className={styles.list}>
+            {selectedEventId === null && <Empty text="Выберите событие для отметки" />}
+            {selectedEventId !== null && targetUsers.length === 0 && <Empty text="Нет участников для отметки" />}
+            {targetUsers.map((user) => {
+              const userId = user.id as number;
+              const value = draftAttendance[userId] ?? existingAttendance.get(userId) ?? "NOT_MARKED";
+              return (
+                <div className={styles.memberRow} key={userId}>
+                  <div>
+                    <strong>{user.full_name}</strong>
+                    <span>{statusLabels[value] ?? value}</span>
+                  </div>
+                  <select
+                    value={value}
+                    onChange={(event) => setDraftAttendance((prev) => ({ ...prev, [userId]: event.target.value }))}
+                  >
+                    {statusOptions.map((status) => (
+                      <option key={status} value={status}>{statusLabels[status] ?? status}</option>
+                    ))}
+                  </select>
+                </div>
+              );
+            })}
+          </div>
+          {selectedEventId !== null && targetUsers.length > 0 && (
+            <div className={styles.commandStrip}>
+              <button
+                type="button"
+                disabled={markAttendance.isPending}
+                onClick={() => {
+                  markAttendance.mutate(
+                    {
+                      eventId: selectedEventId,
+                      entries: targetUsers.map((user) => ({
+                        user_id: user.id as number,
+                        status_code: draftAttendance[user.id as number] ?? existingAttendance.get(user.id as number) ?? "NOT_MARKED",
+                      })),
+                    },
+                    {
+                      onSuccess: () => toast("Журнал явки сохранён", "success"),
+                      onError: () => toast("Не удалось сохранить журнал", "error"),
+                    },
+                  );
+                }}
+              >
+                {markAttendance.isPending ? "Сохраняем..." : "Сохранить отметки"}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {canManage && tab !== "journal" && (
         <div className={styles.commandStrip}>
-          <button type="button">Открыть журнал отметки</button>
+          <button type="button" onClick={() => setTab("journal")}>Открыть журнал отметки</button>
         </div>
       )}
     </div>
@@ -1345,9 +1536,22 @@ function NormativesView({
 }) {
   const [tab, setTab] = useState<"active" | "mine" | "pending" | "accepted" | "archive">("active");
   const accepted = submissions.filter((item) => item.status_code === "ACCEPTED");
+  const activeItems = items.filter((item) => item.is_active);
+  const archiveItems = items.filter((item) => !item.is_active);
   const upload = useUploadFile();
   const [uploadedFiles, setUploadedFiles] = useState<Record<number, { id: number; name: string }>>({});
   const [comments, setComments] = useState<Record<number, string>>({});
+  const tabs: Array<["active" | "mine" | "pending" | "accepted" | "archive", string]> = [
+    ["active", "Активные"],
+    ["mine", "Мои сдачи"],
+    ...(canReview ? ([["pending", "На проверке"]] as Array<["pending", string]>) : []),
+    ["accepted", "Принятые"],
+    ["archive", "Архив"],
+  ];
+
+  useEffect(() => {
+    if (tab === "pending" && !canReview) setTab("active");
+  }, [tab, canReview]);
 
   const handleFileChange = async (normativeId: number, file: File) => {
     const result = await upload.mutateAsync(file);
@@ -1358,10 +1562,10 @@ function NormativesView({
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
         <h2>Нормативы</h2>
-        <span>{items.length} активных</span>
+        <span>{activeItems.length} активных</span>
       </div>
       <Tabs
-        tabs={[["active", "Активные"], ["mine", "Мои сдачи"], ["pending", "На проверке"], ["accepted", "Принятые"], ["archive", "Архив"]]}
+        tabs={tabs}
         active={tab}
         onChange={(value) => setTab(value as typeof tab)}
       />
@@ -1369,11 +1573,11 @@ function NormativesView({
         {tab === "active" && (
           <>
             {/* Progress overview */}
-            {items.length > 0 && (
+            {activeItems.length > 0 && (
               <div className={styles.chartsSection} style={{ marginBottom: 10 }}>
                 <div className={styles.chartSectionTitle}>Прогресс сдачи</div>
                 <div className={styles.normProgressList}>
-                  {items.slice(0, 5).map((item) => {
+                  {activeItems.slice(0, 5).map((item) => {
                     const sub = submissions.find((s) => s.normative_id === item.id);
                     const pct = !sub ? 0 : sub.status_code === "ACCEPTED" ? 100 : sub.status_code === "PENDING" ? 50 : 10;
                     const color = pct === 100 ? "#27ae60" : pct === 50 ? "#f39c12" : "#e8ecf0";
@@ -1389,7 +1593,7 @@ function NormativesView({
             )}
           </>
         )}
-        {tab === "active" && items.map((item) => {
+        {tab === "active" && activeItems.map((item) => {
           const attached = uploadedFiles[item.id];
           return (
             <article className={styles.row} key={item.id}>
@@ -1450,7 +1654,18 @@ function NormativesView({
           ? <Empty text="Принятых сдач пока нет" />
           : accepted.map((item) => <SubmissionRow key={item.id} item={item} />)
         )}
-        {tab === "archive" && <Empty text="Архив появится после закрытых нормативов" />}
+        {tab === "archive" && (archiveItems.length === 0
+          ? <Empty text="Архив нормативов пуст" />
+          : archiveItems.map((item) => (
+            <article className={styles.row} key={item.id}>
+              <img src={iconPath("norms")} alt="" />
+              <div>
+                <strong>{item.title}</strong>
+                <span>{item.description ?? "закрытый норматив"} · до {formatDate(item.deadline_at)}</span>
+              </div>
+            </article>
+          ))
+        )}
       </div>
     </div>
   );
@@ -1711,18 +1926,26 @@ function appealStatusLabel(code: string) {
 
 /* ─────────── ReportsView ─────────── */
 function ReportsView({
+  level,
   attendance,
   grades,
   normatives,
 }: {
+  level: number;
   attendance?: ReportSummary;
   grades?: ReportSummary;
   normatives?: ReportSummary;
 }) {
   const [tab, setTab] = useState<"attendance" | "grades" | "normatives" | "export">("attendance");
   const exportReport = useExportReport();
+  const tabs: Array<[typeof tab, string]> = [["attendance", "Явка"], ["grades", "Оценки"], ["normatives", "Нормативы"]];
+  if (level >= 6) tabs.push(["export", "Экспорт"]);
   const activeReport = tab === "grades" ? grades : tab === "normatives" ? normatives : attendance;
   const items = activeReport?.items ?? [];
+
+  useEffect(() => {
+    if (tab === "export" && level < 6) setTab("attendance");
+  }, [level, tab]);
 
   const statusLabelMap: Record<string, string> = {
     PRESENT: "Присутствовал",
@@ -1746,7 +1969,7 @@ function ReportsView({
         <span>{activeReport?.title ?? "сводки"}</span>
       </div>
       <Tabs
-        tabs={[["attendance", "Явка"], ["grades", "Оценки"], ["normatives", "Нормативы"], ["export", "Экспорт"]]}
+        tabs={tabs}
         active={tab}
         onChange={(value) => setTab(value as typeof tab)}
       />
@@ -1834,7 +2057,11 @@ function ReportsView({
 /* ─────────── LearningView ─────────── */
 function LearningView({ items, courses }: { items: LearningMaterial[]; courses: LearningCourse[] }) {
   const [tab, setTab] = useState<"materials" | "courses">("materials");
+  const [selectedCourseId, setSelectedCourseId] = useState<number | null>(null);
   const markViewed = useMarkMaterialViewed();
+  const downloadFile = useDownloadFile();
+  const visibleItems = selectedCourseId === null ? items : items.filter((item) => item.course_id === selectedCourseId);
+  const selectedCourse = courses.find((course) => course.id === selectedCourseId);
 
   const typeLabels: Record<string, string> = {
     VIDEO: "Видео",
@@ -1850,7 +2077,7 @@ function LearningView({ items, courses }: { items: LearningMaterial[]; courses: 
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
         <h2>Материалы</h2>
-        <span>{items.length} доступно</span>
+        <span>{visibleItems.length} доступно</span>
       </div>
       <Tabs
         tabs={[["materials", "Материалы"], ["courses", "Курсы"]]}
@@ -1858,13 +2085,24 @@ function LearningView({ items, courses }: { items: LearningMaterial[]; courses: 
         onChange={(value) => setTab(value as typeof tab)}
       />
       <div className={styles.list}>
-        {tab === "materials" && items.length === 0 && <Empty text="Материалы появятся после публикации" />}
-        {tab === "materials" && items.map((item) => (
-          <article className={styles.row} key={item.id} style={{ cursor: item.external_url ? "pointer" : "default" }}
+        {tab === "materials" && selectedCourse && (
+          <div className={styles.commandStrip}>
+            <small>{selectedCourse.title}</small>
+            <button type="button" onClick={() => setSelectedCourseId(null)}>Все материалы</button>
+          </div>
+        )}
+        {tab === "materials" && visibleItems.length === 0 && <Empty text="Материалы появятся после публикации" />}
+        {tab === "materials" && visibleItems.map((item) => (
+          <article className={styles.row} key={item.id} style={{ cursor: item.external_url || item.file_id ? "pointer" : "default" }}
             onClick={() => {
               if (item.external_url) {
                 markViewed.mutate(item.id);
                 window.open(item.external_url, "_blank");
+                return;
+              }
+              if (item.file_id) {
+                markViewed.mutate(item.id);
+                downloadFile.mutate({ fileId: item.file_id, fileName: item.title });
               }
             }}
           >
@@ -1873,18 +2111,28 @@ function LearningView({ items, courses }: { items: LearningMaterial[]; courses: 
               <strong>{item.title}</strong>
               <span>{typeLabels[item.type_code] ?? item.type_code} · {item.description ?? "материал подготовки"}{item.duration_minutes ? ` · ${item.duration_minutes} мин` : ""}</span>
             </div>
-            {item.external_url && (
-              <span style={{ gridColumn: "1/-1", fontSize: 10, color: "#3498db" }}>Открыть →</span>
+            {(item.external_url || item.file_id) && (
+              <span style={{ gridColumn: "1/-1", fontSize: 10, color: "#3498db" }}>
+                {item.external_url ? "Открыть →" : downloadFile.isPending ? "Скачиваем..." : "Скачать файл"}
+              </span>
             )}
           </article>
         ))}
         {tab === "courses" && courses.length === 0 && <Empty text="Курсы появятся после публикации" />}
         {tab === "courses" && courses.map((item) => (
-          <article className={styles.row} key={item.id}>
+          <article
+            className={styles.row}
+            key={item.id}
+            style={{ cursor: "pointer" }}
+            onClick={() => {
+              setSelectedCourseId(item.id);
+              setTab("materials");
+            }}
+          >
             <img src={iconPath("learning")} alt="" />
             <div>
               <strong>{item.title}</strong>
-              <span>{item.audience_code} · {item.description ?? "мини-курс"}</span>
+              <span>{item.audience_code} · {item.description ?? "мини-курс"} · {items.filter((material) => material.course_id === item.id).length} материалов</span>
             </div>
           </article>
         ))}
@@ -1984,11 +2232,15 @@ function ProfileView({
   attendanceStats,
   submissions,
   streak,
+  onAvatarUpload,
+  isAvatarUploading,
 }: {
   profile: UserProfile;
   attendanceStats?: ReportSummary;
   submissions: NormativeSubmission[];
   streak: StreakData;
+  onAvatarUpload: (file: File) => void;
+  isAvatarUploading: boolean;
 }) {
   const items = attendanceStats?.items ?? [];
   const presentItem = items.find((i) => (i as Record<string, unknown>).status_code === "PRESENT");
@@ -1998,6 +2250,7 @@ function ProfileView({
   const total = items.reduce((acc, i) => acc + extractCount(i), 0);
   const percent = total ? Math.round((presentCount / total) * 100) : 0;
   const accepted = submissions.filter((s) => s.status_code === "ACCEPTED").length;
+  const avatar = avatarPath(profile.avatar_file_id);
 
   return (
     <div className={styles.panel}>
@@ -2006,9 +2259,24 @@ function ProfileView({
         <span>{roleLabels[profile.role_code]}</span>
       </div>
       <div className={styles.profileCard}>
-        <div className={styles.profileAvatar}>
-          {profile.full_name.charAt(0).toUpperCase()}
-        </div>
+        <label className={styles.profileAvatarUpload}>
+          <span className={styles.profileAvatar}>
+            {avatar ? <img src={avatar} alt="" /> : profile.full_name.charAt(0).toUpperCase()}
+          </span>
+          <span className={styles.avatarUploadButton}>
+            {isAvatarUploading ? "Загрузка..." : avatar ? "Сменить фото" : "Загрузить фото"}
+          </span>
+          <input
+            type="file"
+            accept="image/*"
+            disabled={isAvatarUploading}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) onAvatarUpload(file);
+              e.target.value = "";
+            }}
+          />
+        </label>
         <dl>
           <div className={styles.profileRow}>
             <dt>ФИО</dt>
@@ -2079,6 +2347,7 @@ function AdminView({
   promo,
   menu,
   squads,
+  audit,
   onAccept,
   onReject,
   isBusy,
@@ -2089,16 +2358,44 @@ function AdminView({
   promo: PromoBlock[];
   menu: MenuCard[];
   squads: Squad[];
+  audit: AuditLog[];
   onAccept: (id: number, squadId?: number | null) => void;
   onReject: (id: number, reason?: string) => void;
   isBusy: boolean;
 }) {
-  const [tab, setTab] = useState<"users" | "applications" | "promo" | "menu" | "squads" | "logs">("users");
+  type AdminTab = "users" | "applications" | "promo" | "menu" | "squads" | "logs";
+  const [tab, setTab] = useState<AdminTab>("users");
   const [editingPromo, setEditingPromo] = useState<PromoBlock | null | "new">(null);
+  const [applicationSquads, setApplicationSquads] = useState<Record<number, string>>({});
+  const [rejectReasons, setRejectReasons] = useState<Record<number, string>>({});
+  const [newSquadName, setNewSquadName] = useState("");
+  const [squadNames, setSquadNames] = useState<Record<number, string>>({});
   const createPromo = useCreatePromoBlock();
   const updatePromo = useUpdatePromoBlock();
   const deletePromo = useDeletePromoBlock();
+  const updateUser = useUpdateUser();
+  const createSquad = useCreateSquad();
+  const updateSquad = useUpdateSquad();
+  const updateMenu = useUpdateMenuCard();
   const squadMap = new Map(squads.map((s) => [s.id, s.name]));
+  const roleOptions = Object.keys(roleLabels) as RoleCode[];
+  const statusOptions = ["ACTIVE", "INACTIVE", "ARCHIVED", "BLOCKED"];
+  const adminTabs: Array<[AdminTab, string, number]> = [
+    ["users", "Люди", 6],
+    ["applications", "Заявки", 6],
+    ["squads", "Отделения", 6],
+    ["promo", "Промо", 6],
+    ["menu", "Меню", 6],
+    ["logs", "Логи", 8],
+  ];
+  const visibleTabs = adminTabs.filter(([, , minLevel]) => level >= minLevel);
+
+  useEffect(() => {
+    if (!visibleTabs.some(([value]) => value === tab)) {
+      setTab(visibleTabs[0]?.[0] ?? "users");
+      setEditingPromo(null);
+    }
+  }, [level, tab, visibleTabs.length]);
 
   return (
     <div className={styles.panel}>
@@ -2107,16 +2404,9 @@ function AdminView({
         <span>{level >= 8 ? "полный доступ" : "командирский доступ"}</span>
       </div>
       <Tabs
-        tabs={[
-          ["users", "Люди"],
-          ["applications", "Заявки"],
-          ["squads", "Отделения"],
-          ["promo", "Промо"],
-          ["menu", "Меню"],
-          ["logs", "Логи"],
-        ]}
+        tabs={visibleTabs.map(([value, label]) => [value, label] as [string, string])}
         active={tab}
-        onChange={(value) => { setTab(value as typeof tab); setEditingPromo(null); }}
+        onChange={(value) => { setTab(value as AdminTab); setEditingPromo(null); }}
       />
 
       {/* ── Promo tab ── */}
@@ -2192,7 +2482,36 @@ function AdminView({
                 <strong>{user.full_name}</strong>
                 <span>{squadMap.get(user.squad_id ?? -1) ?? "без отделения"}{user.username ? ` · @${user.username}` : ""}</span>
               </div>
-              <span className={styles.roleBadge}>{roleLabels[user.role_code as RoleCode] ?? user.role_code}</span>
+              <div className={styles.memberControls}>
+                <select
+                  value={user.role_code}
+                  disabled={user.id === null || updateUser.isPending}
+                  onChange={(event) => user.id !== null && updateUser.mutate({ userId: user.id, role_code: event.target.value })}
+                >
+                  {roleOptions.map((role) => (
+                    <option key={role} value={role}>{roleLabels[role]}</option>
+                  ))}
+                </select>
+                <select
+                  value={user.squad_id ?? ""}
+                  disabled={user.id === null || updateUser.isPending}
+                  onChange={(event) => user.id !== null && updateUser.mutate({ userId: user.id, squad_id: event.target.value ? Number(event.target.value) : null })}
+                >
+                  <option value="">Без отделения</option>
+                  {squads.map((squad) => (
+                    <option key={squad.id} value={squad.id}>{squad.name}</option>
+                  ))}
+                </select>
+                <select
+                  value={user.status_code}
+                  disabled={user.id === null || updateUser.isPending}
+                  onChange={(event) => user.id !== null && updateUser.mutate({ userId: user.id, status_code: event.target.value })}
+                >
+                  {statusOptions.map((status) => (
+                    <option key={status} value={status}>{status}</option>
+                  ))}
+                </select>
+              </div>
             </div>
           )))}
 
@@ -2204,11 +2523,40 @@ function AdminView({
                 <span>{applicationStatusLabels[item.status_code] ?? item.status_code} · {item.phone ?? "телефон не указан"}</span>
               </div>
               {!["ACCEPTED", "REJECTED", "ARCHIVED"].includes(item.status_code) && (
-                <div className={styles.actions}>
-                  <button type="button" className={styles.btnComing} disabled={isBusy} onClick={() => onAccept(item.id, null)}>
+                <div className={styles.applicationActions}>
+                  <select
+                    value={applicationSquads[item.id] ?? ""}
+                    disabled={isBusy}
+                    onChange={(event) => setApplicationSquads((prev) => ({ ...prev, [item.id]: event.target.value }))}
+                  >
+                    <option value="">Без отделения</option>
+                    {squads.map((squad) => (
+                      <option key={squad.id} value={squad.id}>{squad.name}</option>
+                    ))}
+                  </select>
+                  <input
+                    value={rejectReasons[item.id] ?? ""}
+                    disabled={isBusy}
+                    placeholder="Причина отказа"
+                    onChange={(event) => setRejectReasons((prev) => ({ ...prev, [item.id]: event.target.value }))}
+                  />
+                  <button
+                    type="button"
+                    className={styles.btnComing}
+                    disabled={isBusy}
+                    onClick={() => {
+                      const squadId = applicationSquads[item.id];
+                      onAccept(item.id, squadId ? Number(squadId) : null);
+                    }}
+                  >
                     Принять
                   </button>
-                  <button type="button" className={styles.btnNotComing} disabled={isBusy} onClick={() => onReject(item.id, "Не подошёл")}>
+                  <button
+                    type="button"
+                    className={styles.btnNotComing}
+                    disabled={isBusy}
+                    onClick={() => onReject(item.id, rejectReasons[item.id]?.trim() || undefined)}
+                  >
                     Отклонить
                   </button>
                   <button type="button" className={styles.btnMaybe} disabled>
@@ -2219,18 +2567,82 @@ function AdminView({
             </article>
           )))}
 
-          {tab === "squads" && (squads.length === 0 ? <Empty text="Отделений нет" /> : squads.map((squad) => (
-            <div className={styles.memberRow} key={squad.id}>
-              <div>
-                <strong>{squad.name}</strong>
-                <span>
-                  {users.filter((u) => u.squad_id === squad.id).length} участников
-                  {squad.commander_user_id ? ` · Ком: ${users.find((u) => u.id === squad.commander_user_id)?.full_name ?? "—"}` : ""}
-                </span>
+          {tab === "squads" && (
+            <>
+              <div className={styles.formBlock}>
+                <input
+                  value={newSquadName}
+                  placeholder="Название отделения"
+                  onChange={(event) => setNewSquadName(event.target.value)}
+                />
+                <button
+                  type="button"
+                  disabled={newSquadName.trim().length === 0 || createSquad.isPending}
+                  onClick={() => {
+                    createSquad.mutate(
+                      { name: newSquadName.trim() },
+                      { onSuccess: () => { setNewSquadName(""); toast("Отделение создано", "success"); } },
+                    );
+                  }}
+                >
+                  Создать отделение
+                </button>
               </div>
-              <span className={styles.roleBadge}>{squad.is_active ? "Активно" : "Неактивно"}</span>
-            </div>
-          )))}
+              {squads.length === 0 ? <Empty text="Отделений нет" /> : squads.map((squad) => {
+                const commanderUsers = users.filter((user) => typeof user.id === "number" && roleLevels[user.role_code as RoleCode] >= 4);
+                return (
+                  <div className={styles.memberRow} key={squad.id}>
+                    <div>
+                      <input
+                        value={squadNames[squad.id] ?? squad.name}
+                        onChange={(event) => setSquadNames((prev) => ({ ...prev, [squad.id]: event.target.value }))}
+                      />
+                      <span>
+                        {users.filter((u) => u.squad_id === squad.id).length} участников
+                        {squad.commander_user_id ? ` · Ком: ${users.find((u) => u.id === squad.commander_user_id)?.full_name ?? "—"}` : ""}
+                      </span>
+                    </div>
+                    <div className={styles.memberControls}>
+                      <select
+                        value={squad.commander_user_id ?? ""}
+                        disabled={updateSquad.isPending}
+                        onChange={(event) => updateSquad.mutate({ id: squad.id, commander_user_id: event.target.value ? Number(event.target.value) : null })}
+                      >
+                        <option value="">Командир не выбран</option>
+                        {commanderUsers.map((user) => (
+                          <option key={user.id} value={user.id as number}>{user.full_name}</option>
+                        ))}
+                      </select>
+                      <select
+                        value={squad.deputy_user_id ?? ""}
+                        disabled={updateSquad.isPending}
+                        onChange={(event) => updateSquad.mutate({ id: squad.id, deputy_user_id: event.target.value ? Number(event.target.value) : null })}
+                      >
+                        <option value="">Заместитель не выбран</option>
+                        {commanderUsers.map((user) => (
+                          <option key={user.id} value={user.id as number}>{user.full_name}</option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        disabled={updateSquad.isPending}
+                        onClick={() => updateSquad.mutate({ id: squad.id, name: (squadNames[squad.id] ?? squad.name).trim() })}
+                      >
+                        Сохранить
+                      </button>
+                      <button
+                        type="button"
+                        disabled={updateSquad.isPending}
+                        onClick={() => updateSquad.mutate({ id: squad.id, is_active: !squad.is_active })}
+                      >
+                        {squad.is_active ? "Выключить" : "Включить"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </>
+          )}
 
           {tab === "menu" && (menu.length === 0 ? <Empty text="Карточек меню нет" /> : menu.slice(0, 12).map((item) => (
             <article className={styles.row} key={item.id ?? item.code}>
@@ -2239,15 +2651,31 @@ function AdminView({
                 <strong>{item.title}</strong>
                 <span>{item.is_required ? "обязательная" : "обычная"} · {item.is_active ? "активна" : "скрыта"}</span>
               </div>
+              {level >= 8 && item.id && (
+                <button
+                  className={styles.iconAction}
+                  type="button"
+                  disabled={updateMenu.isPending}
+                  onClick={() => updateMenu.mutate({ id: item.id!, is_active: !item.is_active })}
+                >
+                  {item.is_active ? "Скрыть" : "Показать"}
+                </button>
+              )}
             </article>
           )))}
 
           {tab === "logs" && (
-            <div className={styles.nextItem}>
-              <span>Аудит-лог</span>
-              <strong>Доступен через API</strong>
-              <small>GET /api/admin/audit — полная история действий</small>
-            </div>
+            audit.length === 0 ? <Empty text="Аудит-лог пуст" /> : audit.slice(0, 80).map((item) => (
+              <article className={styles.row} key={item.id}>
+                <img src={iconPath("admin")} alt="" />
+                <div>
+                  <strong>{item.action_code}</strong>
+                  <span>
+                    {item.entity_name ?? "entity"} #{item.entity_id ?? "—"} · user {item.user_id ?? "—"} · {formatDate(item.created_at)}
+                  </span>
+                </div>
+              </article>
+            ))
           )}
         </div>
       )}

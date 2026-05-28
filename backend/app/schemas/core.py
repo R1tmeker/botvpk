@@ -20,6 +20,7 @@ class UserRead(ORMModel):
     username: str | None = None
     full_name: str
     squad_id: int | None = None
+    avatar_file_id: int | None = None
     role_code: str
     status_code: str
     birth_date: date | None = None
@@ -34,6 +35,7 @@ class UserCreate(BaseModel):
     username: str | None = None
     full_name: str = Field(min_length=2, max_length=255)
     squad_id: int | None = None
+    avatar_file_id: int | None = None
     role_code: str = "USER_PENDING"
     status_code: str = "ACTIVE"
     birth_date: date | None = None
@@ -45,6 +47,7 @@ class UserUpdate(BaseModel):
     username: str | None = None
     full_name: str | None = Field(default=None, min_length=2, max_length=255)
     squad_id: int | None = None
+    avatar_file_id: int | None = None
     role_code: str | None = None
     status_code: str | None = None
     birth_date: date | None = None
@@ -181,6 +184,7 @@ class ScheduleEventRead(ORMModel):
     response_deadline_at: datetime | None = None
     grading_type: str
     file_id: int | None = None
+    my_response_code: str | None = None
     created_by_user_id: int
     created_at: datetime
     updated_at: datetime | None = None

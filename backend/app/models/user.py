@@ -20,6 +20,7 @@ class User(Base):
     username: Mapped[str | None] = mapped_column(String(128))
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
     squad_id: Mapped[int | None] = mapped_column(ForeignKey("squads.id", ondelete="SET NULL", use_alter=True))
+    avatar_file_id: Mapped[int | None] = mapped_column(ForeignKey("files.id", ondelete="SET NULL", use_alter=True))
     role_code: Mapped[str] = mapped_column(String(50), nullable=False, server_default="USER_PENDING")
     status_code: Mapped[str] = mapped_column(String(50), nullable=False, server_default="ACTIVE")
     birth_date: Mapped[date | None] = mapped_column(Date)

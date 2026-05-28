@@ -243,7 +243,6 @@ export function PromoEditForm({
               <option value="OPEN_NORMATIVE">Открыть нормативы</option>
               <option value="OPEN_COURSE">Открыть материалы</option>
               <option value="OPEN_FORM">Открыть обращения</option>
-              <option value="SEND_BOT_MESSAGE">Написать боту</option>
             </select>
           </label>
           <label>Порядок

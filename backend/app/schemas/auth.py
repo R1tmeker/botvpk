@@ -15,6 +15,7 @@ class UserProfile(BaseModel):
     username: str | None = None
     full_name: str
     squad_id: int | None = None
+    avatar_file_id: int | None = None
     role_code: str
     status_code: str = "ACTIVE"
     birth_date: date | None = None

@@ -1,19 +1,27 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import datetime, timezone
+from pathlib import Path
+from uuid import uuid4
+
+from fastapi import APIRouter, Depends, File as UploadParam, HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings, get_settings
 from ..database import get_db_session
 from ..dependencies.auth import CurrentUser, get_current_user
+from ..models import File as StoredFile
 from ..models import JoinApplication, MenuCard, User
-from ..roles import RoleCode
+from ..roles import RoleCode, RoleLevel, role_level
 from ..schemas.auth import AuthResponse, MenuCardResponse, TelegramAuthRequest, UserProfile
+from ..utils.audit import record_audit
 from ..utils.jwt import create_access_token
 from ..utils.telegram_auth import TelegramInitDataError, validate_init_data
 
 router = APIRouter(tags=["auth"])
+
+AVATAR_MIME_PREFIX = "image/"
 
 
 @router.post("/auth/telegram", response_model=AuthResponse)
@@ -92,6 +100,53 @@ async def get_me(current_user: CurrentUser = Depends(get_current_user)) -> UserP
     )
 
 
+@router.post("/me/avatar", response_model=UserProfile)
+async def upload_my_avatar(
+    upload: UploadFile = UploadParam(...),
+    current_user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> UserProfile:
+    if current_user.user is None or current_user.user_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User profile is required.")
+    if not upload.content_type or not upload.content_type.startswith(AVATAR_MIME_PREFIX):
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Avatar must be an image.")
+    content = await upload.read()
+    if len(content) > settings.max_upload_size_bytes:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File is too large.")
+
+    now = datetime.now(timezone.utc)
+    upload_dir = settings.uploads_dir / "avatars" / str(now.year) / f"{now.month:02d}"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    suffix = Path(upload.filename or "").suffix.lower()[:20] or ".jpg"
+    target = upload_dir / f"{uuid4().hex}{suffix}"
+    target.write_bytes(content)
+
+    stored = StoredFile(
+        file_path=str(target),
+        original_name=upload.filename,
+        mime_type=upload.content_type,
+        size_bytes=len(content),
+        uploaded_by_id=current_user.user_id,
+    )
+    session.add(stored)
+    await session.flush()
+
+    current_user.user.avatar_file_id = stored.id
+    current_user.user.updated_at = now
+    await record_audit(
+        session,
+        user_id=current_user.user_id,
+        action_code="user.avatar.upload",
+        entity_name="users",
+        entity_id=current_user.user_id,
+        new_value={"avatar_file_id": stored.id, "mime_type": upload.content_type, "size_bytes": len(content)},
+    )
+    await session.commit()
+    await session.refresh(current_user.user)
+    return _profile_from_user(current_user.user)
+
+
 @router.get("/menu", response_model=list[MenuCardResponse])
 async def get_menu(
     current_user: CurrentUser = Depends(get_current_user),
@@ -120,6 +175,7 @@ def _profile_from_user(user: User) -> UserProfile:
         username=user.username,
         full_name=user.full_name,
         squad_id=user.squad_id,
+        avatar_file_id=user.avatar_file_id,
         role_code=user.role_code,
         status_code=user.status_code,
         birth_date=user.birth_date,
@@ -142,19 +198,27 @@ def _menu_card(card: MenuCard) -> MenuCardResponse:
 
 
 def _default_menu(role_code: str) -> list[MenuCardResponse]:
-    base = [
-        MenuCardResponse(code="dashboard", title="Главная", route="/", icon_code="dashboard", is_required=True),
-        MenuCardResponse(code="schedule", title="Расписание", route="/schedule", icon_code="schedule", is_required=True),
-        MenuCardResponse(code="appeals", title="Обращения", route="/appeals", icon_code="appeals", is_required=True),
-    ]
-    if role_code in {RoleCode.PUBLIC_USER.value, RoleCode.CANDIDATE.value}:
-        return base + [
-            MenuCardResponse(code="join", title="Вступить", route="/join", icon_code="join", is_required=True),
+    level = role_level(role_code)
+    if level < RoleLevel.PARTICIPANT:
+        return [
+            MenuCardResponse(code="join", title="Вступить", route="/join", icon_code="dashboard", is_required=True),
+            MenuCardResponse(code="schedule", title="Открытые события", route="/schedule", icon_code="schedule", is_required=True),
             MenuCardResponse(code="learning_public", title="Материалы", route="/learning", icon_code="learning"),
         ]
-    return base + [
+
+    cards = [
+        MenuCardResponse(code="dashboard", title="Главная", route="/", icon_code="dashboard", is_required=True),
+        MenuCardResponse(code="schedule", title="Расписание", route="/schedule", icon_code="schedule", is_required=True),
         MenuCardResponse(code="attendance", title="Посещаемость", route="/attendance", icon_code="attendance"),
         MenuCardResponse(code="normatives", title="Нормативы", route="/normatives", icon_code="normatives"),
         MenuCardResponse(code="squads", title="Состав", route="/squads", icon_code="squads"),
         MenuCardResponse(code="notifications", title="Уведомления", route="/notifications", icon_code="notifications"),
+        MenuCardResponse(code="appeals", title="Обращения", route="/appeals", icon_code="appeals"),
     ]
+    if level >= RoleLevel.DEPUTY_SQUAD_COMMANDER:
+        cards.append(MenuCardResponse(code="announcements", title="Объявления", route="/announcements", icon_code="announcements"))
+    if level >= RoleLevel.SQUAD_COMMANDER:
+        cards.append(MenuCardResponse(code="reports", title="Отчёты", route="/reports", icon_code="reports"))
+    if level >= RoleLevel.DEPUTY_PLATOON_COMMANDER:
+        cards.append(MenuCardResponse(code="admin", title="Админка", route="/admin", icon_code="admin"))
+    return cards

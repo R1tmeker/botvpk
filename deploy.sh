@@ -1,3 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")"
+echo "Deploy started: $(date)"
+
+# load .env if present
+if [ -f .env ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source .env
+    set +a
+fi
+
+if [ -f requirements.txt ]; then
+    if [ ! -d .venv ]; then
+        python3 -m venv .venv
+    fi
+    source .venv/bin/activate
+    pip install --upgrade pip
+    pip install -r requirements.txt
+fi
+
+# run migrations or other app-specific steps here (add if needed)
+
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user restart botvpk || systemctl restart botvpk || echo "systemd service 'botvpk' not found or restart failed"
+fi
+
+# send test telegram message if script exists
+if [ -f scripts/check_telegram.py ]; then
+    if command -v python3 >/dev/null 2>&1; then
+        python3 scripts/check_telegram.py "Deploy finished: $(date)"
+    fi
+fi
+
+echo "Deploy finished: $(date)"
 #!/bin/bash
 # =============================================================================
 # ВПК Звезда — Автоматический деплой

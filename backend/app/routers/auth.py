@@ -45,7 +45,12 @@ async def auth_telegram(
         .order_by(JoinApplication.id.desc())
     )
     if user:
-        if application and user.role_code == RoleCode.PUBLIC_USER.value:
+        if settings.super_admin_id and init_data.user.telegram_id == settings.super_admin_id \
+                and user.role_code != RoleCode.SUPER_ADMIN.value:
+            user.role_code = RoleCode.SUPER_ADMIN.value
+            await session.commit()
+            await session.refresh(user)
+        elif application and user.role_code == RoleCode.PUBLIC_USER.value:
             user.role_code = RoleCode.CANDIDATE.value
             await session.commit()
             await session.refresh(user)

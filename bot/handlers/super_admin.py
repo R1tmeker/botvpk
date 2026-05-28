@@ -30,23 +30,28 @@ async def set_role(message: Message, context: BotContext, command: CommandObject
         await message.answer(
             "Как выдать роль:\n"
             "1. Найдите ID участника (например, через «Полный состав»).\n"
-            "2. Выполните `/set_role 17 ADMIN` — сначала ID, затем роль.\n"
-            "Роли: SUPER_ADMIN, ADMIN, LEAD, USER_CONFIRMED, USER_PENDING.",
+            "2. Выполните `/set_role 17 SQUAD_COMMANDER` — сначала ID, затем роль.\n"
+            "Роли: PARTICIPANT, DEPUTY_SQUAD_COMMANDER, SQUAD_COMMANDER, "
+            "DEPUTY_PLATOON_COMMANDER, PLATOON_COMMANDER, USER_PENDING.",
             parse_mode=None,
         )
         return
     parts = command.args.split()
     if len(parts) != 2:
-        await message.answer("Нужно указать ID и роль. Пример: `/set_role 17 ADMIN`.", parse_mode=None)
+        await message.answer("Нужно указать ID и роль. Пример: `/set_role 17 SQUAD_COMMANDER`.", parse_mode=None)
         return
     try:
         member_id = int(parts[0])
     except ValueError:
-        await message.answer("ID должен быть числом. Пример: `/set_role 17 ADMIN`.", parse_mode=None)
+        await message.answer("ID должен быть числом. Пример: `/set_role 17 SQUAD_COMMANDER`.", parse_mode=None)
         return
     role = parts[1].upper()
     if role not in [r.value for r in Role]:
-        await message.answer("Неизвестная роль. Допустимые: SUPER_ADMIN, ADMIN, LEAD, USER_CONFIRMED, USER_PENDING.")
+        await message.answer(
+            "Неизвестная роль. Допустимые: PARTICIPANT, DEPUTY_SQUAD_COMMANDER, SQUAD_COMMANDER, "
+            "DEPUTY_PLATOON_COMMANDER, PLATOON_COMMANDER, USER_PENDING.",
+            parse_mode=None,
+        )
         return
     try:
         member = context.roster_service.set_role(member_id, role)
@@ -133,6 +138,9 @@ async def set_timezone(message: Message, context: BotContext, command: CommandOb
     context.config = load_config(context.config_path)
     context.poll_scheduler.update_settings(timezone=tz_name)
     context.birthday_scheduler.update_settings(timezone=tz_name)
+    context.attendance_service.update_settings(timezone=tz_name)
+    context.notifications_service.update_settings(timezone=tz_name)
+    context.normatives_service.update_settings(timezone=tz_name)
     await context.poll_scheduler.refresh()
     await context.birthday_scheduler.refresh()
     await message.answer(f"Часовой пояс обновлён: {tz_name}.")

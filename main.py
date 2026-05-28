@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytz
 from aiogram import Bot, Dispatcher
-from aiogram.enums import ParseMode
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from bot.config_loader import load_config
@@ -17,11 +16,17 @@ from bot.schedulers.poll_scheduler import PollScheduler
 from bot.schedulers.birthdays import BirthdayScheduler
 from bot.services.broadcast import BroadcastService
 from bot.services.birthdays import BirthdayService
+from bot.services.attendance import AttendanceService
 from bot.services.importer import SheetImporter
+from bot.services.notifications import NotificationsService
+from bot.services.normatives import NormativesService
 from bot.services.polls import PollService
 from bot.services.roster import RosterService
+from bot.storage.attendance import AttendanceStorage
 from bot.storage.greetings import GreetingsStorage
 from bot.storage.members import MembersStorage
+from bot.storage.notifications import NotificationsStorage
+from bot.storage.normatives import NormsStorage, NormSubmissionsStorage
 from bot.storage.polls import PollsStorage
 from bot.storage.sheet_url import SheetUrlStorage
 from bot.utils.logging_setup import setup_logging
@@ -43,17 +48,26 @@ async def main() -> None:
     polls_storage = PollsStorage(data_dir / "polls.csv", backups_dir / "polls")
     greetings_storage = GreetingsStorage(data_dir / "greetings.txt", backups_dir / "greetings")
     sheet_storage = SheetUrlStorage(root / "sheet_url.txt", backups_dir / "sheet")
+    attendance_storage = AttendanceStorage(data_dir / "attendance.csv", backups_dir / "attendance")
+    notifications_storage = NotificationsStorage(data_dir / "notifications.csv", backups_dir / "notifications")
+    norms_storage = NormsStorage(data_dir / "norms.csv", backups_dir / "norms")
+    norm_submissions_storage = NormSubmissionsStorage(
+        data_dir / "norm_submissions.csv", backups_dir / "norm_submissions"
+    )
 
     roster_service = RosterService(members_storage)
     poll_service = PollService(polls_storage)
     greeting_service = BirthdayService(roster_service, greetings_storage)
     broadcast_service = BroadcastService(roster_service)
     sheet_importer = SheetImporter(roster_service, sheet_storage)
+    attendance_service = AttendanceService(attendance_storage, config.timezone)
+    notifications_service = NotificationsService(notifications_storage, config.timezone)
+    normatives_service = NormativesService(norms_storage, norm_submissions_storage, config.timezone)
 
     tz = pytz.timezone(config.timezone)
     scheduler = AsyncIOScheduler(timezone=tz)
 
-    bot = Bot(token=config.bot_token, parse_mode=ParseMode.HTML)
+    bot = Bot(token=config.bot_token)
     dispatcher = Dispatcher()
 
     poll_scheduler = PollScheduler(
@@ -87,6 +101,9 @@ async def main() -> None:
         broadcast_service=broadcast_service,
         sheet_importer=sheet_importer,
         birthday_service=greeting_service,
+        attendance_service=attendance_service,
+        notifications_service=notifications_service,
+        normatives_service=normatives_service,
         poll_scheduler=poll_scheduler,
         birthday_scheduler=birthday_scheduler,
     )

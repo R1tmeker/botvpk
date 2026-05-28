@@ -1,0 +1,12 @@
+config.txt -diff
+sheet_url.txt -diff
+temp_file.txt -diff
+*.bak -diff
+data/members.csv -diff
+data/polls.csv -diff
+data/greetings.txt -diff
+data/attendance.csv -diff
+data/notifications.csv -diff
+data/norms.csv -diff
+data/norm_submissions.csv -diff
+data/export_members.csv -diff

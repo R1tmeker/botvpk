@@ -17,6 +17,8 @@ from ..storage.members import (
 from ..utils.roles import Role
 from .exceptions import LinkAmbiguityError, NotFoundError, ValidationServiceError
 
+_UNSET = object()
+
 
 @dataclass
 class LinkResult:
@@ -73,7 +75,7 @@ class RosterService:
             member,
             tg_user_id=tg_user_id,
             tg_username=tg_username or member.tg_username,
-            role=member.role if member.role != Role.USER_PENDING.value else Role.USER_CONFIRMED.value,
+            role=member.role if member.role != Role.USER_PENDING.value else Role.PARTICIPANT.value,
         )
         newly_confirmed = member.role == Role.USER_PENDING.value
         self.storage.update_member(updated)
@@ -94,7 +96,7 @@ class RosterService:
             member,
             tg_user_id=tg_user_id,
             tg_username=tg_username or member.tg_username,
-            role=member.role if member.role != Role.USER_PENDING.value else Role.USER_CONFIRMED.value,
+            role=member.role if member.role != Role.USER_PENDING.value else Role.PARTICIPANT.value,
         )
         newly_confirmed = member.role == Role.USER_PENDING.value
         self.storage.update_member(updated)
@@ -127,6 +129,45 @@ class RosterService:
     def reset_account(self, member_id: int) -> Member:
         member = self.get_member_by_id(member_id)
         updated = self._build_member(member, tg_user_id=None, tg_username=None)
+        self.storage.update_member(updated)
+        return updated
+
+    def edit_member_field(self, member_id: int, field: str, value: str) -> Member:
+        member = self.get_member_by_id(member_id)
+        field = field.strip()
+        value = value.strip()
+        if field == "fio":
+            if not value:
+                raise ValidationServiceError("ФИО не может быть пустым.")
+            updated = self._build_member(member, fio=value)
+        elif field == "birth_date":
+            try:
+                birth = datetime.strptime(value, "%d.%m.%Y").date()
+            except ValueError as exc:
+                raise ValidationServiceError("Дата рождения должна быть в формате ДД.ММ.ГГГГ.") from exc
+            updated = self._build_member(member, birth_date=birth)
+        elif field == "department":
+            if not value:
+                raise ValidationServiceError("Отделение не может быть пустым.")
+            updated = self._build_member(member, department=value)
+        elif field == "tg_username":
+            updated = self._build_member(member, tg_username=value.lstrip("@") or None)
+        elif field == "tg_user_id":
+            try:
+                tg_user_id = int(value) if value else None
+            except ValueError as exc:
+                raise ValidationServiceError("tg_user_id должен быть числом или пустым.") from exc
+            updated = self._build_member(member, tg_user_id=tg_user_id)
+        elif field == "role":
+            updated = self.set_role(member_id, value.upper())
+            return updated
+        elif field == "status":
+            updated = self.set_status(member_id, value.lower())
+            return updated
+        else:
+            raise ValidationServiceError(
+                "Поле можно менять только так: fio, birth_date, department, tg_username, tg_user_id, role, status."
+            )
         self.storage.update_member(updated)
         return updated
 
@@ -219,20 +260,23 @@ class RosterService:
         self,
         member: Member,
         *,
-        tg_user_id: Optional[int] = None,
-        tg_username: Optional[str] = None,
-        role: Optional[str] = None,
-        status: Optional[str] = None,
+        fio: object = _UNSET,
+        birth_date: object = _UNSET,
+        department: object = _UNSET,
+        tg_user_id: object = _UNSET,
+        tg_username: object = _UNSET,
+        role: object = _UNSET,
+        status: object = _UNSET,
     ) -> Member:
         return Member(
             id=member.id,
-            fio=member.fio,
-            birth_date=member.birth_date,
-            department=member.department,
-            tg_username=tg_username if tg_username is not None else member.tg_username,
-            tg_user_id=tg_user_id if tg_user_id is not None else member.tg_user_id,
-            role=role if role is not None else member.role,
-            status=status if status is not None else member.status,
+            fio=fio if fio is not _UNSET else member.fio,
+            birth_date=birth_date if birth_date is not _UNSET else member.birth_date,
+            department=department if department is not _UNSET else member.department,
+            tg_username=tg_username if tg_username is not _UNSET else member.tg_username,
+            tg_user_id=tg_user_id if tg_user_id is not _UNSET else member.tg_user_id,
+            role=role if role is not _UNSET else member.role,
+            status=status if status is not _UNSET else member.status,
         )
 
     def _merge_import(self, imported: list[Member]) -> list[Member]:

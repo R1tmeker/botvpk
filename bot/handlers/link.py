@@ -36,7 +36,7 @@ async def process_fio(message: Message, state: FSMContext, context: BotContext) 
             tg_username=message.from_user.username,
         )
         await state.clear()
-        suffix = " Роль обновлена до USER_CONFIRMED." if result.newly_confirmed else ""
+        suffix = " Роль обновлена до «Участник»." if result.newly_confirmed else ""
         await message.answer(f"Привязка успешна. Добро пожаловать!{suffix}")
     except LinkAmbiguityError as exc:
         await state.update_data(candidates=exc.candidates)

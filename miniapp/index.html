@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ВПК Бот</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <img class="brand-logo" src="./assets/zvezda-emblem.jpg" alt="ВПК Звезда" />
+          <div>
+            <p class="section-label">ВПК ЗВЕЗДА</p>
+            <h1>Главное меню</h1>
+          </div>
+        </div>
+        <button class="role-button" id="roleButton" type="button">Участник</button>
+      </header>
+
+      <section class="today-panel" aria-label="Сводка на сегодня">
+        <div>
+          <p class="section-label">Сегодня</p>
+          <h2>Построение · 08:00</h2>
+          <p>Отметки, нормативы и объявления собраны в одном месте.</p>
+        </div>
+        <img class="emblem" src="./assets/zvezda-emblem.jpg" alt="Эмблема клуба Звезда" />
+      </section>
+
+      <section class="grid" id="actionGrid" aria-label="Разделы"></section>
+
+      <section class="feed">
+        <div class="feed-header">
+          <h2>Уведомления</h2>
+          <button type="button">Все</button>
+        </div>
+        <article>
+          <strong>Норматив загружен</strong>
+          <span>Видеоотчёт по подтягиваниям ожидает проверки.</span>
+        </article>
+        <article>
+          <strong>Посещаемость</strong>
+          <span>Сегодня отмечено 18 из 21 участников отделения.</span>
+        </article>
+      </section>
+    </main>
+    <script src="./app.js"></script>
+  </body>
+</html>

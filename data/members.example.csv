@@ -1,0 +1,4 @@
+id,fio,birth_date,department,tg_username,tg_user_id,role,status
+1,Иванов Иван Иванович,01.01.2000,1 Отделение,,,SUPER_ADMIN,active
+2,Петров Петр Петрович,02.02.2001,1 Отделение,,,USER_PENDING,active
+3,Сидоров Сергей Сергеевич,03.03.2002,2 Отделение,,,USER_CONFIRMED,active

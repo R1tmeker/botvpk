@@ -20,6 +20,7 @@ class BotConfig:
     dryrun: bool
     leap_policy: str
     super_admin_id: int
+    mini_app_url: Optional[str]
 
 
 class ConfigError(Exception):
@@ -97,6 +98,7 @@ def load_config(path: Path) -> BotConfig:
         super_admin_id = int(super_admin_raw)
     except ValueError as exc:
         raise ConfigError("SUPER_ADMIN_ID must be an integer") from exc
+    mini_app_url = raw_values.get("MINI_APP_URL", "").strip() or None
 
     return BotConfig(
         bot_token=bot_token,
@@ -108,6 +110,7 @@ def load_config(path: Path) -> BotConfig:
         dryrun=dryrun,
         leap_policy=leap_policy,
         super_admin_id=super_admin_id,
+        mini_app_url=mini_app_url,
     )
 
 

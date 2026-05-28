@@ -254,6 +254,32 @@ async def delete_member(message: Message, member, context: BotContext, command: 
         await message.answer(str(exc))
 
 
+@router.message(Command("edit_member"))
+async def edit_member(message: Message, member, context: BotContext, command: CommandObject) -> None:
+    if not await ensure_role(message, getattr(member, "role", None), ADMIN_ROLES):
+        return
+    if not command.args or "=" not in command.args:
+        await message.answer(
+            "Формат: /edit_member ID поле=значение\n"
+            "Поля: fio, birth_date, department, tg_username, tg_user_id, role, status.",
+            parse_mode=None,
+        )
+        return
+    try:
+        member_id_raw, update_text = command.args.split(maxsplit=1)
+        member_id = int(member_id_raw)
+        field, value = [part.strip() for part in update_text.split("=", 1)]
+    except ValueError:
+        await message.answer("Пример: /edit_member 12 department=2 Отделение", parse_mode=None)
+        return
+    try:
+        updated = context.roster_service.edit_member_field(member_id, field, value)
+        log_action(context, message.from_user.id, "edit_member", f"id={member_id};field={field}")
+        await message.answer(f"Участник обновлён: {updated.id} · {updated.fio}", parse_mode=None)
+    except (ValidationServiceError, NotFoundError) as exc:
+        await message.answer(str(exc), parse_mode=None)
+
+
 @router.message(Command("set_birthdays_chat"))
 async def set_birthdays_chat(message: Message, member, context: BotContext) -> None:
     if not await ensure_role(message, getattr(member, "role", None), ADMIN_ROLES):

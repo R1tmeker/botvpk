@@ -1,0 +1,44 @@
+from __future__ import annotations
+
+from enum import IntEnum, StrEnum
+
+
+class RoleCode(StrEnum):
+    PUBLIC_USER = "PUBLIC_USER"
+    CANDIDATE = "CANDIDATE"
+    USER_PENDING = "USER_PENDING"
+    PARTICIPANT = "PARTICIPANT"
+    DEPUTY_SQUAD_COMMANDER = "DEPUTY_SQUAD_COMMANDER"
+    SQUAD_COMMANDER = "SQUAD_COMMANDER"
+    DEPUTY_PLATOON_COMMANDER = "DEPUTY_PLATOON_COMMANDER"
+    PLATOON_COMMANDER = "PLATOON_COMMANDER"
+    ADMIN = "ADMIN"
+    SUPER_ADMIN = "SUPER_ADMIN"
+
+
+class RoleLevel(IntEnum):
+    PUBLIC_USER = 0
+    CANDIDATE = 1
+    USER_PENDING = 2
+    PARTICIPANT = 3
+    DEPUTY_SQUAD_COMMANDER = 4
+    SQUAD_COMMANDER = 5
+    DEPUTY_PLATOON_COMMANDER = 6
+    PLATOON_COMMANDER = 7
+    ADMIN = 8
+    SUPER_ADMIN = 9
+
+
+ROLE_LEVELS = {role.value: RoleLevel[role.name] for role in RoleCode}
+SQUAD_ROLES = {RoleCode.SQUAD_COMMANDER.value, RoleCode.DEPUTY_SQUAD_COMMANDER.value}
+PLATOON_ROLES = {RoleCode.PLATOON_COMMANDER.value, RoleCode.DEPUTY_PLATOON_COMMANDER.value}
+LEAD_ROLES = SQUAD_ROLES | PLATOON_ROLES
+ADMIN_ROLES = {RoleCode.ADMIN.value, RoleCode.SUPER_ADMIN.value}
+CONFIRMED_ROLES = {RoleCode.PARTICIPANT.value} | LEAD_ROLES | ADMIN_ROLES
+ALL_INTERNAL_ROLES = CONFIRMED_ROLES | {RoleCode.USER_PENDING.value}
+
+
+def role_level(role_code: str | None) -> RoleLevel:
+    if not role_code:
+        return RoleLevel.PUBLIC_USER
+    return ROLE_LEVELS.get(role_code, RoleLevel.PUBLIC_USER)

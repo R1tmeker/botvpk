@@ -1,0 +1,2 @@
+poll_id,title,question,options,is_anonymous,allows_multiple_answers,schedule_type,days,time_local,target_chat_id,message_thread_id,is_active
+1,Пример еженедельного опроса,Вы участвуете?,Да|Нет,false,false,weekly,MON,09:00,-1000000000000,,false

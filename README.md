@@ -1,88 +1,45 @@
-﻿# ВПК-бот
+# ВПК Звезда
 
-Telegram-бот для автоматизации работы личного состава ВПК: опросы, поздравления и рассылки без использования СУБД. Все данные хранятся в CSV/txt файлах.
+Система для ВПК: Telegram-бот, Telegram Mini App, FastAPI backend и PostgreSQL. Проект закрывает роли участников и командования: расписание, состав, посещаемость, нормативы с видео/файлами, уведомления, объявления, заявки кандидатов, обращения, отчёты и админку.
 
-## Возможности
-- привязка участников по ФИО через /link
-- просмотр состава, отделений и ближайших ДР (/full_roster, /my_squad, /all_squads, /birthdays_today, /birthdays_week)
-- автоматические опросы по расписанию из data/polls.csv
-- автоматические поздравления в чат по шаблонам из data/greetings.txt
-- массовые рассылки с лимитом скорости и тестовым режимом (/broadcast)
-- импорт/экспорт реестра (/upload_roster, /export_roster, /import_sheet)
-- управление ролями и конфигурацией для супер-админа (/set_role, /set_status, /set_tz, /dryrun, /set_leap_policy)
-- все ключевые действия администраторов логируются в logs/<дата>.log
+## Состав
+- `backend/` — FastAPI, aiogram 3, SQLAlchemy 2 async ORM, Alembic, PostgreSQL, JWT, проверка Telegram WebApp `initData`, аудит действий.
+- `frontend/` — React 18 + TypeScript + Vite Mini App в цветах ВПК «Звезда», с PNG-иконками и ролевыми разделами.
+- `bot/` и `main.py` — legacy CSV-бот, оставлен для совместимости с текущими локальными данными.
+- `backend/app/bot.py` — новый DB-first Telegram-бот для Docker Compose.
+- `docker-compose.yml` — PostgreSQL, backend API, DB-first bot, frontend dev server и nginx.
+- `nginx/nginx.https.example.conf` — production-пример HTTPS reverse proxy для домена и Let's Encrypt сертификатов.
 
-## Требования
-- Python 3.11+
-- зависимые пакеты из 
-equirements.txt
+## Быстрый запуск новой версии
+```powershell
+Copy-Item .env.example .env
+# Заполните .env реальными значениями BOT_TOKEN, JWT_SECRET, POSTGRES_PASSWORD, DATABASE_URL, SUPER_ADMIN_ID, MINI_APP_URL.
+docker compose up --build
+```
 
-## Быстрый старт
-`powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-python main.py
-`
+Адреса по умолчанию:
+- API: `http://localhost:8000`
+- Mini App dev: `http://localhost:5173`
+- nginx: `http://localhost:8080`
 
-Перед запуском укажите реальные значения в config.txt:
-`
-BOT_TOKEN=<токен бота>
-TZ=Europe/Moscow
-BIRTHDAYS_CHAT_ID=<id целевого чата или группы>
-BIRTHDAYS_THREAD_ID=<id топика при необходимости>
-BIRTHDAYS_TIME=09:00
-DEFAULT_POLL_CHAT_ID=<чат по умолчанию для опросов>
-LEAP_POLICY=28
-DRYRUN=false
-SUPER_ADMIN_ID=795307805
-`
+## Проверки
+```powershell
+.\.venv\Scripts\python.exe -m compileall -q backend main.py bot
+cd frontend
+npm run build
+```
 
-## Структура проекта
-`
-.
-├── main.py                  # точка входа, инициализация бота и планировщика
-├── config.txt               # конфигурация окружения
-├── requirements.txt
-├── data/
-│   ├── members.csv          # реестр личного состава
-│   ├── polls.csv            # расписания опросов
-│   └── greetings.txt        # шаблоны поздравлений
-├── bot/
-│   ├── context.py
-│   ├── config_loader.py
-│   ├── handlers/            # обработчики команд по ролям
-│   ├── middlewares/
-│   ├── schedulers/
-│   ├── services/            # бизнес-логика и работа с CSV
-│   ├── storage/
-│   └── utils/
-├── backups/                 # резервные копии CSV (создаются автоматически)
-└── logs/                    # ежедневные логи (создаются автоматически)
-`
+## Продакшен и бэкапы
+HTTPS-настройка, ежедневные `pg_dump`-бэкапы и восстановление описаны в [docs/production-ops.md](docs/production-ops.md).
 
-## Основные роли
-- **SUPER_ADMIN** – полные права, ID берётся из config.txt
-- **ADMIN** – управление опросами, рассылками, реестром
-- **LEAD** – расширенный просмотр своего отделения
-- **USER_CONFIRMED** – подтверждённый участник
-- **USER_PENDING** – ожидает привязки
+## Роли
+- `PARTICIPANT` — расписание, своё отделение, общий состав, сдача нормативов, своя посещаемость, уведомления.
+- `DEPUTY_SQUAD_COMMANDER` — права участника, объявления/уведомления и посещаемость своего отделения.
+- `SQUAD_COMMANDER` — права заместителя, плюс посещаемость всех отделений.
+- `DEPUTY_PLATOON_COMMANDER` и `PLATOON_COMMANDER` — управление нормативами, общие объявления, видеоотчёты, состав, роли, отчёты.
+- `ADMIN` и `SUPER_ADMIN` — системная админка, меню, настройки, аудит.
 
-## Работа с расписаниями
-- планировщик APScheduler пересобирается при каждом запуске и после изменения опросов
-- schedule_type может быть weekly, daily или once
-- режим dryrun (/dryrun on) ведёт только логирование без отправки сообщений
+## Приватность
+Реальные `.env`, `config.txt`, `sheet_url.txt`, `data/*.csv`, `data/*.txt`, загрузки, логи и бэкапы не должны попадать в git. В репозитории остаются только примеры: `.env.example`, `config.example.txt`, `data/*.example.*`.
 
-## Импорт из Google Sheets
-- опубликуйте таблицу как CSV («Файл → Опубликовать в интернете»)
-- выполните /import_sheet <csv_url> либо сохраните URL в sheet_url.txt
-- перед заменой выполняется валидация и резервное копирование старого members.csv
-
-## Логи
-- все административные действия пишутся в logs/YYYY-MM-DD.log
-- директории ackups и logs создаются автоматически, их можно очищать вручную
-
-## Проверка перед продом
-- убедитесь, что в data/greetings.txt минимум 5 шаблонов с плейсхолдером {name}
-- перед продуктивным запуском рекомендуем включить DRYRUN=true и убедиться, что расписания работают корректно
-
+Если токен бота случайно был отправлен в чат или попал в чужие руки, его нужно перевыпустить через BotFather и заменить в локальном `.env`/`config.txt`.

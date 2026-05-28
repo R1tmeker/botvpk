@@ -1,0 +1,245 @@
+/* ── Public card ──────────────────────────────── */
+.card {
+  border: 1px solid #e0e5ef;
+  border-radius: 14px;
+  padding: 14px 16px;
+  display: grid;
+  gap: 10px;
+  transition: transform 0.15s, box-shadow 0.15s;
+  cursor: default;
+  animation: cardEnter 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+
+  &.compact {
+    padding: 10px 12px;
+    gap: 6px;
+  }
+}
+
+@keyframes cardEnter {
+  from { opacity: 0; transform: translateY(10px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.cardBody { display: grid; gap: 6px; }
+
+.cardTitle {
+  font-size: 15px;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.cardText {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  font-weight: 500;
+}
+
+.cardBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 0 18px;
+  border: none;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 900;
+  cursor: pointer;
+  align-self: start;
+  transition: filter 0.15s, transform 0.1s;
+
+  &:active { filter: brightness(0.9); transform: scale(0.97); }
+}
+
+.strip {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+/* ── Admin card ───────────────────────────────── */
+.adminCard {
+  border: 1px solid #e0e5ef;
+  border-left: 4px solid #1a2f5a;
+  border-radius: 10px;
+  background: #fff;
+  padding: 12px;
+  display: grid;
+  gap: 6px;
+  transition: opacity 0.2s;
+  animation: cardEnter 0.35s ease both;
+}
+
+.adminCardDimmed { opacity: 0.55; }
+
+.adminCardHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+
+  strong { font-size: 14px; font-weight: 900; color: #1a2f5a; flex: 1; }
+}
+
+.adminBadge {
+  font-size: 10px;
+  font-weight: 900;
+  padding: 2px 8px;
+  border-radius: 20px;
+  color: #fff;
+  text-transform: uppercase;
+}
+
+.adminCardText {
+  margin: 0;
+  font-size: 12px;
+  color: #64708b;
+  line-height: 1.4;
+}
+
+.adminCardMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11px;
+  color: #8a96b0;
+  font-weight: 700;
+}
+
+.adminCardActions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+
+  button {
+    flex: 1;
+    min-height: 32px;
+    border: 1px solid #d8deea;
+    border-radius: 8px;
+    background: #fff;
+    color: #1a2f5a;
+    font-size: 12px;
+    font-weight: 900;
+    cursor: pointer;
+    transition: background 0.15s;
+
+    &:hover { background: #f0f3f8; }
+  }
+}
+
+.adminCardDelete {
+  color: #e74c3c !important;
+  border-color: rgba(231, 76, 60, 0.3) !important;
+}
+
+/* ── Edit form ────────────────────────────────── */
+.editForm {
+  display: grid;
+  gap: 14px;
+  animation: cardEnter 0.3s ease both;
+}
+
+.editPreview {
+  display: grid;
+  gap: 6px;
+}
+
+.previewHint {
+  font-size: 11px;
+  color: #8a96b0;
+  font-weight: 700;
+  text-align: center;
+}
+
+.editFields {
+  display: grid;
+  gap: 10px;
+
+  label {
+    display: grid;
+    gap: 4px;
+    font-size: 12px;
+    font-weight: 800;
+    color: #64708b;
+
+    input, textarea, select {
+      width: 100%;
+      border: 1px solid #d9deea;
+      border-radius: 10px;
+      padding: 8px 12px;
+      font: inherit;
+      font-size: 13px;
+      color: #1a2f5a;
+      background: #fff;
+
+      &:focus {
+        outline: 2px solid #1a2f5a;
+        outline-offset: -1px;
+      }
+    }
+
+    select { min-height: 38px; }
+    textarea { resize: vertical; }
+  }
+}
+
+.editRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.checkboxField {
+  display: grid !important;
+  grid-template-columns: 18px 1fr !important;
+  gap: 8px !important;
+  align-items: center !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  color: #1a2f5a !important;
+
+  input { width: 16px; height: 16px; accent-color: #1a2f5a; }
+}
+
+.editButtons {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.editSaveBtn {
+  min-height: 42px;
+  border: none;
+  border-radius: 10px;
+  background: #1a2f5a;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 900;
+  cursor: pointer;
+
+  &:disabled { opacity: 0.54; cursor: not-allowed; }
+}
+
+.editCancelBtn {
+  min-height: 42px;
+  padding: 0 16px;
+  border: 1px solid #d8deea;
+  border-radius: 10px;
+  background: #fff;
+  color: #64708b;
+  font-size: 13px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+/* ── Dark mode ────────────────────────────────── */
+[data-theme="dark"] {
+  .adminCard { background: #232a3b; border-color: #2e3a4e; }
+  .adminCardHead strong { color: #e8edf5; }
+  .adminCardText { color: #8a96b0; }
+  .adminCardActions button { background: #2a3244; border-color: #3a4a60; color: #c8d4e8; &:hover { background: #334060; } }
+  .editFields label { color: #8a96b0; input, textarea, select { background: #2a3244; border-color: #3a4a60; color: #e8edf5; } }
+  .editCancelBtn { background: #2a3244; border-color: #3a4a60; color: #8a96b0; }
+}

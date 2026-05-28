@@ -1,0 +1,200 @@
+/* ── Donut Chart ────────────────────────────────── */
+.donut {
+  transform: rotate(-90deg);
+  flex-shrink: 0;
+}
+
+.donutArc {
+  transform-origin: center;
+}
+
+.donutLabel {
+  transform: rotate(90deg);
+  transform-origin: center;
+  font-size: 18px;
+  font-weight: 900;
+  fill: #1a2f5a;
+}
+
+.donutSublabel {
+  transform: rotate(90deg);
+  transform-origin: center;
+  font-size: 10px;
+  font-weight: 800;
+  fill: #8a96b0;
+  text-transform: uppercase;
+}
+
+.donutRow {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 10px 0;
+}
+
+.donutLegend {
+  display: grid;
+  gap: 6px;
+  flex: 1;
+}
+
+.legendItem {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  color: #1a2f5a;
+
+  strong {
+    font-size: 14px;
+    font-weight: 900;
+    color: #1a2f5a;
+  }
+}
+
+.legendDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+/* ── Bar Chart ──────────────────────────────────── */
+.barWrap {
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 4px 0 0;
+
+  &::-webkit-scrollbar { display: none; }
+}
+
+.bar {
+  cursor: default;
+}
+
+.barValue {
+  font-size: 10px;
+  font-weight: 900;
+  fill: #1a2f5a;
+}
+
+.barLabel {
+  font-size: 9px;
+  font-weight: 800;
+  fill: #8a96b0;
+}
+
+/* ── Calendar Heatmap ───────────────────────────── */
+.heatmapWrap {
+  display: grid;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.heatmapTitle {
+  font-size: 12px;
+  font-weight: 900;
+  color: #1a2f5a;
+}
+
+.heatCell {
+  cursor: default;
+  transition: opacity 0.15s;
+
+  &:hover { opacity: 0.75; }
+}
+
+.heatmapLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 10px;
+  font-weight: 800;
+  color: #6b7a96;
+
+  span {
+    display: inline-flex;
+    gap: 4px;
+    align-items: center;
+  }
+}
+
+/* ── Animated Progress ──────────────────────────── */
+.progress {
+  display: grid;
+  gap: 4px;
+}
+
+.progressHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 800;
+  color: #1a2f5a;
+
+  strong {
+    font-size: 13px;
+    font-weight: 900;
+  }
+}
+
+.progressTrack {
+  width: 100%;
+  background: #e8ecf0;
+  border-radius: 99px;
+  overflow: hidden;
+}
+
+.progressFill {
+  border-radius: 99px;
+  min-width: 4px;
+}
+
+/* ── Stat Number ────────────────────────────────── */
+.statNumber {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid #e1e5ef;
+  border-radius: 12px;
+  background: #fff;
+
+  strong {
+    display: block;
+    font-size: 26px;
+    line-height: 1;
+    font-weight: 900;
+  }
+
+  span {
+    display: block;
+    font-size: 11px;
+    font-weight: 800;
+    color: #8a96b0;
+    text-transform: uppercase;
+  }
+}
+
+/* ── Dark mode ──────────────────────────────────── */
+[data-theme="dark"] {
+  .donutLabel { fill: #e8edf5; }
+  .donutSublabel { fill: #6b7a96; }
+
+  .legendItem { color: #e8edf5; strong { color: #e8edf5; } }
+  .barValue { fill: #e8edf5; }
+  .barLabel { fill: #6b7a96; }
+  .heatmapTitle { color: #e8edf5; }
+
+  .progressTrack { background: #2e3a4e; }
+
+  .statNumber {
+    background: #232a3b;
+    border-color: #2e3a4e;
+
+    span { color: #6b7a96; }
+  }
+}

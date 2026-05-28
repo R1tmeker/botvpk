@@ -1,0 +1,2 @@
+notification_id,created_at,sender_id,scope,department,target_member_id,text
+1,2026-05-28T09:00,1,department,1 Отделение,,Пример уведомления отделению

@@ -1,6 +1,18 @@
-aiogram==3.0.0b7
+aiogram>=3.13,<4.0
 APScheduler==3.10.1
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+SQLAlchemy[asyncio]>=2.0,<3.0
+asyncpg>=0.29,<1.0
+alembic>=1.13,<2.0
+pydantic>=2.8,<3.0
+pydantic-settings>=2.4,<3.0
+python-dotenv>=1.0,<2.0
+python-multipart>=0.0.9,<1.0
+PyJWT>=2.8,<3.0
+slowapi>=0.1.9,<1.0
 pytz
 python-dateutil
 requests
+setuptools<81
 

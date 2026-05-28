@@ -1,5 +1,27 @@
 .venv/
 __pycache__/
+node_modules/
+dist/
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
 backups/
 logs/
+.env
+.env.*
+!.env.example
+uploads/
 config.txt
+sheet_url.txt
+temp_file.txt
+*.bak
+
+# Local runtime data with private roster/chat details.
+data/members.csv
+data/polls.csv
+data/greetings.txt
+data/attendance.csv
+data/notifications.csv
+data/norms.csv
+data/norm_submissions.csv
+data/export_members.csv

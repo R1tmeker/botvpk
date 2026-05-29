@@ -20,9 +20,13 @@ def require_profile(current_user: CurrentUser) -> int:
 
 
 def audience_visible(audience_code: str, current_user: CurrentUser) -> bool:
-    return audience_code in {"ALL", current_user.role_code} or (
-        audience_code == "COMMANDERS" and current_user.role_level >= RoleLevel.DEPUTY_SQUAD_COMMANDER
-    )
+    if audience_code == "ALL" or audience_code == current_user.role_code:
+        return True
+    if audience_code == "PARTICIPANTS":
+        return current_user.role_level >= RoleLevel.PARTICIPANT
+    if audience_code == "COMMANDERS":
+        return current_user.role_level >= RoleLevel.DEPUTY_SQUAD_COMMANDER
+    return False
 
 
 @router.get("/materials", response_model=list[LearningMaterialRead])
@@ -75,7 +79,7 @@ async def learning_course_detail(
 @router.post("/materials/{material_id}/view", response_model=MessageResponse)
 async def mark_material_viewed(
     material_id: int,
-    current_user: CurrentUser = Depends(require_role(RoleLevel.PARTICIPANT)),
+    current_user: CurrentUser = Depends(require_role(RoleLevel.CANDIDATE)),
     session: AsyncSession = Depends(get_db_session),
 ) -> MessageResponse:
     user_id = require_profile(current_user)

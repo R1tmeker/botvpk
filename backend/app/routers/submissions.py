@@ -16,7 +16,7 @@ router = APIRouter(prefix="/submissions", tags=["submissions"])
 
 @router.get("/my", response_model=list[NormativeSubmissionRead])
 async def my_submissions(
-    current_user: CurrentUser = Depends(require_role(RoleLevel.PARTICIPANT)),
+    current_user: CurrentUser = Depends(require_role(RoleLevel.CANDIDATE)),
     session: AsyncSession = Depends(get_db_session),
 ):
     return await list_my_normative_submissions(current_user, session)

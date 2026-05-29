@@ -47,6 +47,7 @@ import {
   useRespondCandidateEvent,
   useSendAnnouncement,
   useSchedule,
+  useSquads,
   useSubmitNormative,
   useTelegramAuth,
   useUpdateDashboardSettings,
@@ -327,6 +328,8 @@ function roleMenu(profile: UserProfile): MenuCard[] {
     return [
       menuCard("dashboard", "Вступление", "заявка и события кандидата", "my_squad"),
       menuCard("schedule", "Открытые события", "ближайшие встречи", "schedule"),
+      menuCard("learning", "Материалы", "подготовка к отбору", "learning"),
+      menuCard("normatives", "Нормативы", "задания отбора", "norms"),
     ];
   }
   return cards;
@@ -409,7 +412,7 @@ const navItems: NavItem[] = [
   { view: "dashboard", iconCode: "home", label: "Главная", minLevel: 0 },
   { view: "schedule", iconCode: "schedule", label: "Расписание", minLevel: 0 },
   { view: "attendance", iconCode: "attendance", label: "Явка", minLevel: 3 },
-  { view: "normatives", iconCode: "norms", label: "Нормативы", minLevel: 3 },
+  { view: "normatives", iconCode: "norms", label: "Нормативы", minLevel: 1 },
   { view: "profile", iconCode: "profile", label: "Профиль", minLevel: 0 },
 ];
 
@@ -419,7 +422,7 @@ const viewMinLevels: Record<ViewKey, number> = {
   dashboard: 0,
   schedule: 0,
   attendance: 3,
-  normatives: 3,
+  normatives: 1,
   learning: 0,
   notifications: 3,
   announcements: 4,
@@ -473,11 +476,12 @@ export function App({ webApp }: Props) {
   const joinMe = useJoinMe(hasToken && profile.role_code === "CANDIDATE");
   const joinEvents = useJoinEvents(hasToken && profile.role_code === "CANDIDATE");
   const schedule = useSchedule(internalMode);
+  const squadsList = useSquads(internalMode);
   const scheduleWeekType = useScheduleWeekType(internalMode);
   const attendance = useMyAttendance(internalMode);
   const attendanceStats = useMyAttendanceStats(internalMode);
-  const normatives = useNormatives(internalMode, level >= 6);
-  const mySubmissions = useMyNormativeSubmissions(internalMode);
+  const normatives = useNormatives(hasToken && level >= 1, level >= 6);
+  const mySubmissions = useMyNormativeSubmissions(hasToken && level >= 1);
   const pendingSubmissions = usePendingNormativeSubmissions(hasToken && level >= 4);
   const notifications = useNotifications(internalMode);
   const announcements = useAnnouncements(internalMode);
@@ -767,7 +771,7 @@ export function App({ webApp }: Props) {
           />
         )}
 
-        {!auth.isPending && activeView === "normatives" && level >= 3 && (
+        {!auth.isPending && activeView === "normatives" && level >= 1 && (
           <NormativesView
             items={visibleNormatives}
             submissions={mySubmissions.data ?? []}
@@ -802,6 +806,7 @@ export function App({ webApp }: Props) {
           <LearningView
             items={learning.data ?? []}
             courses={learningCourses.data ?? []}
+            canTrack={level >= 1}
           />
         )}
 
@@ -855,7 +860,7 @@ export function App({ webApp }: Props) {
             profile={profile}
             mySquad={mySquad.data ?? null}
             allUsers={allUsers.data ?? []}
-            squads={adminSquads.data ?? []}
+            squads={squadsList.data ?? adminSquads.data ?? []}
           />
         )}
 
@@ -865,6 +870,8 @@ export function App({ webApp }: Props) {
             attendanceStats={attendanceStats.data}
             submissions={mySubmissions.data ?? []}
             streak={myStreak.data ?? null}
+            allUsers={allUsers.data ?? []}
+            squads={squadsList.data ?? adminSquads.data ?? []}
             onAvatarUpload={(file) =>
               uploadAvatar.mutate(file, {
                 onSuccess: (updatedProfile) => {
@@ -1775,6 +1782,7 @@ function NormativesView({
   const activeItems = items.filter((item) => item.is_active);
   const archiveItems = items.filter((item) => !item.is_active);
   const upload = useUploadFile();
+  const downloadFile = useDownloadFile();
   const [uploadedFiles, setUploadedFiles] = useState<Record<number, { id: number; name: string }>>({});
   const [comments, setComments] = useState<Record<number, string>>({});
   const tabs: Array<["active" | "mine" | "pending" | "accepted" | "archive", string]> = [
@@ -1838,6 +1846,22 @@ function NormativesView({
                 <strong>{item.title}</strong>
                 <span>{item.description ?? "описание будет добавлено"} · до {formatDate(item.deadline_at)}</span>
               </div>
+              {(item.instruction_video_url || item.instruction_video_file_id) && (
+                <div className={styles.commandStrip} style={{ gridColumn: "1/-1", marginTop: 4 }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (item.instruction_video_url) {
+                        window.open(item.instruction_video_url, "_blank");
+                      } else if (item.instruction_video_file_id) {
+                        downloadFile.mutate({ fileId: item.instruction_video_file_id, fileName: `${item.title}-video` });
+                      }
+                    }}
+                  >
+                    Видео выполнения
+                  </button>
+                </div>
+              )}
               <div className={styles.fileUploadArea}>
                 {attached ? (
                   <div className={styles.fileAttached}>
@@ -1893,6 +1917,19 @@ function NormativesView({
                 <strong>{item.title}</strong>
                 <span>{item.description ?? "закрытый норматив"} · до {formatDate(item.deadline_at)}</span>
               </div>
+              {(item.instruction_video_url || item.instruction_video_file_id) && (
+                <div className={styles.commandStrip} style={{ gridColumn: "1/-1", marginTop: 4 }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (item.instruction_video_url) window.open(item.instruction_video_url, "_blank");
+                      else if (item.instruction_video_file_id) downloadFile.mutate({ fileId: item.instruction_video_file_id, fileName: `${item.title}-video` });
+                    }}
+                  >
+                    Видео выполнения
+                  </button>
+                </div>
+              )}
             </article>
           ))
         )}
@@ -2285,12 +2322,16 @@ function ReportsView({
 }
 
 /* ─────────── LearningView ─────────── */
-function LearningView({ items, courses }: { items: LearningMaterial[]; courses: LearningCourse[] }) {
-  const [tab, setTab] = useState<"materials" | "courses">("materials");
+function LearningView({ items, courses, canTrack }: { items: LearningMaterial[]; courses: LearningCourse[]; canTrack: boolean }) {
+  const [tab, setTab] = useState<"main" | "candidates" | "courses">("main");
   const [selectedCourseId, setSelectedCourseId] = useState<number | null>(null);
   const markViewed = useMarkMaterialViewed();
   const downloadFile = useDownloadFile();
-  const visibleItems = selectedCourseId === null ? items : items.filter((item) => item.course_id === selectedCourseId);
+  const audienceItems = items.filter((item) => {
+    if (tab === "candidates") return item.audience_code === "CANDIDATE";
+    return item.audience_code !== "CANDIDATE";
+  });
+  const visibleItems = selectedCourseId === null ? audienceItems : audienceItems.filter((item) => item.course_id === selectedCourseId);
   const selectedCourse = courses.find((course) => course.id === selectedCourseId);
 
   const typeLabels: Record<string, string> = {
@@ -2310,28 +2351,30 @@ function LearningView({ items, courses }: { items: LearningMaterial[]; courses: 
         <span>{visibleItems.length} доступно</span>
       </div>
       <Tabs
-        tabs={[["materials", "Материалы"], ["courses", "Курсы"]]}
+        tabs={[["main", "Основной состав"], ["candidates", "Отбор"], ["courses", "Курсы"]]}
         active={tab}
-        onChange={(value) => setTab(value as typeof tab)}
+        onChange={(value) => { setTab(value as typeof tab); setSelectedCourseId(null); }}
       />
       <div className={styles.list}>
-        {tab === "materials" && selectedCourse && (
+        {tab !== "courses" && selectedCourse && (
           <div className={styles.commandStrip}>
             <small>{selectedCourse.title}</small>
             <button type="button" onClick={() => setSelectedCourseId(null)}>Все материалы</button>
           </div>
         )}
-        {tab === "materials" && visibleItems.length === 0 && <Empty text="Материалы появятся после публикации" />}
-        {tab === "materials" && visibleItems.map((item) => (
+        {tab !== "courses" && visibleItems.length === 0 && (
+          <Empty text={tab === "candidates" ? "Материалы отбора появятся после публикации" : "Материалы основного состава появятся после публикации"} />
+        )}
+        {tab !== "courses" && visibleItems.map((item) => (
           <article className={styles.row} key={item.id} style={{ cursor: item.external_url || item.file_id ? "pointer" : "default" }}
             onClick={() => {
               if (item.external_url) {
-                markViewed.mutate(item.id);
+                if (canTrack) markViewed.mutate(item.id);
                 window.open(item.external_url, "_blank");
                 return;
               }
               if (item.file_id) {
-                markViewed.mutate(item.id);
+                if (canTrack) markViewed.mutate(item.id);
                 downloadFile.mutate({ fileId: item.file_id, fileName: item.title });
               }
             }}
@@ -2356,7 +2399,7 @@ function LearningView({ items, courses }: { items: LearningMaterial[]; courses: 
             style={{ cursor: "pointer" }}
             onClick={() => {
               setSelectedCourseId(item.id);
-              setTab("materials");
+              setTab(item.audience_code === "CANDIDATE" ? "candidates" : "main");
             }}
           >
             <img src={iconPath("learning")} alt="" />
@@ -2390,7 +2433,7 @@ function PeopleView({
   allUsers: UserRecord[];
   squads: Squad[];
 }) {
-  type PeopleSegment = "roster" | "candidates" | "archive";
+  type PeopleSegment = "roster" | "my_squad" | "candidates" | "archive";
   const [segment, setSegment] = useState<PeopleSegment>("roster");
   const [search, setSearch] = useState("");
 
@@ -2404,9 +2447,11 @@ function PeopleView({
   const candidateUsers = allUsers.filter((u) => u.role_code === "CANDIDATE" && u.status_code === "ACTIVE");
   // Архив
   const archivedUsers = allUsers.filter((u) => u.status_code === "ARCHIVED");
+  const mySquadUsers = rosterUsers.filter((u) => profile.squad_id !== null && u.squad_id === profile.squad_id);
 
   const sourceBySegment: Record<PeopleSegment, UserRecord[]> = {
     roster: rosterUsers,
+    my_squad: mySquadUsers,
     candidates: candidateUsers,
     archive: archivedUsers,
   };
@@ -2420,36 +2465,9 @@ function PeopleView({
       )
     : rawUsers;
 
-  // Для сегмента "roster" — группируем по отделениям
-  const groupedRoster = useMemo(() => {
-    if (segment !== "roster") return null;
-    const groups = new Map<number | null, UserRecord[]>();
-    for (const user of filteredUsers) {
-      const key = user.squad_id ?? null;
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key)!.push(user);
-    }
-    // Сортируем участников внутри: командиры сначала
-    const sortWeight = (u: UserRecord) => {
-      if (u.role_code === "PLATOON_COMMANDER" || u.role_code === "DEPUTY_PLATOON_COMMANDER") return 0;
-      if (u.role_code === "SQUAD_COMMANDER" || u.role_code === "DEPUTY_SQUAD_COMMANDER") return 1;
-      if (u.role_code === "PARTICIPANT") return 2;
-      return 3;
-    };
-    for (const [, members] of groups) {
-      members.sort((a, b) => sortWeight(a) - sortWeight(b) || a.full_name.localeCompare(b.full_name, "ru"));
-    }
-    // Сортируем группы: отделения по имени, «без отделения» в конце
-    const sortedKeys = [...groups.keys()].sort((a, b) => {
-      if (a === null) return 1;
-      if (b === null) return -1;
-      return (squadMap.get(a)?.name ?? "").localeCompare(squadMap.get(b)?.name ?? "", "ru");
-    });
-    return sortedKeys.map((k) => ({ squadId: k, squad: k !== null ? squadMap.get(k) ?? null : null, members: groups.get(k)! }));
-  }, [filteredUsers, segment, squads]);
-
   const segmentTabs: Array<[PeopleSegment, string]> = [
     ["roster", `Состав (${rosterUsers.length})`],
+    ["my_squad", `Моё отделение (${mySquadUsers.length})`],
     ["candidates", `Заявки (${candidateUsers.length})`],
     ["archive", `Архив (${archivedUsers.length})`],
   ];
@@ -2471,47 +2489,20 @@ function PeopleView({
         />
       </div>
 
-      {/* Состав — сгруппирован по отделениям */}
-      {segment === "roster" && (
+      {(segment === "roster" || segment === "my_squad") && (
         <div>
-          {filteredUsers.length === 0 && <Empty text="Участников нет" />}
-          {groupedRoster?.map(({ squadId, squad, members }) => (
-            <div key={squadId ?? "none"}>
-              <div className={styles.sectionHeader}>
-                <strong>{squad ? squad.name : "Без отделения / Не привязаны"}</strong>
-                <span>{members.length} чел.</span>
-              </div>
-              {squad && (squad.commander_user_id || squad.deputy_user_id) && (
-                <div className={styles.squadMeta}>
-                  {squad.commander_user_id && (
-                    <small>Ком: {allUsers.find((u) => u.id === squad.commander_user_id)?.full_name ?? "—"}</small>
-                  )}
-                  {squad.deputy_user_id && (
-                    <small>Зам: {allUsers.find((u) => u.id === squad.deputy_user_id)?.full_name ?? "—"}</small>
-                  )}
-                </div>
-              )}
-              <div className={styles.list}>
-                {members.map((user) => (
-                  <div className={styles.memberRow} key={user.id ?? user.telegram_id}>
-                    <div>
-                      <strong>{user.full_name}</strong>
-                      <span>
-                        {user.username ? `@${user.username}` : "без username"}
-                        {user.birth_date ? ` · ${new Date(user.birth_date).toLocaleDateString("ru-RU", { day: "2-digit", month: "long" })}` : ""}
-                      </span>
-                    </div>
-                    <span className={styles.roleBadge}>{roleLabels[user.role_code as RoleCode] ?? user.role_code}</span>
-                  </div>
-                ))}
-              </div>
+          {segment === "my_squad" && mySquad && (
+            <div className={styles.sectionHeader}>
+              <strong>{mySquad.name}</strong>
+              <span>{filteredUsers.length} чел.</span>
             </div>
-          ))}
+          )}
+          <RosterTable users={filteredUsers} squads={squads} emptyText={segment === "my_squad" ? "В вашем отделении пока никого нет" : "Участников нет"} />
         </div>
       )}
 
       {/* Кандидаты и Архив — простой список */}
-      {segment !== "roster" && (
+      {segment !== "roster" && segment !== "my_squad" && (
         <div className={styles.list}>
           {filteredUsers.length === 0 && <Empty text="Записей нет" />}
           {filteredUsers.map((user) => (
@@ -2532,12 +2523,91 @@ function PeopleView({
   );
 }
 
+function RosterTable({
+  users,
+  squads,
+  compact = false,
+  emptyText = "Записей нет",
+}: {
+  users: UserRecord[];
+  squads: Squad[];
+  compact?: boolean;
+  emptyText?: string;
+}) {
+  const squadName = (id: number | null) => squads.find((s) => s.id === id)?.name ?? "—";
+  const sorted = [...users].sort((a, b) => {
+    const bySquad = squadName(a.squad_id).localeCompare(squadName(b.squad_id), "ru");
+    return bySquad || a.full_name.localeCompare(b.full_name, "ru");
+  });
+  if (sorted.length === 0) return <Empty text={emptyText} />;
+  return (
+    <div className={styles.rosterTableWrap}>
+      <table className={styles.rosterTable} data-compact={compact}>
+        <thead>
+          <tr>
+            <th>ФИО</th>
+            <th>Telegram</th>
+            <th>Отделение</th>
+            <th>Роль</th>
+            {!compact && <th>Статус</th>}
+            {!compact && <th>Телефон</th>}
+            {!compact && <th>Дата рождения</th>}
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((user) => (
+            <tr key={user.id ?? user.telegram_id}>
+              <td>{user.full_name}</td>
+              <td>{user.username ? `@${user.username}` : user.telegram_id || "—"}</td>
+              <td>{squadName(user.squad_id)}</td>
+              <td>{roleLabels[user.role_code as RoleCode] ?? user.role_code}</td>
+              {!compact && <td>{user.status_code}</td>}
+              {!compact && <td>{formatPhoneDisplay(user.phone)}</td>}
+              {!compact && <td>{user.birth_date ? formatDateFull(user.birth_date) : "—"}</td>}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ProfileRosterTabs({
+  profile,
+  allUsers,
+  squads,
+}: {
+  profile: UserProfile;
+  allUsers: UserRecord[];
+  squads: Squad[];
+}) {
+  const [tab, setTab] = useState<"roster" | "my_squad">("my_squad");
+  const rosterUsers = allUsers.filter(
+    (u) => ROSTER_ROLE_CODES.has(u.role_code) && u.status_code === "ACTIVE"
+  );
+  const visible = tab === "my_squad"
+    ? rosterUsers.filter((u) => profile.squad_id !== null && u.squad_id === profile.squad_id)
+    : rosterUsers;
+  return (
+    <div className={styles.profileRoster}>
+      <Tabs
+        tabs={[["my_squad", "Моё отделение"], ["roster", "Состав"]]}
+        active={tab}
+        onChange={(value) => setTab(value as typeof tab)}
+      />
+      <RosterTable users={visible} squads={squads} compact emptyText={tab === "my_squad" ? "Отделение не назначено" : "Состав пока пуст"} />
+    </div>
+  );
+}
+
 /* ─────────── ProfileView ─────────── */
 function ProfileView({
   profile,
   attendanceStats,
   submissions,
   streak,
+  allUsers,
+  squads,
   onAvatarUpload,
   isAvatarUploading,
 }: {
@@ -2545,6 +2615,8 @@ function ProfileView({
   attendanceStats?: ReportSummary;
   submissions: NormativeSubmission[];
   streak: StreakData;
+  allUsers: UserRecord[];
+  squads: Squad[];
   onAvatarUpload: (file: File) => void;
   isAvatarUploading: boolean;
 }) {
@@ -2716,6 +2788,9 @@ function ProfileView({
           <StreakBadge current={streak.current_streak} best={streak.best_streak} />
         </div>
       )}
+      {allUsers.length > 0 && (
+        <ProfileRosterTabs profile={profile} allUsers={allUsers} squads={squads} />
+      )}
     </div>
   );
 }
@@ -2754,10 +2829,13 @@ function AdminView({
   const [userSearch, setUserSearch] = useState("");
   const [appStatusFilter, setAppStatusFilter] = useState("");
   const [logFilter, setLogFilter] = useState({ action_code: "", entity_name: "" });
-  const [newNorm, setNewNorm] = useState({ title: "", description: "", target_audience: "ALL", squad_id: "" });
-  const [newMaterial, setNewMaterial] = useState({ title: "", type_code: "TEXT", external_url: "", audience_code: "ALL", is_active: true });
-  const [newCourse, setNewCourse] = useState({ title: "", description: "", audience_code: "ALL" });
+  const [newNorm, setNewNorm] = useState({ title: "", description: "", target_audience: "PARTICIPANTS", squad_id: "", instruction_video_url: "" });
+  const [normVideoDrafts, setNormVideoDrafts] = useState<Record<number, string>>({});
+  const [newMaterial, setNewMaterial] = useState({ title: "", type_code: "TEXT", external_url: "", audience_code: "PARTICIPANTS", is_active: true });
+  const [newCourse, setNewCourse] = useState({ title: "", description: "", audience_code: "PARTICIPANTS" });
+  const [learningScope, setLearningScope] = useState<"main" | "candidates">("main");
   const [newCandEvent, setNewCandEvent] = useState({ title: "", start_datetime: "", place: "", description: "" });
+  const birthdayTemplateRef = useRef<HTMLTextAreaElement>(null);
   const [newTemplate, setNewTemplate] = useState({
     title: "",
     description: "",
@@ -2833,21 +2911,19 @@ function AdminView({
     ? applications.filter((a) => a.status_code === appStatusFilter)
     : applications;
 
-  const adminTabs: Array<[AdminTab, string, number]> = [
-    ["users", "Люди", 4],
-    ["applications", "Заявки", 6],
-    ["appeals", "Обращения", 6],
-    ["squads", "Отделения", 6],
-    ["schedule", "Расписание", 6],
-    ["events", "События канд.", 6],
-    ["normatives", "Нормативы", 6],
-    ["learning", "Материалы", 6],
-    ["promo", "Промо", 6],
-    ["menu", "Меню", 6],
-    ["logs", "Логи", 8],
-    ["settings", "Настройки", 9],
+  const adminGroups: Array<{ title: string; tabs: Array<[AdminTab, string, number]> }> = [
+    { title: "Состав", tabs: [["users", "Люди", 4], ["applications", "Заявки", 6], ["squads", "Отделения", 6]] },
+    { title: "Занятия", tabs: [["schedule", "Расписание", 6], ["events", "События канд.", 6]] },
+    { title: "Подготовка", tabs: [["normatives", "Нормативы", 6], ["learning", "Материалы", 6], ["appeals", "Обращения", 6]] },
+    { title: "Интерфейс", tabs: [["promo", "Промо", 6], ["menu", "Меню", 6]] },
+    { title: "Система", tabs: [["logs", "Логи", 8], ["settings", "Настройки", 9]] },
   ];
+  const adminTabs = adminGroups.flatMap((group) => group.tabs);
   const visibleTabs = adminTabs.filter(([, , minLevel]) => level >= minLevel);
+  const visibleAdminGroups = adminGroups
+    .map((group) => ({ ...group, tabs: group.tabs.filter(([, , minLevel]) => level >= minLevel) }))
+    .filter((group) => group.tabs.length > 0);
+  const currentLearningAudience = learningScope === "candidates" ? "CANDIDATE" : "PARTICIPANTS";
 
   useEffect(() => {
     if (!visibleTabs.some(([value]) => value === tab)) {
@@ -2862,11 +2938,25 @@ function AdminView({
         <h2>Админка</h2>
         <span>{level >= 8 ? "полный доступ" : level >= 6 ? "командирский доступ" : "доступ командира отделения"}</span>
       </div>
-      <Tabs
-        tabs={visibleTabs.map(([value, label]) => [value, label] as [string, string])}
-        active={tab}
-        onChange={(value) => { setTab(value as AdminTab); setEditingPromo(null); }}
-      />
+      <div className={styles.adminTabGroups}>
+        {visibleAdminGroups.map((group) => (
+          <section key={group.title}>
+            <strong>{group.title}</strong>
+            <div>
+              {group.tabs.map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  data-active={tab === value}
+                  onClick={() => { setTab(value); setEditingPromo(null); }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
 
       {/* ── Promo tab ── */}
       {tab === "promo" && (
@@ -2976,7 +3066,27 @@ function AdminView({
                     <select
                       value={user.role_code}
                       disabled={user.id === null || updateUser.isPending}
-                      onChange={(event) => user.id !== null && updateUser.mutate({ userId: user.id, role_code: event.target.value })}
+                      onChange={(event) => {
+                        if (user.id === null) return;
+                        const nextRole = event.target.value;
+                        if (["SQUAD_COMMANDER", "DEPUTY_SQUAD_COMMANDER"].includes(nextRole)) {
+                          if (!user.squad_id) {
+                            toast("Сначала выберите отделение", "warning");
+                            event.target.value = user.role_code;
+                            return;
+                          }
+                          const squad = squads.find((s) => s.id === user.squad_id);
+                          const existingId = nextRole === "SQUAD_COMMANDER" ? squad?.commander_user_id : squad?.deputy_user_id;
+                          if (existingId && existingId !== user.id) {
+                            const label = nextRole === "SQUAD_COMMANDER" ? "командира" : "заместителя";
+                            if (!window.confirm(`В отделении уже есть ${label}. Заменить назначение?`)) {
+                              event.target.value = user.role_code;
+                              return;
+                            }
+                          }
+                        }
+                        updateUser.mutate({ userId: user.id, role_code: nextRole });
+                      }}
                     >
                       {roleOptions.map((role) => (
                         <option key={role} value={role}>{roleLabels[role]}</option>
@@ -3122,14 +3232,16 @@ function AdminView({
               <div className={styles.formBlock}>
                 <strong className={styles.formTitle}>Разовое событие</strong>
                 <input placeholder="Название события *" value={newEvent.title} onChange={(e) => setNewEvent({ ...newEvent, title: e.target.value })} />
-                <label className={styles.fieldLabel}>
-                  <span>Начало *</span>
-                  <input type="datetime-local" value={newEvent.start_datetime} onChange={(e) => setNewEvent({ ...newEvent, start_datetime: e.target.value })} />
-                </label>
-                <label className={styles.fieldLabel}>
-                  <span>Конец</span>
-                  <input type="datetime-local" value={newEvent.end_datetime} onChange={(e) => setNewEvent({ ...newEvent, end_datetime: e.target.value })} />
-                </label>
+                <div className={styles.twoCol}>
+                  <label className={styles.fieldLabel}>
+                    <span>Начало *</span>
+                    <input type="datetime-local" value={newEvent.start_datetime} onChange={(e) => setNewEvent({ ...newEvent, start_datetime: e.target.value })} />
+                  </label>
+                  <label className={styles.fieldLabel}>
+                    <span>Конец</span>
+                    <input type="datetime-local" value={newEvent.end_datetime} onChange={(e) => setNewEvent({ ...newEvent, end_datetime: e.target.value })} />
+                  </label>
+                </div>
                 <input placeholder="Место проведения" value={newEvent.place} onChange={(e) => setNewEvent({ ...newEvent, place: e.target.value })} />
                 <select value={newEvent.squad_id} onChange={(e) => setNewEvent({ ...newEvent, squad_id: e.target.value })}>
                   <option value="">Для всех отделений</option>
@@ -3171,14 +3283,16 @@ function AdminView({
                   {editingEventId === ev.id && (
                     <div className={styles.formBlock} style={{ gridColumn: "1/-1" }}>
                       <input value={eventEdits[ev.id]?.title ?? ""} onChange={(e) => setEventEdits({ ...eventEdits, [ev.id]: { ...eventEdits[ev.id], title: e.target.value } })} />
-                      <label className={styles.fieldLabel}>
-                        <span>Начало</span>
-                        <input type="datetime-local" value={eventEdits[ev.id]?.start_datetime ?? ""} onChange={(e) => setEventEdits({ ...eventEdits, [ev.id]: { ...eventEdits[ev.id], start_datetime: e.target.value } })} />
-                      </label>
-                      <label className={styles.fieldLabel}>
-                        <span>Конец</span>
-                        <input type="datetime-local" value={eventEdits[ev.id]?.end_datetime ?? ""} onChange={(e) => setEventEdits({ ...eventEdits, [ev.id]: { ...eventEdits[ev.id], end_datetime: e.target.value } })} />
-                      </label>
+                      <div className={styles.twoCol}>
+                        <label className={styles.fieldLabel}>
+                          <span>Начало</span>
+                          <input type="datetime-local" value={eventEdits[ev.id]?.start_datetime ?? ""} onChange={(e) => setEventEdits({ ...eventEdits, [ev.id]: { ...eventEdits[ev.id], start_datetime: e.target.value } })} />
+                        </label>
+                        <label className={styles.fieldLabel}>
+                          <span>Конец</span>
+                          <input type="datetime-local" value={eventEdits[ev.id]?.end_datetime ?? ""} onChange={(e) => setEventEdits({ ...eventEdits, [ev.id]: { ...eventEdits[ev.id], end_datetime: e.target.value } })} />
+                        </label>
+                      </div>
                       <input placeholder="Место" value={eventEdits[ev.id]?.place ?? ""} onChange={(e) => setEventEdits({ ...eventEdits, [ev.id]: { ...eventEdits[ev.id], place: e.target.value } })} />
                       <textarea rows={2} placeholder="Описание" value={eventEdits[ev.id]?.description ?? ""} onChange={(e) => setEventEdits({ ...eventEdits, [ev.id]: { ...eventEdits[ev.id], description: e.target.value } })} />
                       <div className={styles.commandStrip}>
@@ -3502,10 +3616,13 @@ function AdminView({
               <div className={styles.formBlock}>
                 <input placeholder="Название норматива *" value={newNorm.title} onChange={(e) => setNewNorm({ ...newNorm, title: e.target.value })} />
                 <input placeholder="Описание" value={newNorm.description} onChange={(e) => setNewNorm({ ...newNorm, description: e.target.value })} />
+                <input placeholder="Ссылка на видео правильного выполнения" value={newNorm.instruction_video_url} onChange={(e) => setNewNorm({ ...newNorm, instruction_video_url: e.target.value })} />
                 <select value={newNorm.target_audience} onChange={(e) => setNewNorm({ ...newNorm, target_audience: e.target.value })}>
                   <option value="ALL">Для всех</option>
+                  <option value="PARTICIPANTS">Основной состав</option>
+                  <option value="CANDIDATE">Кандидаты / отбор</option>
                   <option value="SQUAD">Для отделения</option>
-                  <option value="PLATOON">Для взвода</option>
+                  <option value="COMMANDERS">Для командиров</option>
                 </select>
                 <select value={newNorm.squad_id} onChange={(e) => setNewNorm({ ...newNorm, squad_id: e.target.value })}>
                   <option value="">Без привязки к отделению</option>
@@ -3515,8 +3632,14 @@ function AdminView({
                   type="button"
                   disabled={!newNorm.title.trim() || createNorm.isPending}
                   onClick={() => createNorm.mutate(
-                    { title: newNorm.title.trim(), description: newNorm.description || undefined, target_audience: newNorm.target_audience, squad_id: newNorm.squad_id ? Number(newNorm.squad_id) : null },
-                    { onSuccess: () => { setNewNorm({ title: "", description: "", target_audience: "ALL", squad_id: "" }); toast("Норматив создан", "success"); } },
+                    {
+                      title: newNorm.title.trim(),
+                      description: newNorm.description || undefined,
+                      target_audience: newNorm.target_audience,
+                      squad_id: newNorm.squad_id ? Number(newNorm.squad_id) : null,
+                      instruction_video_url: newNorm.instruction_video_url || null,
+                    },
+                    { onSuccess: () => { setNewNorm({ title: "", description: "", target_audience: "PARTICIPANTS", squad_id: "", instruction_video_url: "" }); toast("Норматив создан", "success"); } },
                   )}
                 >
                   {createNorm.isPending ? "Создаём..." : "Создать норматив"}
@@ -3530,8 +3653,26 @@ function AdminView({
                   <div>
                     <strong>{norm.title}</strong>
                     <span>{norm.target_audience}{norm.squad_id ? ` · ${squadMap.get(norm.squad_id) ?? "#" + norm.squad_id}` : ""} · {norm.is_active ? "активен" : "архив"}</span>
+                    {(norm.instruction_video_url || norm.instruction_video_file_id) && (
+                      <span style={{ color: "#1a2f5a" }}>Видео выполнения прикреплено</span>
+                    )}
                   </div>
                   <div className={styles.memberControls}>
+                    <input
+                      placeholder="Видео выполнения URL"
+                      value={normVideoDrafts[norm.id] ?? norm.instruction_video_url ?? ""}
+                      onChange={(event) => setNormVideoDrafts((prev) => ({ ...prev, [norm.id]: event.target.value }))}
+                    />
+                    <button
+                      type="button"
+                      disabled={updateNorm.isPending}
+                      onClick={() => updateNorm.mutate(
+                        { id: norm.id, instruction_video_url: normVideoDrafts[norm.id] ?? norm.instruction_video_url ?? null },
+                        { onSuccess: () => toast("Видео норматива сохранено", "success") },
+                      )}
+                    >
+                      Сохранить видео
+                    </button>
                     <button
                       type="button"
                       className={styles.iconAction}
@@ -3564,13 +3705,24 @@ function AdminView({
           {/* ── Learning materials ── */}
           {tab === "learning" && (
             <>
+              <Tabs
+                tabs={[["main", "Основной состав"], ["candidates", "Кандидаты / отбор"]]}
+                active={learningScope}
+                onChange={(value) => {
+                  const next = value as typeof learningScope;
+                  setLearningScope(next);
+                  const audience = next === "candidates" ? "CANDIDATE" : "PARTICIPANTS";
+                  setNewCourse((prev) => ({ ...prev, audience_code: audience }));
+                  setNewMaterial((prev) => ({ ...prev, audience_code: audience }));
+                }}
+              />
               <div className={styles.formBlock}>
                 <strong style={{ display: "block", marginBottom: 6 }}>Новый курс</strong>
                 <input placeholder="Название курса *" value={newCourse.title} onChange={(e) => setNewCourse({ ...newCourse, title: e.target.value })} />
                 <input placeholder="Описание" value={newCourse.description} onChange={(e) => setNewCourse({ ...newCourse, description: e.target.value })} />
                 <select value={newCourse.audience_code} onChange={(e) => setNewCourse({ ...newCourse, audience_code: e.target.value })}>
                   <option value="ALL">Для всех</option>
-                  <option value="PARTICIPANT">Для участников</option>
+                  <option value="PARTICIPANTS">Основной состав</option>
                   <option value="COMMANDERS">Для командиров</option>
                   <option value="CANDIDATE">Для кандидатов</option>
                 </select>
@@ -3579,7 +3731,7 @@ function AdminView({
                   disabled={!newCourse.title.trim() || createCourse.isPending}
                   onClick={() => createCourse.mutate(
                     { title: newCourse.title.trim(), description: newCourse.description || undefined, audience_code: newCourse.audience_code },
-                    { onSuccess: () => { setNewCourse({ title: "", description: "", audience_code: "ALL" }); toast("Курс создан", "success"); } },
+                    { onSuccess: () => { setNewCourse({ title: "", description: "", audience_code: currentLearningAudience }); toast("Курс создан", "success"); } },
                   )}
                 >
                   {createCourse.isPending ? "Создаём..." : "Создать курс"}
@@ -3597,7 +3749,7 @@ function AdminView({
                 </select>
                 <select value={newMaterial.audience_code} onChange={(e) => setNewMaterial({ ...newMaterial, audience_code: e.target.value })}>
                   <option value="ALL">Для всех</option>
-                  <option value="PARTICIPANT">Для участников</option>
+                  <option value="PARTICIPANTS">Основной состав</option>
                   <option value="COMMANDERS">Для командиров</option>
                   <option value="CANDIDATE">Для кандидатов</option>
                 </select>
@@ -3606,14 +3758,14 @@ function AdminView({
                   disabled={!newMaterial.title.trim() || createMaterial.isPending}
                   onClick={() => createMaterial.mutate(
                     { title: newMaterial.title.trim(), type_code: newMaterial.type_code, external_url: newMaterial.external_url || undefined, audience_code: newMaterial.audience_code, is_active: true },
-                    { onSuccess: () => { setNewMaterial({ title: "", type_code: "TEXT", external_url: "", audience_code: "ALL", is_active: true }); toast("Материал добавлен", "success"); } },
+                    { onSuccess: () => { setNewMaterial({ title: "", type_code: "TEXT", external_url: "", audience_code: currentLearningAudience, is_active: true }); toast("Материал добавлен", "success"); } },
                   )}
                 >
                   {createMaterial.isPending ? "Создаём..." : "Добавить материал"}
                 </button>
               </div>
               {adminCourses.isLoading && <Empty text="Загрузка курсов..." />}
-              {(adminCourses.data ?? []).map((course) => (
+              {(adminCourses.data ?? []).filter((course) => learningScope === "candidates" ? course.audience_code === "CANDIDATE" : course.audience_code !== "CANDIDATE").map((course) => (
                 <div className={styles.row} key={course.id}>
                   <img src={iconPath("learning")} alt="" />
                   <div>
@@ -3633,7 +3785,7 @@ function AdminView({
                 </div>
               ))}
               {adminMaterials.isLoading && <Empty text="Загрузка материалов..." />}
-              {(adminMaterials.data ?? []).map((mat) => (
+              {(adminMaterials.data ?? []).filter((mat) => learningScope === "candidates" ? mat.audience_code === "CANDIDATE" : mat.audience_code !== "CANDIDATE").map((mat) => (
                 <div className={styles.row} key={mat.id}>
                   <img src={iconPath("learning")} alt="" />
                   <div>
@@ -3760,9 +3912,27 @@ function AdminView({
                     )}
                   </label>
                 );
+                const birthdayTemplate = draft["birthday_greeting_template"] ?? "Поздравляем {name} с днём рождения! Желаем успехов и боевого духа!";
+                const birthdayPreview = birthdayTemplate
+                  .replace(/\{name\}/g, "Иванов Иван")
+                  .replace(/\{first_name\}/g, "Иван")
+                  .replace(/\{age\}/g, "17")
+                  .replace(/\{squad\}/g, "1 отделение");
+                const insertBirthdayToken = (token: string) => {
+                  const input = birthdayTemplateRef.current;
+                  const current = birthdayTemplate;
+                  const start = input?.selectionStart ?? current.length;
+                  const end = input?.selectionEnd ?? current.length;
+                  const next = `${current.slice(0, start)}${token}${current.slice(end)}`;
+                  setSettingsDraft((d) => ({ ...d, birthday_greeting_template: next }));
+                  window.requestAnimationFrame(() => {
+                    birthdayTemplateRef.current?.focus();
+                    birthdayTemplateRef.current?.setSelectionRange(start + token.length, start + token.length);
+                  });
+                };
                 return (
                   <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                    <strong style={{ fontSize: "0.9rem", color: "#65708a" }}>🎂 Поздравления с днём рождения</strong>
+                    <strong className={styles.settingsGroupTitle}>Поздравления с днём рождения</strong>
                     <label className={styles.checkboxLine}>
                       <input
                         type="checkbox"
@@ -3772,8 +3942,27 @@ function AdminView({
                       <span>Включить поздравления</span>
                     </label>
                     {field("birthday_time", "Время отправки (HH:MM)", "09:00")}
-                    {field("birthday_greeting_template", "Шаблон поздравления (плейсхолдеры: {name}, {first_name}, {age})", "🎉 Поздравляем {name} с днём рождения!", "textarea")}
-                    <strong style={{ fontSize: "0.9rem", color: "#65708a" }}>Расписание</strong>
+                    <label className={`${styles.fieldLabel} ${styles.birthdayTemplate}`}>
+                      <span>Текст поздравления</span>
+                      <textarea
+                        ref={birthdayTemplateRef}
+                        value={birthdayTemplate}
+                        placeholder="Поздравляем {name} с днём рождения!"
+                        rows={4}
+                        onChange={(e) => setSettingsDraft((d) => ({ ...d, birthday_greeting_template: e.target.value }))}
+                      />
+                    </label>
+                    <div className={styles.tokenBar}>
+                      <button type="button" onClick={() => insertBirthdayToken("{name}")}>ФИО</button>
+                      <button type="button" onClick={() => insertBirthdayToken("{first_name}")}>Имя</button>
+                      <button type="button" onClick={() => insertBirthdayToken("{age}")}>Возраст</button>
+                      <button type="button" onClick={() => insertBirthdayToken("{squad}")}>Отделение</button>
+                    </div>
+                    <div className={styles.birthdayPreview}>
+                      <span>Предпросмотр</span>
+                      <p>{birthdayPreview}</p>
+                    </div>
+                    <strong className={styles.settingsGroupTitle}>Расписание</strong>
                     {field("schedule_week_a_start", "Дата начала недели А", "2026-06-02", "date")}
                     <small style={{ color: "#65708a", fontWeight: 700 }}>
                       Любой понедельник: эта неделя и все четные после нее считаются неделей А.

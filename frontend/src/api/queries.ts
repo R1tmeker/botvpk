@@ -830,6 +830,11 @@ export function useAdminAcceptApplication() {
       queryClient.invalidateQueries({ queryKey: ["admin", "applications"] });
       queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
       queryClient.invalidateQueries({ queryKey: ["users"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "squads"] });
+      queryClient.invalidateQueries({ queryKey: ["squads"] });
+      queryClient.invalidateQueries({ queryKey: ["squads", "my"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+      queryClient.invalidateQueries({ queryKey: ["users"] });
     },
   });
 }
@@ -1089,7 +1094,7 @@ export function useNormativesAdmin(enabled: boolean) {
 export function useCreateNormative() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (payload: { title: string; description?: string; type_code?: string; target_audience?: string; squad_id?: number | null; is_active?: boolean }) => {
+    mutationFn: async (payload: { title: string; description?: string; type_code?: string; target_audience?: string; squad_id?: number | null; instruction_video_file_id?: number | null; instruction_video_url?: string | null; is_active?: boolean }) => {
       const { data } = await api.post<Normative>("/normatives", payload);
       return data;
     },
@@ -1103,7 +1108,7 @@ export function useCreateNormative() {
 export function useUpdateNormative() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, ...payload }: { id: number; title?: string; description?: string; is_active?: boolean; target_audience?: string; squad_id?: number | null }) => {
+    mutationFn: async ({ id, ...payload }: { id: number; title?: string; description?: string; is_active?: boolean; target_audience?: string; squad_id?: number | null; instruction_video_file_id?: number | null; instruction_video_url?: string | null }) => {
       const { data } = await api.patch<Normative>(`/normatives/${id}`, payload);
       return data;
     },

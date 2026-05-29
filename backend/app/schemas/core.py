@@ -340,6 +340,8 @@ class NormativeRead(ORMModel):
     target_audience: str
     squad_id: int | None = None
     file_id: int | None = None
+    instruction_video_file_id: int | None = None
+    instruction_video_url: str | None = None
     is_active: bool
     created_by_user_id: int
     created_at: datetime
@@ -354,6 +356,8 @@ class NormativeCreate(BaseModel):
     target_audience: str = "ALL"
     squad_id: int | None = None
     file_id: int | None = None
+    instruction_video_file_id: int | None = None
+    instruction_video_url: str | None = None
     is_active: bool = True
 
 
@@ -365,6 +369,8 @@ class NormativeUpdate(BaseModel):
     target_audience: str | None = None
     squad_id: int | None = None
     file_id: int | None = None
+    instruction_video_file_id: int | None = None
+    instruction_video_url: str | None = None
     is_active: bool | None = None
 
 

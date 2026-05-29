@@ -20,6 +20,7 @@ from .models import (
     Notification,
     ScheduleEvent,
     Setting,
+    Squad,
     User,
 )
 
@@ -63,8 +64,8 @@ def create_scheduler(settings: Settings) -> AsyncIOScheduler:
     scheduler.add_job(check_low_attendance_and_grades, "cron", hour=20, minute=0, max_instances=1)
     # Daily at 19:00: overdue normative warnings to participants
     scheduler.add_job(check_overdue_normatives, "cron", hour=19, minute=0, max_instances=1)
-    # Daily at 09:00: birthday greetings
-    scheduler.add_job(send_birthday_greetings, "cron", hour=9, minute=0, args=[settings], max_instances=1)
+    # Birthday greetings honor the admin-configured send time and stay idempotent per day.
+    scheduler.add_job(send_birthday_greetings, "interval", minutes=1, args=[settings], max_instances=1)
     return scheduler
 
 
@@ -701,11 +702,17 @@ def _is_birthday_today(birth_date, today, leap_policy: str) -> bool:
     return False
 
 
+class SafeBirthdayTemplate(dict):
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
+
+
 async def send_birthday_greetings(settings: Settings) -> None:
     """Daily 09:00: send personal DM congratulations to active members whose birthday is today."""
     import pytz
     tz = pytz.timezone(settings.timezone)
-    today = datetime.now(tz).date()
+    now_local = datetime.now(tz)
+    today = now_local.date()
     now = utcnow()
 
     async with AsyncSessionLocal() as session:
@@ -714,7 +721,7 @@ async def send_birthday_greetings(settings: Settings) -> None:
             for row in (
                 await session.scalars(
                     select(Setting).where(
-                        Setting.key.in_(["birthday_enabled", "birthday_greeting_template", "leap_policy"])
+                        Setting.key.in_(["birthday_enabled", "birthday_greeting_template", "birthday_time", "leap_policy"])
                     )
                 )
             ).all()
@@ -724,6 +731,14 @@ async def send_birthday_greetings(settings: Settings) -> None:
             return
 
         template = settings_rows.get("birthday_greeting_template") or _DEFAULT_BIRTHDAY_TEMPLATE
+        birthday_time = settings_rows.get("birthday_time") or "09:00"
+        try:
+            hour, minute = [int(part) for part in birthday_time.split(":", 1)]
+            send_at = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        except (TypeError, ValueError):
+            send_at = now_local.replace(hour=9, minute=0, second=0, microsecond=0)
+        if now_local < send_at:
+            return
         leap_policy = settings_rows.get("leap_policy") or "28"
 
         users = list(
@@ -742,6 +757,15 @@ async def send_birthday_greetings(settings: Settings) -> None:
         birthday_users = [u for u in users if _is_birthday_today(u.birth_date, today, leap_policy)]
         if not birthday_users:
             return
+        squad_ids = {u.squad_id for u in birthday_users if u.squad_id is not None}
+        squad_map = {}
+        if squad_ids:
+            squad_map = {
+                squad.id: squad.name
+                for squad in (
+                    await session.scalars(select(Squad).where(Squad.id.in_(squad_ids)))
+                ).all()
+            }
 
         day_start_utc = now.replace(hour=0, minute=0, second=0, microsecond=0)
         bot = Bot(settings.bot_token)
@@ -761,10 +785,13 @@ async def send_birthday_greetings(settings: Settings) -> None:
 
                 age = today.year - user.birth_date.year if user.birth_date else 0
                 first_name = user.full_name.split()[0] if user.full_name else user.full_name
-                text = template.format(
-                    name=user.full_name,
-                    first_name=first_name,
-                    age=str(age),
+                text = template.format_map(
+                    SafeBirthdayTemplate(
+                        name=user.full_name,
+                        first_name=first_name,
+                        age=str(age),
+                        squad=squad_map.get(user.squad_id or -1, ""),
+                    )
                 ).strip()
 
                 try:

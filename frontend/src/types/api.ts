@@ -158,6 +158,8 @@ export type Normative = {
   type_code: string;
   target_audience: string;
   squad_id: number | null;
+  instruction_video_file_id: number | null;
+  instruction_video_url: string | null;
   is_active: boolean;
 };
 

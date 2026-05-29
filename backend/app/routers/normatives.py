@@ -45,6 +45,8 @@ def normative_visible(normative: Normative, current_user: CurrentUser) -> bool:
         return True
     if normative.target_audience == "SQUAD" and normative.squad_id == current_user.squad_id:
         return True
+    if normative.target_audience == "COMMANDERS":
+        return current_user.role_level >= RoleLevel.DEPUTY_SQUAD_COMMANDER
     return normative.target_audience == "PARTICIPANTS" and current_user.role_level >= RoleLevel.PARTICIPANT
 
 
@@ -58,7 +60,7 @@ async def get_normative_or_404(session: AsyncSession, normative_id: int) -> Norm
 @router.get("", response_model=list[NormativeRead])
 async def list_normatives(
     active_only: bool = True,
-    current_user: CurrentUser = Depends(require_role(RoleLevel.PARTICIPANT)),
+    current_user: CurrentUser = Depends(require_role(RoleLevel.CANDIDATE)),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[Normative]:
     statement = select(Normative).order_by(Normative.deadline_at.nullslast(), Normative.created_at.desc())
@@ -72,7 +74,7 @@ async def list_normatives(
 
 @router.get("/submissions/my", response_model=list[NormativeSubmissionRead])
 async def my_submissions(
-    current_user: CurrentUser = Depends(require_role(RoleLevel.PARTICIPANT)),
+    current_user: CurrentUser = Depends(require_role(RoleLevel.CANDIDATE)),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[NormativeSubmission]:
     user_id = require_profile(current_user)
@@ -143,7 +145,7 @@ async def review_submission(
 @router.get("/{normative_id}", response_model=NormativeRead)
 async def normative_detail(
     normative_id: int,
-    current_user: CurrentUser = Depends(require_role(RoleLevel.PARTICIPANT)),
+    current_user: CurrentUser = Depends(require_role(RoleLevel.CANDIDATE)),
     session: AsyncSession = Depends(get_db_session),
 ) -> Normative:
     normative = await get_normative_or_404(session, normative_id)
@@ -156,7 +158,7 @@ async def normative_detail(
 async def submit_normative(
     normative_id: int,
     payload: NormativeSubmitRequest,
-    current_user: CurrentUser = Depends(require_role(RoleLevel.PARTICIPANT)),
+    current_user: CurrentUser = Depends(require_role(RoleLevel.CANDIDATE)),
     session: AsyncSession = Depends(get_db_session),
 ) -> NormativeSubmission:
     user_id = require_profile(current_user)

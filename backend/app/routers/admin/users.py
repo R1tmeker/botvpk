@@ -45,6 +45,61 @@ ROLE_LABELS_RU = {
 
 EXPORT_COLUMNS = ["ФИО", "Отделение", "Роль", "Статус", "Telegram", "Телефон", "Дата рождения", "Дата привязки"]
 
+LEAD_ROLE_TO_SQUAD_FIELD = {
+    "SQUAD_COMMANDER": "commander_user_id",
+    "DEPUTY_SQUAD_COMMANDER": "deputy_user_id",
+}
+SQUAD_FIELD_TO_LEAD_ROLE = {value: key for key, value in LEAD_ROLE_TO_SQUAD_FIELD.items()}
+
+
+async def clear_user_squad_lead_refs(
+    session: AsyncSession,
+    user: User,
+    *,
+    keep_squad_id: int | None = None,
+    keep_field: str | None = None,
+) -> None:
+    rows = list(
+        (
+            await session.scalars(
+                select(Squad).where(
+                    (Squad.commander_user_id == user.id) | (Squad.deputy_user_id == user.id)
+                )
+            )
+        ).all()
+    )
+    for squad in rows:
+        if squad.commander_user_id == user.id and not (squad.id == keep_squad_id and keep_field == "commander_user_id"):
+            squad.commander_user_id = None
+        if squad.deputy_user_id == user.id and not (squad.id == keep_squad_id and keep_field == "deputy_user_id"):
+            squad.deputy_user_id = None
+
+
+async def sync_user_squad_leadership(session: AsyncSession, user: User) -> None:
+    field_name = LEAD_ROLE_TO_SQUAD_FIELD.get(user.role_code)
+    if field_name is None:
+        await clear_user_squad_lead_refs(session, user)
+        return
+    if user.squad_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Select a squad before assigning squad commander roles.",
+        )
+    squad = await session.get(Squad, user.squad_id)
+    if squad is None or not squad.is_active:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Squad not found or inactive.")
+    if field_name == "commander_user_id" and squad.deputy_user_id == user.id:
+        squad.deputy_user_id = None
+    if field_name == "deputy_user_id" and squad.commander_user_id == user.id:
+        squad.commander_user_id = None
+    await clear_user_squad_lead_refs(session, user, keep_squad_id=squad.id, keep_field=field_name)
+    previous_user_id = getattr(squad, field_name)
+    if previous_user_id is not None and previous_user_id != user.id:
+        previous = await session.get(User, previous_user_id)
+        if previous is not None and previous.role_code == SQUAD_FIELD_TO_LEAD_ROLE[field_name]:
+            previous.role_code = "PARTICIPANT"
+    setattr(squad, field_name, user.id)
+
 
 def _build_users_query(
     current_user: CurrentUser,
@@ -201,6 +256,7 @@ async def admin_update_user(
     old = model_snapshot(user, list(updates))
     for key, value in updates.items():
         setattr(user, key, value)
+    await sync_user_squad_leadership(session, user)
     user.updated_at = datetime.now(timezone.utc)
     await record_audit(
         session,

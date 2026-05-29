@@ -19,13 +19,6 @@ from ...schemas.core import (
 )
 from ...utils.audit import model_snapshot, record_audit
 
-# Роли, которые можно выдать при приёме заявки (не выше командира отделения)
-_ACCEPT_ALLOWED_ROLES = {
-    RoleCode.PARTICIPANT,
-    RoleCode.DEPUTY_SQUAD_COMMANDER,
-    RoleCode.SQUAD_COMMANDER,
-}
-
 router = APIRouter(prefix="/admin/join", tags=["admin:join"])
 
 
@@ -109,11 +102,7 @@ async def accept_application(
     application = await session.get(JoinApplication, application_id)
     if not application:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found.")
-    if payload.role_code not in _ACCEPT_ALLOWED_ROLES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cannot assign role '{payload.role_code}' when accepting an application.",
-        )
+    role_code = RoleCode.PARTICIPANT.value
     if payload.squad_id is not None:
         squad = await session.get(Squad, payload.squad_id)
         if squad is None or not squad.is_active:
@@ -125,7 +114,7 @@ async def accept_application(
         user.birth_date = application.birth_date
         user.phone = application.phone
         user.squad_id = payload.squad_id
-        user.role_code = payload.role_code
+        user.role_code = role_code
         user.status_code = "ACTIVE"
         user.updated_at = utcnow()
     else:
@@ -136,7 +125,7 @@ async def accept_application(
             birth_date=application.birth_date,
             phone=application.phone,
             squad_id=payload.squad_id,
-            role_code=payload.role_code,
+            role_code=role_code,
             status_code="ACTIVE",
             linked_at=utcnow(),
         )
@@ -175,7 +164,7 @@ async def accept_application(
         action_code="join.application.accept",
         entity_name="join_applications",
         entity_id=application.id,
-        new_value={"accepted_user_id": user.id, **payload.model_dump(mode="json")},
+        new_value={**payload.model_dump(mode="json"), "accepted_user_id": user.id, "role_code": role_code},
     )
     await session.commit()
     await session.refresh(application)

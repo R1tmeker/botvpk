@@ -439,6 +439,55 @@
   }
 }
 
+.adminTabGroups {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+
+  section {
+    display: grid;
+    gap: 6px;
+    border: 1px solid #e0e5ef;
+    border-radius: 12px;
+    background: #fff;
+    padding: 10px;
+  }
+
+  strong {
+    color: #65708a;
+    font-size: 10px;
+    font-weight: 900;
+    text-transform: uppercase;
+  }
+
+  div {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    scrollbar-width: none;
+
+    &::-webkit-scrollbar { display: none; }
+  }
+
+  button {
+    flex: 0 0 auto;
+    min-height: 34px;
+    border: 1px solid #d8deea;
+    border-radius: 10px;
+    color: #1a2f5a;
+    background: #f8f9fc;
+    padding: 0 12px;
+    font-size: 11px;
+    font-weight: 900;
+  }
+
+  button[data-active="true"] {
+    border-color: #1a2f5a;
+    color: #fff;
+    background: #1a2f5a;
+  }
+}
+
 .row .inlineBadge,
 .inlineBadge {
   display: inline-grid;
@@ -782,6 +831,7 @@
 .fieldLabel {
   display: grid;
   gap: 4px;
+  min-width: 0;
 
   > span {
     font-size: 11px;
@@ -832,6 +882,94 @@
   button:disabled {
     cursor: not-allowed;
     opacity: 0.54;
+  }
+}
+
+.twoCol {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+
+  > * {
+    min-width: 0;
+  }
+
+  input,
+  select,
+  textarea {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 420px) {
+  .twoCol {
+    grid-template-columns: 1fr;
+  }
+}
+
+.settingsGroupTitle {
+  display: block;
+  color: #65708a;
+  font-size: 0.9rem;
+  font-weight: 900;
+}
+
+.birthdayTemplate {
+  textarea {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    border: 1px solid #d9deea;
+    border-radius: 10px;
+    background: #fff;
+    color: #1a2f5a;
+    padding: 10px 12px;
+    font: inherit;
+    font-size: 16px;
+    resize: vertical;
+  }
+}
+
+.tokenBar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+
+  button {
+    min-height: 34px;
+    min-width: 0;
+    border: 1px solid #d8deea;
+    border-radius: 10px;
+    background: #fff;
+    color: #1a2f5a;
+    padding: 0 8px;
+    font-size: 11px;
+    font-weight: 900;
+  }
+}
+
+.birthdayPreview {
+  display: grid;
+  gap: 5px;
+  border: 1px solid #e0e5ef;
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px 12px;
+
+  span {
+    color: #8a96b0;
+    font-size: 10px;
+    font-weight: 900;
+    text-transform: uppercase;
+  }
+
+  p {
+    margin: 0;
+    color: #1a2f5a;
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
   }
 }
 
@@ -1000,11 +1138,23 @@
   grid-template-columns: repeat(auto-fill, minmax(0, 1fr));
   gap: 6px;
 
+  input,
   select,
   button {
     min-height: 38px;
     min-width: 0;
     width: 100%;
+  }
+
+  input {
+    border: 1px solid #d9deea;
+    border-radius: 8px;
+    background: #fff;
+    color: #1a2f5a;
+    padding: 7px 9px;
+    font: inherit;
+    font-size: 16px;
+    font-weight: 800;
   }
 
   button {
@@ -1064,6 +1214,57 @@
   background: #e8ebf2;
   color: #1a2f5a;
   white-space: nowrap;
+}
+
+.rosterTableWrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid #e0e5ef;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.rosterTable {
+  width: 100%;
+  min-width: 680px;
+  border-collapse: collapse;
+  color: #1a2f5a;
+
+  &[data-compact="true"] {
+    min-width: 430px;
+  }
+
+  th,
+  td {
+    border-bottom: 1px solid #edf0f5;
+    padding: 9px 10px;
+    text-align: left;
+    vertical-align: top;
+    font-size: 12px;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+  }
+
+  th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: #1a2f5a;
+    color: #fff;
+    font-size: 10px;
+    font-weight: 900;
+    text-transform: uppercase;
+  }
+
+  tr:last-child td {
+    border-bottom: 0;
+  }
+}
+
+.profileRoster {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
 }
 
 /* ── Profile ─────────────────────────────────── */

@@ -19,7 +19,10 @@ ABSENCE_REASON_SEEDS = [
 
 SETTING_SEEDS = {
     "timezone": "Asia/Novosibirsk",
+    "birthday_enabled": "true",
     "birthday_chat_id": None,
+    "birthday_time": "09:00",
+    "birthday_greeting_template": "Поздравляем {name} с днём рождения! Желаем успехов и боевого духа!",
     "leap_policy": "march1",
     "default_response_deadline_minutes": "120",
     "auto_absent_after_event": "true",

@@ -92,6 +92,24 @@ export function useJoinMe(enabled: boolean) {
   });
 }
 
+export type ApplicationHistoryItem = {
+  old_status: string | null;
+  new_status: string;
+  changed_at: string;
+  comment: string | null;
+};
+
+export function useJoinHistory(enabled: boolean) {
+  return useQuery({
+    queryKey: ["join", "me", "history"],
+    queryFn: async () => {
+      const { data } = await api.get<ApplicationHistoryItem[]>("/join/me/history");
+      return data;
+    },
+    enabled,
+  });
+}
+
 export function useJoinEvents(enabled: boolean) {
   return useQuery({
     queryKey: ["join", "events"],
@@ -359,6 +377,27 @@ export function useUpdateMenuCard() {
   });
 }
 
+export type EventResponseItem = {
+  user_id: number;
+  full_name: string;
+  username: string | null;
+  squad_id: number | null;
+  response_code: string;
+  custom_reason: string | null;
+  responded_at: string | null;
+};
+
+export function useEventResponses(eventId: number | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ["schedule", "event", eventId, "responses"],
+    queryFn: async () => {
+      const { data } = await api.get<EventResponseItem[]>(`/schedule/events/${eventId}/responses`);
+      return data;
+    },
+    enabled: enabled && eventId !== null,
+  });
+}
+
 export function useRespondEvent() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -466,10 +505,15 @@ export function useSendAnnouncement() {
 }
 
 export function useSubmitNormative() {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ normativeId, comment, fileId }: { normativeId: number; comment?: string; fileId?: number | null }) => {
       const { data } = await api.post(`/normatives/${normativeId}/submit`, { comment, file_id: fileId ?? undefined });
       return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["normatives", "submissions", "my"] });
+      queryClient.invalidateQueries({ queryKey: ["normatives", "submissions", "pending"] });
     },
   });
 }
@@ -498,6 +542,7 @@ export function useReviewSubmission() {
 }
 
 export function useUpdateDashboardSettings() {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (
       items: Array<{
@@ -511,14 +556,21 @@ export function useUpdateDashboardSettings() {
       const { data } = await api.patch<DashboardSetting[]>("/dashboard/settings", { items });
       return data;
     },
+    onSuccess: (data) => {
+      queryClient.setQueryData(["dashboard", "settings"], data);
+    },
   });
 }
 
 export function useResetDashboardSettings() {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async () => {
-      const { data } = await api.post("/dashboard/settings/reset");
+      const { data } = await api.post<DashboardSetting[]>("/dashboard/settings/reset");
       return data;
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(["dashboard", "settings"], data);
     },
   });
 }
@@ -946,14 +998,15 @@ export function useScheduleTemplates(enabled: boolean) {
 }
 
 type ScheduleEventPayload = {
-  title: string;
-  start_datetime: string;
+  title?: string;
+  start_datetime?: string;
   end_datetime?: string | null;
   place?: string | null;
   squad_id?: number | null;
   event_type_code?: string;
   requires_response?: boolean;
   description?: string | null;
+  status_code?: string;
 };
 
 type ScheduleTemplatePayload = {

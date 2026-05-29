@@ -8,8 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db_session
 from ..dependencies.auth import CurrentUser, can_manage_squad, require_role
-from ..models import Normative, NormativeSubmission, User
-from ..roles import RoleLevel
+from ..models import Normative, NormativeSubmission, Notification, User
+from ..roles import ROLE_LEVELS, RoleLevel
 from ..schemas.core import (
     MessageResponse,
     NormativeCreate,
@@ -137,6 +137,30 @@ async def review_submission(
         old_value=old,
         new_value=payload.model_dump(mode="json"),
     )
+    normative = await session.get(Normative, submission.normative_id)
+    norm_title = normative.title if normative else f"норматив #{submission.normative_id}"
+    status_labels = {
+        "ACCEPTED": ("✅ Принято", "Ваша сдача принята!"),
+        "REJECTED": ("❌ Отклонено", "Ваша сдача отклонена."),
+        "NEEDS_REDO": ("🔄 На доработку", "Требуется пересдача."),
+    }
+    status_title, status_body = status_labels.get(payload.status_code, ("Статус обновлён", "Статус сдачи изменён."))
+    body_parts = [f"Норматив: «{norm_title}»", status_body]
+    if payload.reviewer_comment:
+        body_parts.append(f"Комментарий: {payload.reviewer_comment}")
+    if payload.grade_value:
+        body_parts.append(f"Оценка: {payload.grade_value}")
+    session.add(
+        Notification(
+            user_id=submission.user_id,
+            type_code="NORMATIVE",
+            title=f"{status_title}: {norm_title}",
+            body="\n".join(body_parts),
+            entity_name="normative_submissions",
+            entity_id=submission.id,
+            send_to_tg=True,
+        )
+    )
     await session.commit()
     await session.refresh(submission)
     return submission
@@ -189,6 +213,24 @@ async def submit_normative(
         old_value=old,
         new_value=payload.model_dump(mode="json"),
     )
+    submitter = await session.get(User, user_id)
+    submitter_name = submitter.full_name if submitter else f"Пользователь #{user_id}"
+    all_active = (await session.scalars(
+        select(User).where(User.status_code == "ACTIVE")
+    )).all()
+    commanders = [u for u in all_active if ROLE_LEVELS.get(u.role_code, 0) >= RoleLevel.DEPUTY_SQUAD_COMMANDER]
+    for commander in commanders:
+        session.add(
+            Notification(
+                user_id=commander.id,
+                type_code="NORMATIVE",
+                title=f"📋 Новая сдача: {normative.title}",
+                body=f"{submitter_name} сдал норматив «{normative.title}» на проверку.",
+                entity_name="normative_submissions",
+                entity_id=submission.id,
+                send_to_tg=True,
+            )
+        )
     await session.commit()
     await session.refresh(submission)
     return submission

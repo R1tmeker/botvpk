@@ -4,8 +4,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+import httpx
+
 from fastapi import APIRouter, Depends, File as UploadParam, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -140,3 +142,43 @@ async def download_file(
     )
     await session.commit()
     return FileResponse(path, media_type=stored.mime_type, filename=stored.original_name or path.name)
+
+
+def _tg_content_type(file_path: str) -> str:
+    ext = file_path.rsplit(".", 1)[-1].lower() if "." in file_path else ""
+    if ext in {"mp4", "mov", "avi"}:
+        return f"video/{ext}"
+    if ext in {"jpg", "jpeg"}:
+        return "image/jpeg"
+    if ext == "png":
+        return "image/png"
+    return "application/octet-stream"
+
+
+@router.get("/tg/{tg_file_id:path}")
+async def download_tg_file(
+    tg_file_id: str,
+    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_SQUAD_COMMANDER)),
+    settings: Settings = Depends(get_settings),
+):
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        get_file_resp = await client.get(
+            f"https://api.telegram.org/bot{settings.bot_token}/getFile",
+            params={"file_id": tg_file_id},
+        )
+    if get_file_resp.status_code != 200:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to get file info from Telegram.")
+    data = get_file_resp.json()
+    if not data.get("ok") or not data.get("result", {}).get("file_path"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Telegram file not found.")
+    tg_path: str = data["result"]["file_path"]
+    content_type = _tg_content_type(tg_path)
+    download_url = f"https://api.telegram.org/file/bot{settings.bot_token}/{tg_path}"
+
+    async def stream_tg_file():
+        async with httpx.AsyncClient(timeout=60.0) as stream_client:
+            async with stream_client.stream("GET", download_url) as resp:
+                async for chunk in resp.aiter_bytes(chunk_size=65536):
+                    yield chunk
+
+    return StreamingResponse(stream_tg_file(), media_type=content_type)

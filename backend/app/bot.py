@@ -10,6 +10,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
+    BotCommand,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -84,16 +85,13 @@ def user_role(user: User | None) -> RoleLevel:
 def main_keyboard(role: RoleLevel) -> ReplyKeyboardMarkup:
     settings = get_settings()
     rows: list[list[KeyboardButton]] = [
-        [KeyboardButton(text="Расписание"), KeyboardButton(text="Нормативы")],
-        [KeyboardButton(text="Моя посещаемость"), KeyboardButton(text="Уведомления")],
+        [KeyboardButton(text="📅 Расписание"), KeyboardButton(text="🔔 Уведомления")],
     ]
     if role >= RoleLevel.DEPUTY_SQUAD_COMMANDER:
-        rows.append([KeyboardButton(text="Отметить посещаемость"), KeyboardButton(text="Объявления")])
-    if role >= RoleLevel.DEPUTY_PLATOON_COMMANDER:
-        rows.append([KeyboardButton(text="Отчёты"), KeyboardButton(text="Состав")])
+        rows.append([KeyboardButton(text="👥 Заявки")])
     if settings.mini_app_url:
-        rows.append([KeyboardButton(text="Открыть Mini App", web_app=WebAppInfo(url=settings.mini_app_url))])
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+        rows.append([KeyboardButton(text="🚀 Открыть приложение", web_app=WebAppInfo(url=settings.mini_app_url))])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=False)
 
 
 def event_keyboard(event_id: int) -> InlineKeyboardMarkup:
@@ -151,25 +149,56 @@ async def save_event_response(
 
 
 @router.message(Command("start", "menu"))
-async def start(message: Message) -> None:
+async def start(message: Message, bot: Bot) -> None:
     user = await find_user(message.from_user.id)
     role = user_role(user)
+
+    # Handle deep link parameters
+    text = message.text or ""
+    if " " in text:
+        param = text.split(" ", 1)[1]
+        if param.startswith("view"):
+            submission_id_str = param[4:]
+            try:
+                submission_id = int(submission_id_str)
+            except (ValueError, TypeError):
+                submission_id = None
+            if submission_id is not None and role >= RoleLevel.DEPUTY_SQUAD_COMMANDER:
+                async with AsyncSessionLocal() as session:
+                    submission = await session.get(NormativeSubmission, submission_id)
+                if submission is not None:
+                    comment = submission.comment or ""
+                    if "[TG file_id: " in comment:
+                        # Extract TG file_id from comment
+                        start_idx = comment.index("[TG file_id: ") + len("[TG file_id: ")
+                        end_idx = comment.find("]", start_idx)
+                        tg_file_id = comment[start_idx:end_idx] if end_idx != -1 else comment[start_idx:]
+                        try:
+                            await bot.send_document(message.from_user.id, tg_file_id)
+                        except Exception:  # noqa: BLE001
+                            logger.exception("Failed to forward TG file for submission_id=%s", submission_id)
+                            await message.answer("Не удалось переслать файл.", parse_mode=None)
+                    elif submission.file_id is not None:
+                        await message.answer("Файл загружен через приложение. Откройте Mini App для просмотра.", parse_mode=None)
+                    else:
+                        await message.answer("Файл для этой сдачи не найден.", parse_mode=None)
+                    return
+            elif submission_id is not None:
+                await message.answer("Доступ только командирам.", parse_mode=None)
+                return
+
     name = user.full_name if user else message.from_user.full_name
     role_label = ROLE_LABELS.get(user.role_code if user else "PUBLIC_USER", "Пользователь")
     lines = [
-        "ВПК Звезда",
+        "ВПК «Звезда»",
         "",
-        f"{name}",
+        f"👤 {name}",
         f"Роль: {role_label}",
-        "",
-        "Откройте нужный раздел кнопками ниже.",
     ]
     if user is None:
-        lines.append("Если вы уже в составе, попросите командира привязать ваш Telegram ID.")
+        lines += ["", "Если вы в составе — попросите командира привязать ваш Telegram ID."]
+        lines += ["Для вступления: /join"]
     await message.answer("\n".join(lines), reply_markup=main_keyboard(role), parse_mode=None)
-    keyboard = mini_app_keyboard()
-    if keyboard:
-        await message.answer("Mini App:", reply_markup=keyboard)
 
 
 @router.message(Command("profile"))
@@ -336,20 +365,37 @@ async def join_confirm(message: Message, state: FSMContext) -> None:
             entity_id=application.id,
             new_value={"telegram_id": message.from_user.id, "source": "bot"},
         )
+        commanders = list((await session.scalars(
+            select(User).where(
+                User.status_code == "ACTIVE",
+                User.role_code.in_(("PLATOON_COMMANDER", "DEPUTY_PLATOON_COMMANDER")),
+            )
+        )).all())
+        for commander in commanders:
+            session.add(Notification(
+                user_id=commander.id,
+                type_code="NEW_APPLICATION",
+                title="📋 Новая заявка",
+                body=f"{data['full_name']} подал(а) заявку на вступление через бот.",
+                entity_name="join_applications",
+                entity_id=application.id,
+                send_to_tg=True,
+            ))
         await session.commit()
     await state.clear()
-    await message.answer("Заявка отправлена. Теперь можно смотреть статус в Mini App или командой /join.", reply_markup=mini_app_keyboard())
+    await message.answer("Заявка отправлена. Командиры уведомлены.\nСтатус — в приложении 🚀", reply_markup=mini_app_keyboard())
 
 
 @router.message(Command("help"))
 async def help_command(message: Message) -> None:
     await message.answer(
+        "Команды бота:\n"
         "/start — главное меню\n"
-        "/profile — мой профиль\n"
-        "/schedule — ближайшие события\n"
+        "/schedule — ближайшие занятия\n"
+        "/notifications — мои уведомления\n"
         "/join — заявка на вступление\n"
-        "/notifications — уведомления\n"
-        "/admin — резервные команды командования",
+        "/profile — мой профиль\n\n"
+        "Все функции — в приложении 🚀",
         parse_mode=None,
     )
 
@@ -399,7 +445,7 @@ async def broadcast(message: Message, bot: Bot) -> None:
 
 
 @router.message(Command("schedule"))
-@router.message(F.text.casefold() == "расписание")
+@router.message(F.text.casefold().in_({"расписание", "📅 расписание"}))
 async def schedule(message: Message) -> None:
     user = await find_user(message.from_user.id)
     if user_role(user) < RoleLevel.PARTICIPANT:
@@ -520,30 +566,40 @@ async def absence_custom_reason(message: Message, state: FSMContext) -> None:
 
 
 @router.message(Command("attendance"))
-@router.message(F.text.casefold() == "моя посещаемость")
 async def attendance(message: Message) -> None:
     user = await find_user(message.from_user.id)
     if user_role(user) < RoleLevel.PARTICIPANT:
         await message.answer("Посещаемость доступна после подтверждения участия.")
         return
+    STATUS_LABELS_ATT = {
+        "PRESENT": "Присутствовал",
+        "ABSENT": "Отсутствовал",
+        "LATE": "Опоздал",
+        "EXCUSED": "Уважительная",
+        "SICK": "Больничный",
+        "RELEASED": "Освобождён",
+    }
     async with AsyncSessionLocal() as session:
-        rows = list(
-            (
-                await session.scalars(
-                    select(Attendance).where(Attendance.user_id == user.id).order_by(Attendance.updated_at.desc()).limit(10)
-                )
-            ).all()
+        result = await session.execute(
+            select(Attendance, ScheduleEvent.title)
+            .join(ScheduleEvent, ScheduleEvent.id == Attendance.event_id, isouter=True)
+            .where(Attendance.user_id == user.id)
+            .order_by(Attendance.updated_at.desc())
+            .limit(10)
         )
+        rows = result.all()
     if not rows:
         await message.answer("Отметок посещаемости пока нет.")
         return
     lines = ["Моя посещаемость:"]
-    lines.extend(f"• событие {row.event_id}: {row.status_code}" for row in rows)
+    for att, title in rows:
+        date_str = att.updated_at.strftime("%d.%m") if att.updated_at else ""
+        status_label = STATUS_LABELS_ATT.get(att.status_code, att.status_code)
+        lines.append(f"• {title or 'Занятие'} {date_str}: {status_label}")
     await message.answer("\n".join(lines), parse_mode=None)
 
 
 @router.message(Command("normatives"))
-@router.message(F.text.casefold() == "нормативы")
 async def normatives(message: Message) -> None:
     user = await find_user(message.from_user.id)
     if user_role(user) < RoleLevel.PARTICIPANT:
@@ -572,7 +628,7 @@ async def normatives(message: Message) -> None:
 
 
 @router.message(Command("notifications"))
-@router.message(F.text.casefold() == "уведомления")
+@router.message(F.text.casefold().in_({"уведомления", "🔔 уведомления"}))
 async def notifications(message: Message) -> None:
     user = await find_user(message.from_user.id)
     if user_role(user) < RoleLevel.PARTICIPANT:
@@ -592,9 +648,94 @@ async def notifications(message: Message) -> None:
     if not rows:
         await message.answer("Уведомлений пока нет.")
         return
-    lines = ["Уведомления:"]
-    lines.extend(f"• {item.title}" for item in rows)
+    unread = [r for r in rows if not r.is_read]
+    lines = [f"Уведомления ({len(unread)} новых):"]
+    for item in rows:
+        prefix = "🔵" if not item.is_read else "•"
+        lines.append(f"{prefix} {item.title}")
     await message.answer("\n".join(lines), parse_mode=None)
+
+
+@router.message(F.text.casefold().in_({"👥 заявки", "заявки"}))
+async def cmd_applications(message: Message) -> None:
+    user = await find_user(message.from_user.id)
+    if user_role(user) < RoleLevel.DEPUTY_SQUAD_COMMANDER:
+        await message.answer("Доступ только командирам.")
+        return
+    async with AsyncSessionLocal() as session:
+        from .models import JoinApplication
+        apps = list((await session.scalars(
+            select(JoinApplication)
+            .where(JoinApplication.status_code.not_in(["ACCEPTED", "REJECTED", "ARCHIVED"]))
+            .order_by(JoinApplication.created_at.desc())
+            .limit(10)
+        )).all())
+    if not apps:
+        await message.answer("Активных заявок нет.", reply_markup=mini_app_keyboard())
+        return
+    STATUS_LABELS = {
+        "NEW": "Новая", "INVITED_NORMATIVES": "На нормативах",
+        "REVIEWING": "На рассмотрении", "NEEDS_INFO": "Нужна информация",
+    }
+    lines = [f"Заявки ({len(apps)}):"]
+    for app in apps:
+        status = STATUS_LABELS.get(app.status_code, app.status_code)
+        lines.append(f"• {app.full_name} — {status}")
+    lines.append("\nДля работы с заявками откройте приложение:")
+    await message.answer("\n".join(lines), reply_markup=mini_app_keyboard(), parse_mode=None)
+
+
+@router.callback_query(F.data.startswith("norm_review:"))
+async def normative_review_callback(callback: CallbackQuery) -> None:
+    parts = (callback.data or "").split(":")
+    if len(parts) != 3:
+        await callback.answer("Некорректный запрос.", show_alert=True)
+        return
+    submission_id, status_code = int(parts[1]), parts[2]
+    user = await find_user(callback.from_user.id)
+    if user is None or user_role(user) < RoleLevel.DEPUTY_SQUAD_COMMANDER:
+        await callback.answer("Только для командиров.", show_alert=True)
+        return
+    STATUS_LABELS = {"ACCEPTED": "✅ Принято", "REJECTED": "❌ Отклонено", "NEEDS_REDO": "🔄 На доработку"}
+    status_label = STATUS_LABELS.get(status_code, status_code)
+    async with AsyncSessionLocal() as session:
+        submission = await session.get(NormativeSubmission, submission_id)
+        if submission is None:
+            await callback.answer("Сдача не найдена.", show_alert=True)
+            return
+        submitter = await session.get(User, submission.user_id)
+        normative = await session.get(Normative, submission.normative_id)
+        norm_title = normative.title if normative else f"норматив #{submission.normative_id}"
+        submission.status_code = status_code
+        submission.reviewed_by_id = user.id
+        from datetime import datetime, timezone
+        submission.reviewed_at = datetime.now(timezone.utc)
+        submission.updated_at = datetime.now(timezone.utc)
+        submitter_name = submitter.full_name if submitter else "участник"
+        if submitter:
+            body_parts = [f"Норматив: «{norm_title}»"]
+            if status_code == "ACCEPTED":
+                body_parts.append("Ваша сдача принята!")
+            elif status_code == "REJECTED":
+                body_parts.append("Ваша сдача отклонена.")
+            else:
+                body_parts.append("Требуется пересдача.")
+            session.add(Notification(
+                user_id=submitter.id,
+                type_code="NORMATIVE",
+                title=f"{status_label}: {norm_title}",
+                body="\n".join(body_parts),
+                entity_name="normative_submissions",
+                entity_id=submission.id,
+                send_to_tg=True,
+            ))
+        await session.commit()
+    if callback.message:
+        await callback.message.edit_text(
+            f"{status_label} — {norm_title}\nУчастник: {submitter_name}",
+            parse_mode=None,
+        )
+    await callback.answer(f"Статус: {status_label}")
 
 
 # ──────────────────────── /schedule batch reply ─────────────────────────────
@@ -933,6 +1074,14 @@ async def main() -> None:
         logger.info("Starting VPK Zvezda Telegram bot in DRYRUN mode; polling is disabled")
         await asyncio.Event().wait()
     bot = Bot(settings.bot_token)
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Главное меню"),
+        BotCommand(command="schedule", description="Расписание занятий"),
+        BotCommand(command="notifications", description="Мои уведомления"),
+        BotCommand(command="join", description="Заявка на вступление"),
+        BotCommand(command="profile", description="Мой профиль"),
+        BotCommand(command="help", description="Помощь"),
+    ])
     dispatcher = Dispatcher(storage=MemoryStorage())
     dispatcher.include_router(router)
     logger.info("Starting VPK Zvezda Telegram bot")

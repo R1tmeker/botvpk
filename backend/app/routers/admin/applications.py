@@ -77,6 +77,20 @@ async def update_application(
                 comment=application.admin_comment,
             )
         )
+        if updates["status_code"] == "INVITED_NORMATIVES":
+            user = await session.scalar(select(User).where(User.telegram_id == application.telegram_id))
+            if user:
+                session.add(
+                    Notification(
+                        user_id=user.id,
+                        type_code="APPLICATION",
+                        title="Приглашение на нормативы",
+                        body="Вас приглашают пройти нормативы для вступления в ВПК «Звезда». Ожидайте сообщение от командира.",
+                        entity_name="join_applications",
+                        entity_id=application.id,
+                        send_to_tg=True,
+                    )
+                )
     application.updated_at = utcnow()
     await record_audit(
         session,

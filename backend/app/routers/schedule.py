@@ -8,10 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db_session
 from ..dependencies.auth import CurrentUser, can_manage_squad, require_role
-from ..models import AbsenceReason, EventResponse, ScheduleEvent, ScheduleTemplate, Setting
-from ..schemas.core import AbsenceReasonRead
-from ..roles import RoleLevel
+from ..models import AbsenceReason, EventResponse, Notification, ScheduleEvent, ScheduleTemplate, Setting
+from ..models.user import User as UserModel
+from ..roles import CONFIRMED_ROLES, RoleLevel
 from ..schemas.core import (
+    AbsenceReasonRead,
     EventResponseCreate,
     MessageResponse,
     ScheduleEventCreate,
@@ -213,6 +214,26 @@ async def create_event(
         entity_id=event.id,
         new_value=payload.model_dump(mode="json"),
     )
+    if event.requires_response:
+        start_str = event.start_datetime.strftime("%d.%m %H:%M") if event.start_datetime else "—"
+        place_str = f"\nМесто: {event.place}" if event.place else ""
+        participants = (await session.scalars(
+            select(UserModel).where(
+                UserModel.status_code == "ACTIVE",
+                UserModel.role_code.in_(CONFIRMED_ROLES),
+                (UserModel.squad_id == event.squad_id) if event.squad_id else True,
+            )
+        )).all()
+        for participant in participants:
+            session.add(Notification(
+                user_id=participant.id,
+                type_code="SCHEDULE_POLL",
+                title=f"📅 {event.title}",
+                body=f"{start_str}{place_str}\n\nОтветьте, придёте ли на занятие.",
+                entity_name="schedule_events",
+                entity_id=event.id,
+                send_to_tg=True,
+            ))
     await session.commit()
     await session.refresh(event)
     return serialize_event(event)
@@ -427,6 +448,38 @@ async def generate_template_events(
     for event in created:
         await session.refresh(event)
     return created
+
+
+@router.get("/events/{event_id}/responses")
+async def event_responses(
+    event_id: int,
+    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_SQUAD_COMMANDER)),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[dict]:
+    """Get all responses for an event grouped by response_code, with user info."""
+    event = await session.get(ScheduleEvent, event_id)
+    if not event:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
+    rows = (
+        await session.execute(
+            select(EventResponse, UserModel)
+            .join(UserModel, UserModel.id == EventResponse.user_id)
+            .where(EventResponse.event_id == event_id)
+            .order_by(UserModel.full_name)
+        )
+    ).all()
+    return [
+        {
+            "user_id": r.EventResponse.user_id,
+            "full_name": r.UserModel.full_name,
+            "username": r.UserModel.username,
+            "squad_id": r.UserModel.squad_id,
+            "response_code": r.EventResponse.response_code,
+            "custom_reason": r.EventResponse.custom_reason,
+            "responded_at": r.EventResponse.responded_at.isoformat() if r.EventResponse.responded_at else None,
+        }
+        for r in rows
+    ]
 
 
 @router.get("/events/{event_id}", response_model=ScheduleEventRead)

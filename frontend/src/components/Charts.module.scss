@@ -157,25 +157,33 @@
 /* ── Stat Number ────────────────────────────────── */
 .statNumber {
   display: grid;
+  justify-items: center;
   gap: 3px;
-  padding: 10px 12px;
+  padding: 10px 6px;
   border: 1px solid #e1e5ef;
   border-radius: 12px;
   background: #fff;
+  min-width: 0;
+  overflow: hidden;
+  text-align: center;
 
   strong {
     display: block;
-    font-size: 26px;
+    font-size: 22px;
     line-height: 1;
     font-weight: 900;
+    white-space: nowrap;
   }
 
   span {
     display: block;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 800;
     color: #8a96b0;
     text-transform: uppercase;
+    text-align: center;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
   }
 }
 

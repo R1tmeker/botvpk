@@ -8,8 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db_session
 from ..dependencies.auth import CurrentUser, require_role
-from ..models import Appeal, AppealMessage
-from ..roles import RoleLevel
+from ..models import Appeal, AppealMessage, Notification, User
+from ..roles import PLATOON_ROLES, RoleLevel
 from ..schemas.core import AppealCreate, AppealMessageCreate, AppealMessageRead, AppealRead, AppealUpdate
 from ..utils.audit import model_snapshot, record_audit
 
@@ -68,6 +68,28 @@ async def create_appeal(
         entity_id=appeal.id,
         new_value=payload.model_dump(mode="json"),
     )
+    # Notify all DEPUTY_PLATOON_COMMANDER+ users
+    author_user = await session.get(User, author_id)
+    commanders = list(
+        (
+            await session.scalars(
+                select(User).where(User.status_code == "ACTIVE", User.role_code.in_(PLATOON_ROLES))
+            )
+        ).all()
+    )
+    body = f"Тема: {appeal.subject}"
+    if not payload.is_anonymous and author_user is not None:
+        body = f"{author_user.full_name}: {body}"
+    for commander in commanders:
+        session.add(Notification(
+            user_id=commander.id,
+            type_code="APPEAL",
+            title="📨 Новое обращение",
+            body=body,
+            entity_name="appeals",
+            entity_id=appeal.id,
+            send_to_tg=True,
+        ))
     await session.commit()
     await session.refresh(appeal)
     return appeal
@@ -151,6 +173,39 @@ async def create_appeal_message(
         entity_id=appeal.id,
         new_value={"message_id": message.id},
     )
+    # Notify the other party
+    notif_body = f"Новое сообщение в обращении «{appeal.subject}»"
+    is_commander = current_user.role_level >= RoleLevel.DEPUTY_PLATOON_COMMANDER
+    if user_id == appeal.author_user_id and not is_commander:
+        # Participant writing to commander — notify all DEPUTY_PLATOON_COMMANDER+
+        commanders = list(
+            (
+                await session.scalars(
+                    select(User).where(User.status_code == "ACTIVE", User.role_code.in_(PLATOON_ROLES))
+                )
+            ).all()
+        )
+        for commander in commanders:
+            session.add(Notification(
+                user_id=commander.id,
+                type_code="APPEAL",
+                title="📨 Новое сообщение в обращении",
+                body=notif_body,
+                entity_name="appeals",
+                entity_id=appeal.id,
+                send_to_tg=True,
+            ))
+    elif is_commander and appeal.author_user_id is not None:
+        # Commander writing — notify the appeal author
+        session.add(Notification(
+            user_id=appeal.author_user_id,
+            type_code="APPEAL",
+            title="📨 Новое сообщение в обращении",
+            body=notif_body,
+            entity_name="appeals",
+            entity_id=appeal.id,
+            send_to_tg=True,
+        ))
     await session.commit()
     await session.refresh(message)
     return message

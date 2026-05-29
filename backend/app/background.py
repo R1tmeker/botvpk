@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -100,6 +101,33 @@ async def _notification_exists(
 # ─────────────────────── flush TG queue ─────────────────────
 
 
+def _build_notification_keyboard(notification: Notification, settings: Settings) -> InlineKeyboardMarkup | None:
+    """Return inline keyboard for notifications that need one."""
+    if notification.type_code == "SCHEDULE_POLL" and notification.entity_id:
+        event_id = notification.entity_id
+        return InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✅ Приду", callback_data=f"event:{event_id}:COMING"),
+            InlineKeyboardButton(text="❌ Не приду", callback_data=f"event:{event_id}:NOT_COMING"),
+            InlineKeyboardButton(text="⏳ Уточню", callback_data=f"event:{event_id}:MAYBE"),
+        ]])
+    if notification.type_code == "NORMATIVE" and notification.entity_id and "Новая сдача" in (notification.title or ""):
+        submission_id = notification.entity_id
+        return InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✅ Принять", callback_data=f"norm_review:{submission_id}:ACCEPTED"),
+            InlineKeyboardButton(text="🔄 Доработка", callback_data=f"norm_review:{submission_id}:NEEDS_REDO"),
+            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"norm_review:{submission_id}:REJECTED"),
+        ]])
+    if notification.type_code == "NEW_APPLICATION" and settings.mini_app_url:
+        return InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="👥 Открыть заявки", web_app=WebAppInfo(url=settings.mini_app_url)),
+        ]])
+    if notification.type_code in ("APPLICATION", "NORMATIVE") and settings.mini_app_url:
+        return InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="Открыть приложение", web_app=WebAppInfo(url=settings.mini_app_url)),
+        ]])
+    return None
+
+
 async def send_pending_tg_notifications(settings: Settings) -> None:
     async with AsyncSessionLocal() as session:
         rows = (
@@ -123,7 +151,8 @@ async def send_pending_tg_notifications(settings: Settings) -> None:
             for notification, telegram_id in rows:
                 try:
                     text = notification.title if not notification.body else f"{notification.title}\n\n{notification.body}"
-                    await bot.send_message(telegram_id, text)
+                    keyboard = _build_notification_keyboard(notification, settings)
+                    await bot.send_message(telegram_id, text, reply_markup=keyboard)
                     notification.tg_sent_at = utcnow()
                 except Exception:  # noqa: BLE001
                     logger.exception("Failed to send notification id=%s", notification.id)

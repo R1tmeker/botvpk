@@ -8,8 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db_session
 from ..dependencies.auth import CurrentUser, get_current_user
-from ..models import CandidateEvent, CandidateEventResponse, JoinApplication, User
-from ..roles import RoleCode
+from ..models import ApplicationStatusHistory, CandidateEvent, CandidateEventResponse, JoinApplication, Notification, User
+from ..roles import PLATOON_ROLES, RoleCode
 from ..schemas.core import (
     CandidateEventRead,
     CandidateEventResponseCreate,
@@ -78,6 +78,19 @@ async def create_application(
         entity_id=application.id,
         new_value=payload.model_dump(mode="json"),
     )
+    commanders = (await session.scalars(
+        select(User).where(User.status_code == "ACTIVE", User.role_code.in_(PLATOON_ROLES))
+    )).all()
+    for commander in commanders:
+        session.add(Notification(
+            user_id=commander.id,
+            type_code="NEW_APPLICATION",
+            title="📋 Новая заявка",
+            body=f"{payload.full_name} подал(а) заявку на вступление.",
+            entity_name="join_applications",
+            entity_id=application.id,
+            send_to_tg=True,
+        ))
     await session.commit()
     await session.refresh(application)
     return application
@@ -93,6 +106,38 @@ async def my_application(
         .where(JoinApplication.telegram_id == current_user.telegram_id)
         .order_by(JoinApplication.id.desc())
     )
+
+
+@router.get("/me/history")
+async def my_application_history(
+    current_user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[dict]:
+    application = await session.scalar(
+        select(JoinApplication)
+        .where(JoinApplication.telegram_id == current_user.telegram_id)
+        .order_by(JoinApplication.id.desc())
+    )
+    if application is None:
+        return []
+    rows = list(
+        (
+            await session.scalars(
+                select(ApplicationStatusHistory)
+                .where(ApplicationStatusHistory.application_id == application.id)
+                .order_by(ApplicationStatusHistory.created_at)
+            )
+        ).all()
+    )
+    return [
+        {
+            "old_status": row.old_status,
+            "new_status": row.new_status,
+            "changed_at": row.created_at.isoformat(),
+            "comment": row.comment,
+        }
+        for row in rows
+    ]
 
 
 @router.patch("/me", response_model=JoinApplicationRead)

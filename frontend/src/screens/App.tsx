@@ -96,6 +96,10 @@ import {
   useUpdateSettings,
   useExportUsersCSV,
   useExportUsersXLSX,
+  useEventResponses,
+  useJoinHistory,
+  type ApplicationHistoryItem,
+  type EventResponseItem,
 } from "../api/queries";
 import { api } from "../api/client";
 import type {
@@ -474,6 +478,7 @@ export function App({ webApp }: Props) {
   const publicContent = usePublicContent(publicMode);
   const publicEvents = usePublicEvents(publicMode);
   const joinMe = useJoinMe(hasToken && profile.role_code === "CANDIDATE");
+  const joinHistory = useJoinHistory(hasToken && profile.role_code === "CANDIDATE");
   const joinEvents = useJoinEvents(hasToken && profile.role_code === "CANDIDATE");
   const schedule = useSchedule(internalMode);
   const squadsList = useSquads(internalMode);
@@ -632,8 +637,8 @@ export function App({ webApp }: Props) {
 
       <section className={styles.statusPanel}>
         <div>
-          <p>{profile.full_name}</p>
           <h1>{level >= 3 ? "Личный кабинет" : "Вступление в клуб"}</h1>
+          <p>{profile.full_name}</p>
         </div>
         <dl>
           <div>
@@ -675,6 +680,7 @@ export function App({ webApp }: Props) {
           profile.role_code === "CANDIDATE" ? (
             <CandidateDashboard
               application={joinMe.data ?? null}
+              history={joinHistory.data ?? []}
               events={visibleCandidateEvents}
               materials={learning.data ?? []}
               notifications={notifications.data ?? []}
@@ -748,6 +754,8 @@ export function App({ webApp }: Props) {
             <ScheduleView
               events={visibleSchedule}
               weekType={scheduleWeekType.data}
+              level={level}
+              squads={squadsList.data ?? adminSquads.data ?? []}
               onRespond={(eventId, responseCode, absenceReasonId, customReason) => {
                 respondEvent.mutate(
                   { eventId, responseCode, absenceReasonId, customReason },
@@ -872,6 +880,7 @@ export function App({ webApp }: Props) {
             streak={myStreak.data ?? null}
             allUsers={allUsers.data ?? []}
             squads={squadsList.data ?? adminSquads.data ?? []}
+            onProfileUpdate={(p) => setProfile(p)}
             onAvatarUpload={(file) =>
               uploadAvatar.mutate(file, {
                 onSuccess: (updatedProfile) => {
@@ -976,6 +985,9 @@ function ResponseButtons({
   const reasons = useAbsenceReasons();
   const activeReasons = reasons.data?.filter((r) => r.is_active) ?? [];
 
+  const responseLabels: Record<string, string> = { COMING: "✅ Приду", NOT_COMING: "❌ Не приду", MAYBE: "⏳ Уточню" };
+  const responseStyles: Record<string, string> = { COMING: styles.btnComing, NOT_COMING: styles.btnNotComing, MAYBE: styles.btnMaybe };
+
   if (pickingReason) {
     return (
       <div className={styles.actions} style={{ gridTemplateColumns: "1fr" }}>
@@ -1025,18 +1037,41 @@ function ResponseButtons({
     );
   }
 
+  if (currentResponse) {
+    return (
+      <div className={styles.actions} style={{ gridTemplateColumns: "1fr 1fr" }}>
+        <div className={responseStyles[currentResponse] ?? styles.btnMaybe} style={{ display: "grid", placeItems: "center", minHeight: 36, borderRadius: 10, fontSize: 12, fontWeight: 900 }}>
+          {responseLabels[currentResponse] ?? currentResponse}
+        </div>
+        <button
+          type="button"
+          className={styles.btnMaybeOutline}
+          onClick={() => {
+            if (currentResponse === "NOT_COMING" && requiresResponse) {
+              setPickingReason(true);
+            } else {
+              onRespond(eventId, currentResponse === "COMING" ? "NOT_COMING" : "COMING");
+            }
+          }}
+        >
+          Изменить ответ
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className={styles.actions}>
       <button
         type="button"
-        className={currentResponse === "COMING" ? styles.btnComing : styles.btnComingOutline}
+        className={styles.btnComingOutline}
         onClick={() => onRespond(eventId, "COMING")}
       >
         ✅ Приду
       </button>
       <button
         type="button"
-        className={currentResponse === "NOT_COMING" ? styles.btnNotComing : styles.btnNotComingOutline}
+        className={styles.btnNotComingOutline}
         onClick={() => {
           if (requiresResponse) {
             setPickingReason(true);
@@ -1049,7 +1084,7 @@ function ResponseButtons({
       </button>
       <button
         type="button"
-        className={currentResponse === "MAYBE" ? styles.btnMaybe : styles.btnMaybeOutline}
+        className={styles.btnMaybeOutline}
         onClick={() => onRespond(eventId, "MAYBE")}
       >
         ⏳ Уточню
@@ -1159,15 +1194,14 @@ function Dashboard({
           if (block.code === "commander_summary") {
             const notAnswered = attendance.filter((r) => r.status_code === "NOT_MARKED").length;
             return (
-              <div key={block.code}>
-                <div className={styles.commandSummary}>
-                  <Metric label="Событий" value={schedule.length} extraClass={styles.metricBlue} />
-                  <Metric label="Без ответа" value={notAnswered} />
-                  <Metric label="Причин ждут" value={attendance.filter((r) => r.status_code === "ABSENT").length} />
-                  <Metric label="На проверке" value={normatives.length} extraClass={styles.metricGreen} />
-                </div>
-                {activityFeed.length > 0 && <ActivityFeed items={activityFeed.slice(0, 8)} />}
-              </div>
+              <CommanderSummaryBlock
+                key={block.code}
+                schedule={schedule}
+                notAnswered={notAnswered}
+                attendance={attendance}
+                normatives={normatives}
+                activityFeed={activityFeed}
+              />
             );
           }
           if (block.code === "normatives") {
@@ -1186,6 +1220,40 @@ function Dashboard({
         onReset={onResetSettings}
         isSaving={isSavingSettings}
       />
+    </div>
+  );
+}
+
+/* ─────────── CommanderSummaryBlock ─────────── */
+function CommanderSummaryBlock({
+  schedule, notAnswered, attendance, normatives, activityFeed,
+}: {
+  schedule: ScheduleEvent[];
+  notAnswered: number;
+  attendance: AttendanceRecord[];
+  normatives: Normative[];
+  activityFeed: ActivityItem[];
+}) {
+  const [feedCollapsed, setFeedCollapsed] = useState(false);
+  return (
+    <div>
+      <div className={styles.commandSummary}>
+        <Metric label="Событий" value={schedule.length} extraClass={styles.metricBlue} />
+        <Metric label="Без ответа" value={notAnswered} />
+        <Metric label="Пропустили" value={attendance.filter((r) => r.status_code === "ABSENT").length} />
+        <Metric label="На проверке" value={normatives.length} extraClass={styles.metricGreen} />
+      </div>
+      {activityFeed.length > 0 && (
+        <>
+          <div className={styles.activityHeader}>
+            <span>Активность</span>
+            <button type="button" className={styles.collapseBtn} onClick={() => setFeedCollapsed((v) => !v)}>
+              {feedCollapsed ? "Развернуть" : "Свернуть"}
+            </button>
+          </div>
+          {!feedCollapsed && <ActivityFeed items={activityFeed.slice(0, 8)} />}
+        </>
+      )}
     </div>
   );
 }
@@ -1372,49 +1440,88 @@ function PublicScreen({
 }
 
 /* ─────────── CandidateDashboard ─────────── */
+const STATUS_FLOW_LABELS: Record<string, { label: string; color: string }> = {
+  NEW:                 { label: "Заявка получена", color: "#1a2f5a" },
+  REVIEWING:           { label: "На рассмотрении", color: "#3498db" },
+  NEEDS_INFO:          { label: "Нужна информация", color: "#f39c12" },
+  INVITED_MEETING:     { label: "Приглашён на встречу", color: "#9b59b6" },
+  INVITED_NORMATIVES:  { label: "Приглашён на нормативы", color: "#e67e22" },
+  AWAITING_DECISION:   { label: "Ожидает решения", color: "#3498db" },
+  ACCEPTED:            { label: "Принят в состав ✅", color: "#27ae60" },
+  REJECTED:            { label: "Отклонён", color: "#e74c3c" },
+  ARCHIVED:            { label: "Архив", color: "#95a5a6" },
+};
+
 function CandidateDashboard({
   application,
+  history,
   events,
   materials,
   notifications,
   onRespond,
 }: {
   application: JoinApplication | null;
+  history: ApplicationHistoryItem[];
   events: CandidateEvent[];
   materials: LearningMaterial[];
   notifications: Notification[];
   onRespond: (eventId: number, responseCode: string) => void;
 }) {
-  const steps = [
-    { title: "Анкета заполнена", done: Boolean(application) },
-    { title: "Материалы открыты", done: materials.length > 0 },
-    { title: "Запись на мероприятие", done: events.length > 0 },
-    { title: "Ожидание решения", done: ["AWAITING_DECISION", "ACCEPTED"].includes(application?.status_code ?? "") },
-  ];
+  const [showHistory, setShowHistory] = useState(false);
+  const currentStatus = application?.status_code ?? "";
+  const statusInfo = STATUS_FLOW_LABELS[currentStatus];
 
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
         <h2>Кабинет кандидата</h2>
-        <span>{applicationStatusLabels[application?.status_code ?? ""] ?? "заявка создаётся"}</span>
+        {statusInfo && (
+          <span style={{ color: statusInfo.color, fontWeight: 900, fontSize: 11 }}>{statusInfo.label}</span>
+        )}
       </div>
-      <div className={styles.steps}>
-        {steps.map((step, index) => (
-          <div key={step.title} data-done={step.done}>
-            <b>{index + 1}</b>
-            <span>{step.title}</span>
+
+      {application && (
+        <div style={{ border: "1px solid #e0e5ef", borderRadius: 12, background: "#fff", padding: "12px 14px", marginBottom: 10 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <strong style={{ fontSize: 14, color: "#1a2f5a" }}>История заявки</strong>
+            <button type="button" className={styles.collapseBtn} onClick={() => setShowHistory(v => !v)}>
+              {showHistory ? "Скрыть" : "Показать"}
+            </button>
           </div>
-        ))}
-      </div>
+          {showHistory && (
+            <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
+              {history.length === 0 && <span style={{ fontSize: 12, color: "#8a96b0" }}>Изменений пока нет</span>}
+              {history.map((item, i) => {
+                const info = STATUS_FLOW_LABELS[item.new_status];
+                return (
+                  <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: info?.color ?? "#bdc3c7", marginTop: 5, flexShrink: 0 }} />
+                    <div>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: info?.color ?? "#1a2f5a" }}>{info?.label ?? item.new_status}</span>
+                      <small style={{ display: "block", fontSize: 11, color: "#8a96b0" }}>
+                        {new Date(item.changed_at).toLocaleDateString("ru-RU", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
+                        {item.comment ? ` · ${item.comment}` : ""}
+                      </small>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {application?.admin_comment && (
         <div className={styles.nextItem}>
-          <span>Комментарий администратора</span>
+          <span>Комментарий командира</span>
           <strong>{application.admin_comment}</strong>
         </div>
       )}
       <CandidateEventsView events={events} onRespond={onRespond} />
       <MiniList title="Подготовка" items={materials.map((item) => item.title).slice(0, 4)} />
-      <MiniList title="Уведомления по заявке" items={notifications.map((item) => item.title).slice(0, 3)} />
+      {notifications.filter(n => !n.is_read).length > 0 && (
+        <MiniList title="Новые уведомления" items={notifications.filter(n => !n.is_read).map((item) => item.title).slice(0, 3)} />
+      )}
     </div>
   );
 }
@@ -1456,14 +1563,79 @@ function CandidateEventsView({
   );
 }
 
+/* ─────────── EventVoterList ─────────── */
+function EventVoterList({ eventId, squads, canView }: { eventId: number; squads: Squad[]; canView: boolean }) {
+  const [open, setOpen] = useState(false);
+  const responses = useEventResponses(open ? eventId : null, open && canView);
+
+  if (!canView) return null;
+
+  const squadName = (id: number | null) => squads.find((s) => s.id === id)?.name ?? "Без отделения";
+  const byCode = responses.data?.reduce<Record<string, EventResponseItem[]>>((acc, r) => {
+    (acc[r.response_code] ??= []).push(r);
+    return acc;
+  }, {}) ?? {};
+
+  const codeLabel: Record<string, string> = { COMING: "Идут ✅", NOT_COMING: "Не идут ❌", MAYBE: "Уточняют ⏳" };
+
+  return (
+    <div style={{ gridColumn: "1/-1", marginTop: 4 }}>
+      <button
+        type="button"
+        className={styles.btnMaybeOutline}
+        style={{ width: "100%", minHeight: 32, fontSize: 11 }}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {open ? "Скрыть ответы" : "Посмотреть ответы"}
+      </button>
+      {open && responses.isLoading && <div className={styles.empty} style={{ minHeight: 40, marginTop: 6 }}>Загрузка...</div>}
+      {open && responses.data && (
+        <div style={{ marginTop: 6, display: "grid", gap: 8 }}>
+          {Object.entries(codeLabel).map(([code, label]) => {
+            const group = byCode[code] ?? [];
+            if (group.length === 0) return null;
+            const bySquad = group.reduce<Record<string, EventResponseItem[]>>((acc, r) => {
+              const name = squadName(r.squad_id);
+              (acc[name] ??= []).push(r);
+              return acc;
+            }, {});
+            return (
+              <div key={code} style={{ border: "1px solid #e0e5ef", borderRadius: 10, background: "#fff", padding: "8px 10px" }}>
+                <strong style={{ fontSize: 12, color: "#1a2f5a", display: "block", marginBottom: 4 }}>{label} ({group.length})</strong>
+                {Object.entries(bySquad).sort(([a], [b]) => a.localeCompare(b, "ru")).map(([squad, members]) => (
+                  <div key={squad} style={{ marginBottom: 4 }}>
+                    <span style={{ fontSize: 10, fontWeight: 900, color: "#8a96b0", textTransform: "uppercase" }}>{squad}</span>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 2 }}>
+                      {members.map((m) => (
+                        <span key={m.user_id} style={{ fontSize: 11, background: "#f0f2f8", borderRadius: 6, padding: "2px 7px", color: "#1a2f5a" }}>
+                          {m.full_name}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+          {responses.data.length === 0 && <div className={styles.empty} style={{ minHeight: 40 }}>Никто ещё не ответил</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─────────── ScheduleView ─────────── */
 function ScheduleView({
   events,
   weekType,
+  level,
+  squads,
   onRespond,
 }: {
   events: ScheduleEvent[];
   weekType?: { parity: "A" | "B" | null; week_a_start: string | null };
+  level: number;
+  squads: Squad[];
   onRespond: RespondFn;
 }) {
   const [tab, setTab] = useState<"today" | "week" | "month" | "archive">("week");
@@ -1520,6 +1692,7 @@ function ScheduleView({
               <strong>
                 {event.title}
                 {event.is_overridden && <span className={styles.inlineBadge}>изм.</span>}
+                {event.status_code === "CANCELLED" && <span className={styles.inlineBadge} data-tone="warning">закрыт</span>}
               </strong>
               <span>{formatDate(event.start_datetime)} · {event.place ?? "место уточняется"}</span>
             </div>
@@ -1530,6 +1703,9 @@ function ScheduleView({
                 currentResponse={event.my_response_code}
                 onRespond={onRespond}
               />
+            )}
+            {event.requires_response && level >= 4 && (
+              <EventVoterList eventId={event.id} squads={squads} canView={level >= 4} />
             )}
           </article>
         ))}
@@ -1608,13 +1784,15 @@ function AttendanceView({
   const absent = statsByCode.get("ABSENT") ?? 0;
   const late = statsByCode.get("LATE") ?? 0;
 
-  // Build heatmap data: one entry per attendance record with date from schedule
+  // Build heatmap data: use marked_at or event start_datetime as fallback
+  const eventDateMap = new Map(schedule.map((e) => [e.id, e.start_datetime]));
   const heatData = records
-    .filter((r) => r.marked_at)
-    .map((r) => ({
-      date: r.marked_at!.slice(0, 10),
-      status: r.status_code,
-    }));
+    .map((r) => {
+      const dateStr = r.marked_at ?? eventDateMap.get(r.event_id) ?? null;
+      if (!dateStr) return null;
+      return { date: dateStr.slice(0, 10), status: r.status_code };
+    })
+    .filter((r): r is { date: string; status: string } => r !== null);
 
   // Monthly bar chart data
   const monthCounts: Record<string, number> = {};
@@ -1698,6 +1876,32 @@ function AttendanceView({
               ))}
             </select>
           </div>
+          {selectedEventId !== null && targetUsers.length > 0 && (
+            <div className={styles.commandStrip}>
+              <button
+                type="button"
+                style={{ background: "#27ae60" }}
+                onClick={() => {
+                  const preset: Record<number, string> = {};
+                  for (const u of targetUsers) preset[u.id as number] = "PRESENT";
+                  setDraftAttendance(preset);
+                }}
+              >
+                ✅ Все присутствуют
+              </button>
+              <button
+                type="button"
+                style={{ background: "#e74c3c" }}
+                onClick={() => {
+                  const preset: Record<number, string> = {};
+                  for (const u of targetUsers) preset[u.id as number] = "ABSENT";
+                  setDraftAttendance(preset);
+                }}
+              >
+                ❌ Все отсутствуют
+              </button>
+            </div>
+          )}
           <div className={styles.list}>
             {selectedEventId === null && <Empty text="Выберите событие для отметки" />}
             {selectedEventId !== null && targetUsers.length === 0 && <Empty text="Нет участников для отметки" />}
@@ -1708,7 +1912,9 @@ function AttendanceView({
                 <div className={styles.memberRow} key={userId}>
                   <div>
                     <strong>{user.full_name}</strong>
-                    <span>{statusLabels[value] ?? value}</span>
+                    <span style={{ color: value === "PRESENT" ? "#27ae60" : value === "ABSENT" ? "#e74c3c" : value === "LATE" ? "#f39c12" : "#8a96b0" }}>
+                      {statusLabels[value] ?? value}
+                    </span>
                   </div>
                   <select
                     value={value}
@@ -1743,7 +1949,7 @@ function AttendanceView({
                   );
                 }}
               >
-                {markAttendance.isPending ? "Сохраняем..." : "Сохранить отметки"}
+                {markAttendance.isPending ? "Сохраняем..." : "💾 Сохранить отметки"}
               </button>
             </div>
           )}
@@ -2414,6 +2620,55 @@ function LearningView({ items, courses, canTrack }: { items: LearningMaterial[];
   );
 }
 
+/* ─────────── MemberModal ─────────── */
+function MemberModal({ user, squads, onClose }: { user: UserRecord; squads: Squad[]; onClose: () => void }) {
+  const squadName = squads.find((s) => s.id === user.squad_id)?.name ?? "Не назначено";
+  const prof = user as unknown as Record<string, string>;
+  const rows: Array<{ label: string; value: string; copyable?: boolean; link?: string }> = [
+    { label: "ФИО", value: user.full_name },
+    { label: "Роль", value: roleLabels[user.role_code as RoleCode] ?? user.role_code },
+    { label: "Отделение", value: squadName },
+    { label: "Телефон", value: formatPhoneDisplay(user.phone), copyable: true },
+    { label: "Группа", value: prof.education_place || "—" },
+    { label: "Город", value: prof.city || "—" },
+    { label: "Дата рождения", value: user.birth_date ? formatDateFull(user.birth_date) : "—" },
+    { label: "Telegram ID", value: String(user.telegram_id || "—"), copyable: true },
+    ...(user.username ? [{ label: "Telegram", value: `@${user.username}`, link: `https://t.me/${user.username}` }] : []),
+  ];
+  return (
+    <div className={styles.modalOverlay} onClick={onClose}>
+      <div className={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
+        <div className={styles.modalHeader}>
+          <strong>{user.full_name}</strong>
+          <button type="button" onClick={onClose}>✕</button>
+        </div>
+        <div className={styles.modalBody} style={{ padding: "0 16px 16px" }}>
+          <dl style={{ margin: 0 }}>
+            {rows.map(({ label, value, copyable, link }) => (
+              <div
+                key={label}
+                className={styles.profileRow}
+                style={copyable || link ? { cursor: "pointer" } : undefined}
+                onClick={() => {
+                  if (link) { window.open(link, "_blank"); return; }
+                  if (copyable && value !== "—") {
+                    navigator.clipboard.writeText(value).then(() => toast(`${label} скопирован`, "info")).catch(() => {});
+                  }
+                }}
+              >
+                <dt>{label}</dt>
+                <dd style={link ? { color: "#1a2f5a", textDecoration: "underline" } : copyable && value !== "—" ? { textDecoration: "underline dotted" } : undefined}>
+                  {value} {copyable && value !== "—" ? "📋" : ""}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ─────────── PeopleView ─────────── */
 const ROSTER_ROLE_CODES = new Set([
   "PARTICIPANT", "DEPUTY_SQUAD_COMMANDER", "SQUAD_COMMANDER",
@@ -2436,6 +2691,7 @@ function PeopleView({
   type PeopleSegment = "roster" | "my_squad" | "candidates" | "archive";
   const [segment, setSegment] = useState<PeopleSegment>("roster");
   const [search, setSearch] = useState("");
+  const [selectedUser, setSelectedUser] = useState<UserRecord | null>(null);
 
   const squadMap = new Map(squads.map((s) => [s.id, s]));
 
@@ -2474,6 +2730,7 @@ function PeopleView({
 
   return (
     <div className={styles.panel}>
+      {selectedUser && <MemberModal user={selectedUser} squads={squads} onClose={() => setSelectedUser(null)} />}
       <div className={styles.panelHeader}>
         <h2>Состав</h2>
         <span>{filteredUsers.length} чел.</span>
@@ -2497,16 +2754,20 @@ function PeopleView({
               <span>{filteredUsers.length} чел.</span>
             </div>
           )}
-          <RosterTable users={filteredUsers} squads={squads} emptyText={segment === "my_squad" ? "В вашем отделении пока никого нет" : "Участников нет"} />
+          <RosterTable users={filteredUsers} squads={squads} emptyText={segment === "my_squad" ? "В вашем отделении пока никого нет" : "Участников нет"} onRowClick={setSelectedUser} />
         </div>
       )}
 
-      {/* Кандидаты и Архив — простой список */}
       {segment !== "roster" && segment !== "my_squad" && (
         <div className={styles.list}>
           {filteredUsers.length === 0 && <Empty text="Записей нет" />}
           {filteredUsers.map((user) => (
-            <div className={styles.memberRow} key={user.id ?? user.telegram_id}>
+            <div
+              className={styles.memberRow}
+              key={user.id ?? user.telegram_id}
+              style={{ cursor: "pointer" }}
+              onClick={() => setSelectedUser(user)}
+            >
               <div>
                 <strong>{user.full_name}</strong>
                 <span>
@@ -2528,11 +2789,13 @@ function RosterTable({
   squads,
   compact = false,
   emptyText = "Записей нет",
+  onRowClick,
 }: {
   users: UserRecord[];
   squads: Squad[];
   compact?: boolean;
   emptyText?: string;
+  onRowClick?: (user: UserRecord) => void;
 }) {
   const squadName = (id: number | null) => squads.find((s) => s.id === id)?.name ?? "—";
   const sorted = [...users].sort((a, b) => {
@@ -2556,12 +2819,41 @@ function RosterTable({
         </thead>
         <tbody>
           {sorted.map((user) => (
-            <tr key={user.id ?? user.telegram_id}>
+            <tr
+              key={user.id ?? user.telegram_id}
+              style={onRowClick ? { cursor: "pointer" } : undefined}
+              onClick={onRowClick ? () => onRowClick(user) : undefined}
+            >
               <td>{user.full_name}</td>
-              <td>{user.username ? `@${user.username}` : user.telegram_id || "—"}</td>
+              <td>
+                {user.username ? (
+                  <a
+                    href={`https://t.me/${user.username}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ color: "#1a2f5a", textDecoration: "underline" }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    @{user.username}
+                  </a>
+                ) : (
+                  <span
+                    style={{ cursor: "copy", textDecoration: "underline dotted" }}
+                    title="Нажмите чтобы скопировать"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (user.telegram_id) {
+                        navigator.clipboard.writeText(String(user.telegram_id)).then(() => toast("TG ID скопирован", "info")).catch(() => {});
+                      }
+                    }}
+                  >
+                    {user.telegram_id || "—"}
+                  </span>
+                )}
+              </td>
               <td>{squadName(user.squad_id)}</td>
               <td>{roleLabels[user.role_code as RoleCode] ?? user.role_code}</td>
-              {!compact && <td>{user.status_code}</td>}
+              {!compact && <td>{user.status_code === "ACTIVE" ? "Активен" : user.status_code === "ARCHIVED" ? "Архив" : user.status_code}</td>}
               {!compact && <td>{formatPhoneDisplay(user.phone)}</td>}
               {!compact && <td>{user.birth_date ? formatDateFull(user.birth_date) : "—"}</td>}
             </tr>
@@ -2610,6 +2902,7 @@ function ProfileView({
   squads,
   onAvatarUpload,
   isAvatarUploading,
+  onProfileUpdate,
 }: {
   profile: UserProfile;
   attendanceStats?: ReportSummary;
@@ -2619,6 +2912,7 @@ function ProfileView({
   squads: Squad[];
   onAvatarUpload: (file: File) => void;
   isAvatarUploading: boolean;
+  onProfileUpdate: (p: UserProfile) => void;
 }) {
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const [editing, setEditing] = useState(false);
@@ -2626,13 +2920,15 @@ function ProfileView({
   const [editPhone, setEditPhone] = useState("+7");
   const updateMe = useUpdateMe();
 
+  const prof = profile as unknown as Record<string, string>;
+
   const startEdit = () => {
     setEditForm({
       full_name: profile.full_name ?? "",
       phone: profile.phone ?? "",
-      city: (profile as unknown as Record<string, string>).city ?? "",
-      education_place: (profile as unknown as Record<string, string>).education_place ?? "",
-      birth_date: (profile as unknown as Record<string, string>).birth_date ?? "",
+      city: prof.city ?? "",
+      education_place: prof.education_place ?? "",
+      birth_date: prof.birth_date ?? (profile.birth_date ?? ""),
     });
     setEditPhone(profile.phone ? formatPhoneDisplay(profile.phone) : "+7");
     setEditing(true);
@@ -2642,7 +2938,11 @@ function ProfileView({
     updateMe.mutate(
       { ...editForm, phone: editForm.phone || undefined },
       {
-        onSuccess: () => { setEditing(false); toast("Профиль сохранён", "success"); },
+        onSuccess: (updated) => {
+          setEditing(false);
+          onProfileUpdate(updated);
+          toast("Профиль сохранён", "success");
+        },
         onError: () => toast("Не удалось сохранить", "error"),
       },
     );
@@ -2740,24 +3040,34 @@ function ProfileView({
             </div>
             <div className={styles.profileRow}>
               <dt>Отделение</dt>
-              <dd>{profile.squad_id ?? "не назначено"}</dd>
+              <dd>{squads.find((s) => s.id === profile.squad_id)?.name ?? (profile.squad_id ? `#${profile.squad_id}` : "не назначено")}</dd>
             </div>
             <div className={styles.profileRow}>
-              <dt>Telegram ID</dt>
-              <dd>{profile.telegram_id}</dd>
+              <dt>Телефон</dt>
+              <dd>{profile.phone ? formatPhoneDisplay(profile.phone) : "—"}</dd>
             </div>
-            {profile.phone && (
-              <div className={styles.profileRow}>
-                <dt>Телефон</dt>
-                <dd>{formatPhoneDisplay(profile.phone)}</dd>
-              </div>
-            )}
-            {profile.birth_date && (
-              <div className={styles.profileRow}>
-                <dt>Дата рождения</dt>
-                <dd>{formatDateFull(profile.birth_date)}</dd>
-              </div>
-            )}
+            <div className={styles.profileRow}>
+              <dt>Группа</dt>
+              <dd>{prof.education_place || "—"}</dd>
+            </div>
+            <div className={styles.profileRow}>
+              <dt>Город</dt>
+              <dd>{prof.city || "—"}</dd>
+            </div>
+            <div className={styles.profileRow}>
+              <dt>Дата рождения</dt>
+              <dd>{profile.birth_date ? formatDateFull(profile.birth_date) : (prof.birth_date ? formatDateFull(prof.birth_date) : "—")}</dd>
+            </div>
+            <div
+              className={styles.profileRow}
+              style={{ cursor: "pointer" }}
+              onClick={() => {
+                navigator.clipboard.writeText(String(profile.telegram_id)).then(() => toast("Telegram ID скопирован", "info")).catch(() => {});
+              }}
+            >
+              <dt>Telegram ID</dt>
+              <dd style={{ color: "#1a2f5a", textDecoration: "underline dotted" }}>{profile.telegram_id} 📋</dd>
+            </div>
             {profile.username && (
               <div className={styles.profileRow}>
                 <dt>Telegram</dt>
@@ -2907,9 +3217,7 @@ function AdminView({
   const filteredUsers = userSearch.trim()
     ? users.filter((u) => u.full_name.toLowerCase().includes(userSearch.toLowerCase()) || (u.username ?? "").toLowerCase().includes(userSearch.toLowerCase()))
     : users;
-  const filteredApps = appStatusFilter
-    ? applications.filter((a) => a.status_code === appStatusFilter)
-    : applications;
+  void appStatusFilter; // kept for potential future use
 
   const adminGroups: Array<{ title: string; tabs: Array<[AdminTab, string, number]> }> = [
     { title: "Состав", tabs: [["users", "Люди", 4], ["applications", "Заявки", 6], ["squads", "Отделения", 6]] },
@@ -3339,6 +3647,22 @@ function AdminView({
                     >
                       Изменить
                     </button>
+                    {ev.requires_response && ev.status_code !== "CANCELLED" && (
+                      <button
+                        type="button"
+                        className={styles.btnMaybe}
+                        disabled={updateEvent.isPending}
+                        onClick={() => {
+                          if (!window.confirm(`Закрыть опрос «${ev.title}»? Голосование будет остановлено.`)) return;
+                          updateEvent.mutate(
+                            { id: ev.id, status_code: "CANCELLED" },
+                            { onSuccess: () => toast("Опрос закрыт", "info") },
+                          );
+                        }}
+                      >
+                        Закрыть опрос
+                      </button>
+                    )}
                     <button
                       type="button"
                       className={styles.btnNotComing}
@@ -3356,88 +3680,115 @@ function AdminView({
           )}
 
           {/* ── Applications ── */}
-          {tab === "applications" && (
-            <>
-              <select
-                value={appStatusFilter}
-                onChange={(e) => setAppStatusFilter(e.target.value)}
-                style={{ marginBottom: 8 }}
-              >
-                <option value="">Все статусы</option>
-                {Object.entries(applicationStatusLabels).map(([k, v]) => (
-                  <option key={k} value={k}>{v}</option>
-                ))}
-              </select>
-              {filteredApps.length === 0 ? <Empty text="Заявок нет" /> : filteredApps.map((item) => (
-                <article className={styles.row} key={item.id}>
-                  <img src={iconPath("my_squad")} alt="" />
-                  <div>
-                    <strong>{item.full_name}</strong>
-                    <span>{applicationStatusLabels[item.status_code] ?? item.status_code} · {item.phone ? formatPhoneDisplay(item.phone) : "телефон не указан"}</span>
-                    {item.city && <span>{item.city}{item.education_place ? ` · ${item.education_place}` : ""}</span>}
-                    {item.admin_comment && <span style={{ color: "#65708a" }}>Комментарий: {item.admin_comment}</span>}
-                  </div>
-                  {!["ACCEPTED", "REJECTED", "ARCHIVED"].includes(item.status_code) && (
-                    <div className={styles.applicationActions}>
-                      <select
-                        value={applicationSquads[item.id] ?? ""}
-                        disabled={isBusy}
-                        onChange={(event) => setApplicationSquads((prev) => ({ ...prev, [item.id]: event.target.value }))}
-                      >
-                        <option value="">Без отделения</option>
-                        {squads.map((squad) => (
-                          <option key={squad.id} value={squad.id}>{squad.name}</option>
-                        ))}
-                      </select>
-                      <input
-                        value={rejectReasons[item.id] ?? ""}
-                        disabled={isBusy}
-                        placeholder="Причина отказа / комментарий"
-                        onChange={(event) => setRejectReasons((prev) => ({ ...prev, [item.id]: event.target.value }))}
-                      />
-                      <select
-                        defaultValue=""
-                        disabled={isBusy}
-                        onChange={(event) => {
-                          const value = event.target.value;
-                          if (!value) return;
-                          updateApplication.mutate(
-                            { id: item.id, status_code: value, admin_comment: rejectReasons[item.id] || undefined },
-                            { onSuccess: () => toast(`Статус → ${applicationStatusLabels[value] ?? value}`, "info") },
-                          );
-                          event.target.value = "";
-                        }}
-                      >
-                        <option value="">Изменить статус...</option>
-                        {["REVIEWING", "NEEDS_INFO", "INVITED_MEETING", "INVITED_NORMATIVES", "AWAITING_DECISION"].map((s) => (
-                          <option key={s} value={s}>{applicationStatusLabels[s] ?? s}</option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        className={styles.btnComing}
-                        disabled={isBusy}
-                        onClick={() => {
-                          const squadId = applicationSquads[item.id];
-                          onAccept(item.id, squadId ? Number(squadId) : null);
-                        }}
-                      >
-                        Принять
-                      </button>
-                      <button
-                        type="button"
-                        className={styles.btnNotComing}
-                        disabled={isBusy}
-                        onClick={() => onReject(item.id, rejectReasons[item.id]?.trim() || undefined)}
-                      >
-                        Отклонить
-                      </button>
-                    </div>
+          {tab === "applications" && (() => {
+            const newApps = (applications ?? []).filter((a) => !["ACCEPTED", "REJECTED", "ARCHIVED", "INVITED_NORMATIVES"].includes(a.status_code));
+            const invitedNorms = (applications ?? []).filter((a) => a.status_code === "INVITED_NORMATIVES");
+            const closedApps = (applications ?? []).filter((a) => ["ACCEPTED", "REJECTED", "ARCHIVED"].includes(a.status_code));
+
+            const renderApp = (item: JoinApplication, stage: "new" | "invited" | "closed") => (
+              <article className={styles.row} key={item.id}>
+                <img src={iconPath("my_squad")} alt="" />
+                <div>
+                  <strong>{item.full_name}</strong>
+                  <span>
+                    {applicationStatusLabels[item.status_code] ?? item.status_code}
+                    {item.phone ? ` · ${formatPhoneDisplay(item.phone)}` : ""}
+                  </span>
+                  {(item.city || item.education_place) && (
+                    <span>{[item.city, item.education_place].filter(Boolean).join(" · ")}</span>
                   )}
-                </article>
-              ))}
-            </>
-          )}
+                  {item.admin_comment && <span style={{ color: "#65708a" }}>Комментарий: {item.admin_comment}</span>}
+                </div>
+                {stage !== "closed" && (
+                  <div className={styles.applicationActions}>
+                    <input
+                      value={rejectReasons[item.id] ?? ""}
+                      disabled={isBusy}
+                      placeholder="Комментарий / причина отказа"
+                      onChange={(event) => setRejectReasons((prev) => ({ ...prev, [item.id]: event.target.value }))}
+                    />
+                    {stage === "new" && (
+                      <button
+                        type="button"
+                        className={styles.btnMaybe}
+                        disabled={isBusy}
+                        style={{ background: "#f39c12", borderColor: "#f39c12", color: "#fff" }}
+                        onClick={() => updateApplication.mutate(
+                          { id: item.id, status_code: "INVITED_NORMATIVES", admin_comment: rejectReasons[item.id] || undefined },
+                          { onSuccess: () => toast("Приглашён на нормативы", "info") },
+                        )}
+                      >
+                        Пригласить на нормативы
+                      </button>
+                    )}
+                    {stage === "invited" && (
+                      <>
+                        <select
+                          value={applicationSquads[item.id] ?? ""}
+                          disabled={isBusy}
+                          onChange={(event) => setApplicationSquads((prev) => ({ ...prev, [item.id]: event.target.value }))}
+                        >
+                          <option value="">Выбрать отделение</option>
+                          {squads.map((squad) => (
+                            <option key={squad.id} value={squad.id}>{squad.name}</option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          className={styles.btnComing}
+                          disabled={isBusy}
+                          onClick={() => {
+                            const squadId = applicationSquads[item.id];
+                            onAccept(item.id, squadId ? Number(squadId) : null);
+                          }}
+                        >
+                          Принять в состав
+                        </button>
+                      </>
+                    )}
+                    <button
+                      type="button"
+                      className={styles.btnNotComing}
+                      disabled={isBusy}
+                      onClick={() => onReject(item.id, rejectReasons[item.id]?.trim() || undefined)}
+                    >
+                      Отклонить
+                    </button>
+                  </div>
+                )}
+              </article>
+            );
+
+            return (
+              <>
+                {newApps.length > 0 && (
+                  <>
+                    <div className={styles.sectionHeader} style={{ background: "#1a2f5a", color: "#fff", borderRadius: 10, padding: "8px 12px", marginBottom: 8 }}>
+                      <strong style={{ color: "#fff" }}>Новые заявки ({newApps.length})</strong>
+                    </div>
+                    {newApps.map((item) => renderApp(item, "new"))}
+                  </>
+                )}
+                {invitedNorms.length > 0 && (
+                  <>
+                    <div className={styles.sectionHeader} style={{ background: "#f39c12", color: "#fff", borderRadius: 10, padding: "8px 12px", marginTop: 12, marginBottom: 8 }}>
+                      <strong style={{ color: "#fff" }}>Приглашены на нормативы ({invitedNorms.length})</strong>
+                    </div>
+                    {invitedNorms.map((item) => renderApp(item, "invited"))}
+                  </>
+                )}
+                {closedApps.length > 0 && (
+                  <>
+                    <div className={styles.sectionHeader} style={{ background: "#8a96b0", color: "#fff", borderRadius: 10, padding: "8px 12px", marginTop: 12, marginBottom: 8 }}>
+                      <strong style={{ color: "#fff" }}>Завершённые ({closedApps.length})</strong>
+                    </div>
+                    {closedApps.map((item) => renderApp(item, "closed"))}
+                  </>
+                )}
+                {(newApps.length + invitedNorms.length + closedApps.length) === 0 && <Empty text="Заявок нет" />}
+              </>
+            );
+          })()}
 
           {/* ── Appeals (обращения) ── */}
           {tab === "appeals" && (
@@ -4037,9 +4388,10 @@ function DashboardCustomizer({
   };
   const [draft, setDraft] = useState(buildDraft);
 
+  const settingsKey = settings.map((s) => `${s.block_code}:${s.sort_order}:${s.is_hidden}`).join(",");
   useEffect(() => {
     setDraft(buildDraft());
-  }, [settings.length, blocks.length]);
+  }, [settingsKey, blocks.length]);
 
   const move = (index: number, direction: -1 | 1) => {
     const newIndex = index + direction;
@@ -4168,6 +4520,8 @@ function SubmissionRow({
   onReview?: (submissionId: number, statusCode: string, reviewerComment?: string) => void;
   isBusy?: boolean;
 }) {
+  const downloadFile = useDownloadFile();
+  const [reviewComment, setReviewComment] = useState("");
   const statusColors: Record<string, string> = {
     PENDING: "#f39c12",
     ACCEPTED: "#27ae60",
@@ -4186,19 +4540,59 @@ function SubmissionRow({
     <article className={styles.row}>
       <img src={iconPath("norms")} alt="" />
       <div>
-        <strong>Сдача #{item.id}</strong>
+        <strong>{(item as unknown as Record<string, unknown>).user_full_name ? String((item as unknown as Record<string, unknown>).user_full_name) : `Сдача #${item.id}`}</strong>
         <span style={{ color: statusColors[item.status_code] ?? "#65708a" }}>
           {statusLabels[item.status_code] ?? item.status_code} · норматив {item.normative_id} · {formatDate(item.submitted_at)}
         </span>
+        {item.comment && <span style={{ color: "#65708a" }}>Пояснение: {item.comment}</span>}
         {item.reviewer_comment && <span>Комментарий: {item.reviewer_comment}</span>}
         {item.grade_value && <span>Оценка: {item.grade_value}</span>}
       </div>
+      {(() => {
+        const tgMatch = item.comment?.match(/\[TG file_id: ([^\]]+)\]/);
+        if (tgMatch) {
+          const tgFileId = tgMatch[1];
+          return (
+            <div className={styles.commandStrip} style={{ gridColumn: "1/-1", marginTop: 4, flexDirection: "column", alignItems: "flex-start", gap: 4 }}>
+              <small style={{ color: "#65708a", fontSize: 11, fontWeight: 700 }}>Файл отправлен через бот</small>
+              <button
+                type="button"
+                onClick={() => window.open(`/api/files/tg/${encodeURIComponent(tgFileId)}`, "_blank")}
+              >
+                📎 Открыть файл
+              </button>
+            </div>
+          );
+        }
+        if (item.file_id) {
+          return (
+            <div className={styles.commandStrip} style={{ gridColumn: "1/-1", marginTop: 4 }}>
+              <button
+                type="button"
+                disabled={downloadFile.isPending}
+                onClick={() => downloadFile.mutate({ fileId: item.file_id as number, fileName: `submission-${item.id}` })}
+              >
+                {downloadFile.isPending ? "Загрузка..." : "📎 Просмотреть файл"}
+              </button>
+            </div>
+          );
+        }
+        return null;
+      })()}
       {onReview && (
-        <div className={styles.actions}>
-          <button type="button" className={styles.btnComing} disabled={isBusy} onClick={() => onReview(item.id, "ACCEPTED")}>Принять</button>
-          <button type="button" className={styles.btnMaybe} disabled={isBusy} onClick={() => onReview(item.id, "NEEDS_REDO")}>Доработать</button>
-          <button type="button" className={styles.btnNotComing} disabled={isBusy} onClick={() => onReview(item.id, "REJECTED")}>Отклонить</button>
-        </div>
+        <>
+          <input
+            style={{ gridColumn: "1/-1", border: "1px solid #d9deea", borderRadius: 10, padding: "8px 12px", fontSize: 16, fontFamily: "inherit", color: "#1a2f5a" }}
+            placeholder="Комментарий проверяющего (необязательно)"
+            value={reviewComment}
+            onChange={(e) => setReviewComment(e.target.value)}
+          />
+          <div className={styles.actions}>
+            <button type="button" className={styles.btnComing} disabled={isBusy} onClick={() => onReview(item.id, "ACCEPTED", reviewComment || undefined)}>Принять</button>
+            <button type="button" className={styles.btnMaybe} disabled={isBusy} onClick={() => onReview(item.id, "NEEDS_REDO", reviewComment || undefined)}>Доработать</button>
+            <button type="button" className={styles.btnNotComing} disabled={isBusy} onClick={() => onReview(item.id, "REJECTED", reviewComment || undefined)}>Отклонить</button>
+          </div>
+        </>
       )}
     </article>
   );

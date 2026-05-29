@@ -1674,8 +1674,8 @@ button[data-active="true"] .navIcon img {
   margin-bottom: 8px;
 }
 
-/* ── Dark Mode ───────────────────────────────── */
-[data-theme="dark"] {
+/* ── Dark Mode — disabled, always light ─────── */
+[data-theme="dark"]:not([data-theme="light"]) {
   --text: #e8edf5;
   --page: #1a1f2e;
 

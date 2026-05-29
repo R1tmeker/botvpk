@@ -1,4 +1,8 @@
 /* ── Donut Chart ────────────────────────────────── */
+@keyframes donutArcIn {
+  from { stroke-dasharray: 0 9999; }
+}
+
 .donut {
   transform: rotate(-90deg);
   flex-shrink: 0;
@@ -6,6 +10,7 @@
 
 .donutArc {
   transform-origin: center;
+  animation: donutArcIn 0.9s cubic-bezier(0.4, 0, 0.2, 1) both;
 }
 
 .donutLabel {

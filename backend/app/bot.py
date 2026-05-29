@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import logging
 from datetime import date, datetime, timedelta, timezone
 
@@ -11,6 +13,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     BotCommand,
+    BufferedInputFile,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -27,7 +30,7 @@ from sqlalchemy import select
 
 from .config import get_settings
 from .database import AsyncSessionLocal
-from .models import AbsenceReason, Attendance, EventResponse, JoinApplication, LearningMaterial, Normative, NormativeSubmission, Notification, ScheduleEvent, User
+from .models import AbsenceReason, Attendance, EventResponse, JoinApplication, LearningMaterial, Normative, NormativeSubmission, Notification, ScheduleEvent, Squad, User
 from .roles import RoleLevel, role_level
 from .utils.audit import record_audit
 
@@ -1007,6 +1010,111 @@ async def normative_file_submit(callback: CallbackQuery, state: FSMContext) -> N
         await session2.commit()
 
 
+# ──────────────────────── export ────────────────────────────────────────────
+
+EXPORT_COLUMNS = [
+    "ID", "Telegram ID", "Имя", "Роль", "Отделение",
+    "Статус", "Телефон", "Дата рождения", "Дата привязки",
+]
+
+
+async def _build_export_rows(user: User) -> tuple[list[list[str]], dict[int, str]]:
+    async with AsyncSessionLocal() as session:
+        stmt = select(User).where(User.role_code != "PUBLIC_USER").order_by(User.full_name)
+        if role_level(user.role_code) < RoleLevel.DEPUTY_PLATOON_COMMANDER and user.squad_id:
+            stmt = stmt.where(User.squad_id == user.squad_id)
+        users = list((await session.scalars(stmt)).all())
+        squads = {s.id: s.name for s in (await session.scalars(select(Squad))).all()}
+    rows = []
+    for u in users:
+        rows.append([
+            str(u.id or ""),
+            str(u.telegram_id or ""),
+            u.full_name or "",
+            u.role_code or "",
+            squads.get(u.squad_id, "—") if u.squad_id else "—",
+            u.status_code or "",
+            u.phone or "",
+            u.birth_date.strftime("%d.%m.%Y") if u.birth_date else "",
+            u.linked_at.strftime("%d.%m.%Y") if getattr(u, "linked_at", None) else "",
+        ])
+    return rows, squads
+
+
+@router.message(Command("export"))
+async def cmd_export(message: Message) -> None:
+    user = await find_user(message.from_user.id)
+    if user is None or user_role(user) < RoleLevel.DEPUTY_SQUAD_COMMANDER:
+        await message.answer("Нет прав для экспорта данных.", parse_mode=None)
+        return
+    await message.answer(
+        "Выберите формат экспорта состава:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="Excel (.xlsx)", callback_data="export:xlsx"),
+            InlineKeyboardButton(text="CSV", callback_data="export:csv"),
+        ]]),
+        parse_mode=None,
+    )
+
+
+@router.callback_query(F.data.startswith("export:"))
+async def cb_export(callback: CallbackQuery, bot: Bot) -> None:
+    fmt = (callback.data or "").split(":")[1]
+    user = await find_user(callback.from_user.id)
+    if user is None or user_role(user) < RoleLevel.DEPUTY_SQUAD_COMMANDER:
+        await callback.answer("Нет прав.", show_alert=True)
+        return
+
+    if callback.message:
+        await callback.message.edit_text("Формирую файл, подождите...")
+    await callback.answer()
+
+    rows, _ = await _build_export_rows(user)
+
+    if fmt == "csv":
+        buf = io.StringIO()
+        buf.write("﻿")  # BOM for Excel
+        writer = csv.writer(buf, delimiter=";")
+        writer.writerow(EXPORT_COLUMNS)
+        for row in rows:
+            writer.writerow(row)
+        data = buf.getvalue().encode("utf-8")
+        await bot.send_document(
+            callback.from_user.id,
+            BufferedInputFile(data, filename="vpk-roster.csv"),
+            caption=f"Состав ВПК Звезда ({len(rows)} чел.)",
+        )
+    elif fmt == "xlsx":
+        try:
+            import openpyxl
+            from openpyxl.styles import Font, PatternFill
+        except ImportError:
+            await bot.send_message(callback.from_user.id, "Сервер не поддерживает XLSX. Используйте CSV.", parse_mode=None)
+            return
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Состав"
+        header_fill = PatternFill(fill_type="solid", fgColor="1a2f5a")
+        header_font = Font(color="FFFFFF", bold=True)
+        ws.append(EXPORT_COLUMNS)
+        for cell in ws[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+        for row in rows:
+            ws.append(row)
+        buf_b = io.BytesIO()
+        wb.save(buf_b)
+        buf_b.seek(0)
+        await bot.send_document(
+            callback.from_user.id,
+            BufferedInputFile(buf_b.read(), filename="vpk-roster.xlsx"),
+            caption=f"Состав ВПК Звезда ({len(rows)} чел.)",
+        )
+
+    if callback.message:
+        await callback.message.edit_text(f"Файл отправлен ({len(rows)} участников).")
+
+
 # ──────────────────────── inline mode ───────────────────────────────────────
 
 
@@ -1086,6 +1194,7 @@ async def main() -> None:
         BotCommand(command="notifications", description="Мои уведомления"),
         BotCommand(command="join", description="Заявка на вступление"),
         BotCommand(command="profile", description="Мой профиль"),
+        BotCommand(command="export", description="Выгрузка состава (CSV/Excel)"),
         BotCommand(command="help", description="Помощь"),
     ])
     dispatcher = Dispatcher(storage=MemoryStorage())

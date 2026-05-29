@@ -548,11 +548,11 @@ function StatusCarousel({
     >
       {current.type === "profile" ? (
         <>
-          <div>
+          <div key={`${current.key}-info`} className={styles.carouselSlide}>
             <h1>{level >= 3 ? "Личный кабинет" : "Вступление в клуб"}</h1>
             <p>{profile.full_name}</p>
           </div>
-          <dl>
+          <dl key={`${current.key}-stats`} className={styles.carouselSlide}>
             <div>
               <dt>Отделение</dt>
               <dd>{profile.squad_id ?? "—"}</dd>
@@ -564,7 +564,7 @@ function StatusCarousel({
           </dl>
         </>
       ) : (
-        <div className={styles.statusPromoContent}>
+        <div key={current.key} className={`${styles.statusPromoContent} ${styles.carouselSlide}`}>
           <span>Промо ВПК</span>
           <h1>{current.block.title}</h1>
           {current.block.body && <p>{current.block.body}</p>}
@@ -765,11 +765,18 @@ export function App({ webApp }: Props) {
     )}
     <main className={styles.shell}>
       <header className={styles.header}>
-        <img src="/assets/zvezda-emblem.jpg" alt="ВПК Звезда" />
-        <div>
-          <strong>ВПК Звезда</strong>
-          <span>{roleLabels[profile.role_code]}</span>
-        </div>
+        <button
+          type="button"
+          className={styles.headerHomeBtn}
+          onClick={() => openView("dashboard")}
+          aria-label="На главную"
+        >
+          <img src="/assets/zvezda-emblem.jpg" alt="ВПК Звезда" />
+          <div>
+            <strong>ВПК Звезда</strong>
+            <span>{roleLabels[profile.role_code]}</span>
+          </div>
+        </button>
       </header>
 
       <StatusCarousel
@@ -1808,8 +1815,8 @@ function ScheduleView({
         <div className={styles.filterChips}>
           <button type="button" className={styles.chip} data-active={filter === "all"} onClick={() => setFilter("all")}>Все</button>
           <button type="button" className={styles.chip} data-active={filter === "unanswered"} onClick={() => setFilter("unanswered")}>Без ответа</button>
-          <button type="button" className={styles.chip} data-active={filter === "coming"} data-color="green" onClick={() => setFilter("coming")}>Иду ✅</button>
-          <button type="button" className={styles.chip} data-active={filter === "not_coming"} data-color="red" onClick={() => setFilter("not_coming")}>Не иду ❌</button>
+          <button type="button" className={styles.chip} data-active={filter === "coming"} data-color="green" onClick={() => setFilter("coming")}>Иду</button>
+          <button type="button" className={styles.chip} data-active={filter === "not_coming"} data-color="red" onClick={() => setFilter("not_coming")}>Не иду</button>
         </div>
       )}
       <div className={styles.list}>
@@ -1914,12 +1921,15 @@ function AttendanceView({
   const late = statsByCode.get("LATE") ?? 0;
 
   // Build heatmap data: use marked_at or event start_datetime as fallback
+  // Convert to local app timezone so calendar cells match displayed dates
   const eventDateMap = new Map(schedule.map((e) => [e.id, e.start_datetime]));
+  const toLocalDate = (iso: string) =>
+    new Intl.DateTimeFormat("sv-SE", { timeZone: _appTimezone }).format(new Date(iso));
   const heatData = records
     .map((r) => {
       const dateStr = r.marked_at ?? eventDateMap.get(r.event_id) ?? null;
       if (!dateStr) return null;
-      return { date: dateStr.slice(0, 10), status: r.status_code };
+      return { date: toLocalDate(dateStr), status: r.status_code };
     })
     .filter((r): r is { date: string; status: string } => r !== null);
 
@@ -2016,7 +2026,7 @@ function AttendanceView({
                   setDraftAttendance(preset);
                 }}
               >
-                ✅ Все присутствуют
+                Все присутствуют
               </button>
               <button
                 type="button"
@@ -2027,7 +2037,7 @@ function AttendanceView({
                   setDraftAttendance(preset);
                 }}
               >
-                ❌ Все отсутствуют
+                Все отсутствуют
               </button>
             </div>
           )}
@@ -2078,7 +2088,7 @@ function AttendanceView({
                   );
                 }}
               >
-                {markAttendance.isPending ? "Сохраняем..." : "💾 Сохранить отметки"}
+                {markAttendance.isPending ? "Сохраняем..." : "Сохранить отметки"}
               </button>
             </div>
           )}
@@ -2092,6 +2102,26 @@ function AttendanceView({
       )}
     </div>
   );
+}
+
+function getWeekStart(): Date {
+  const d = new Date();
+  const day = d.getDay();
+  d.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function getNextMonday(): Date {
+  const d = new Date();
+  const day = d.getDay();
+  d.setDate(d.getDate() + (day === 0 ? 1 : 8 - day));
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function formatShortDate(d: Date): string {
+  return new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long" }).format(d);
 }
 
 /* ─────────── NormativesView ─────────── */
@@ -2176,68 +2206,94 @@ function NormativesView({
             )}
           </>
         )}
-        {tab === "active" && activeItems.map((item) => {
-          const attached = uploadedFiles[item.id] ?? [];
-          return (
-            <article className={styles.row} key={item.id}>
-              <img src={iconPath("norms")} alt="" />
-              <div>
-                <strong>{item.title}</strong>
-                <span>{item.description ?? "описание будет добавлено"} · до {formatDate(item.deadline_at)}</span>
-              </div>
-              {(item.instruction_video_url || item.instruction_video_file_id) && (
-                <div className={styles.filePreviewActions}>
-                  <button
-                    type="button"
-                    disabled={openFile.isPending}
-                    onClick={() => {
-                      if (item.instruction_video_url) {
-                        window.open(item.instruction_video_url, "_blank");
-                      } else if (item.instruction_video_file_id) {
-                        openFile.mutate({ fileId: item.instruction_video_file_id });
-                      }
-                    }}
-                  >
-                    {openFile.isPending ? "Открываем..." : "Смотреть видео выполнения"}
-                  </button>
+        {tab === "active" && (() => {
+          const weekStart = getWeekStart();
+          const nextMonday = getNextMonday();
+          return activeItems.map((item) => {
+            const attached = uploadedFiles[item.id] ?? [];
+            const acceptedThisWeek = submissions.find(
+              (s) => s.normative_id === item.id && s.status_code === "ACCEPTED" && new Date(s.submitted_at) >= weekStart,
+            );
+            const pendingSub = !acceptedThisWeek && submissions.find(
+              (s) => s.normative_id === item.id && s.status_code === "PENDING",
+            );
+            return (
+              <article className={styles.row} key={item.id}>
+                <img src={iconPath("norms")} alt="" />
+                <div>
+                  <strong>{item.title}</strong>
+                  <span>{item.description ?? "описание будет добавлено"} · до {formatDate(item.deadline_at)}</span>
                 </div>
-              )}
-              <div className={styles.fileUploadArea}>
-                {attached.map((file) => (
-                  <div className={styles.fileAttached} key={file.id}>
-                    <span>{file.name}</span>
+                {(item.instruction_video_url || item.instruction_video_file_id) && (
+                  <div className={styles.filePreviewActions}>
                     <button
                       type="button"
-                      onClick={() => setUploadedFiles((prev) => ({ ...prev, [item.id]: (prev[item.id] ?? []).filter((entry) => entry.id !== file.id) }))}
+                      disabled={openFile.isPending}
+                      onClick={() => {
+                        if (item.instruction_video_url) {
+                          window.open(item.instruction_video_url, "_blank");
+                        } else if (item.instruction_video_file_id) {
+                          openFile.mutate({ fileId: item.instruction_video_file_id });
+                        }
+                      }}
                     >
-                      Убрать
+                      {openFile.isPending ? "Открываем..." : "Смотреть видео выполнения"}
                     </button>
                   </div>
-                ))}
-                <FilePicker
-                  accept={FILE_PREVIEW_ACCEPT}
-                  label={attached.length ? "Добавить ещё файл" : "Прикрепить файл"}
-                  onFile={(file) => handleFileChange(item.id, file)}
-                  className={styles.fileButton}
-                />
-                <input
-                  placeholder="Комментарий к сдаче..."
-                  value={comments[item.id] ?? ""}
-                  onChange={(e) => setComments((prev) => ({ ...prev, [item.id]: e.target.value }))}
-                  style={{ border: "1px solid #d9deea", borderRadius: 10, padding: "8px 12px", fontSize: 16, width: "100%", fontFamily: "inherit", color: "#1a2f5a" }}
-                />
-                <button
-                  className={styles.iconAction}
-                  type="button"
-                  disabled={isBusy || upload.isPending}
-                  onClick={() => onSubmit(item.id, comments[item.id] || undefined, attached.map((file) => file.id))}
-                >
-                  {isBusy || upload.isPending ? "Отправляем..." : "Отправить на проверку"}
-                </button>
-              </div>
-            </article>
-          );
-        })}
+                )}
+                {acceptedThisWeek ? (
+                  <div className={styles.normLocked}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                      <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/>
+                    </svg>
+                    Сдан на этой неделе · следующая сдача с {formatShortDate(nextMonday)}
+                  </div>
+                ) : pendingSub ? (
+                  <div className={styles.normPending}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+                    </svg>
+                    Отправлено на проверку командиру
+                  </div>
+                ) : (
+                  <div className={styles.fileUploadArea}>
+                    {attached.map((file) => (
+                      <div className={styles.fileAttached} key={file.id}>
+                        <span>{file.name}</span>
+                        <button
+                          type="button"
+                          onClick={() => setUploadedFiles((prev) => ({ ...prev, [item.id]: (prev[item.id] ?? []).filter((entry) => entry.id !== file.id) }))}
+                        >
+                          Убрать
+                        </button>
+                      </div>
+                    ))}
+                    <FilePicker
+                      accept={FILE_PREVIEW_ACCEPT}
+                      label={attached.length ? "Добавить ещё файл" : "Прикрепить файл"}
+                      onFile={(file) => handleFileChange(item.id, file)}
+                      className={styles.fileButton}
+                    />
+                    <input
+                      placeholder="Комментарий к сдаче..."
+                      value={comments[item.id] ?? ""}
+                      onChange={(e) => setComments((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                      style={{ border: "1px solid #d9deea", borderRadius: 10, padding: "8px 12px", fontSize: 16, width: "100%", fontFamily: "inherit", color: "#1a2f5a" }}
+                    />
+                    <button
+                      className={styles.iconAction}
+                      type="button"
+                      disabled={isBusy || upload.isPending}
+                      onClick={() => onSubmit(item.id, comments[item.id] || undefined, attached.map((file) => file.id))}
+                    >
+                      {isBusy || upload.isPending ? "Отправляем..." : "Отправить на проверку"}
+                    </button>
+                  </div>
+                )}
+              </article>
+            );
+          });
+        })()}
         {tab === "mine" && (submissions.length === 0
           ? <Empty text="Сдач пока нет" />
           : submissions.map((item) => <SubmissionRow key={item.id} item={item} />)
@@ -2875,7 +2931,11 @@ function MemberModal({ user, squads, onClose }: { user: UserRecord; squads: Squa
               >
                 <dt>{label}</dt>
                 <dd style={link ? { color: "#1a2f5a", textDecoration: "underline" } : copyable && value !== "—" ? { textDecoration: "underline dotted" } : undefined}>
-                  {value} {copyable && value !== "—" ? "📋" : ""}
+                  {value} {copyable && value !== "—" ? (
+                    <svg style={{ display: "inline", verticalAlign: "middle", marginLeft: 3 }} width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                      <path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z"/>
+                    </svg>
+                  ) : ""}
                 </dd>
               </div>
             ))}
@@ -3285,7 +3345,12 @@ function ProfileView({
               }}
             >
               <dt>Telegram ID</dt>
-              <dd style={{ color: "#1a2f5a", textDecoration: "underline dotted" }}>{profile.telegram_id} 📋</dd>
+              <dd style={{ color: "#1a2f5a", textDecoration: "underline dotted" }}>
+                {profile.telegram_id}
+                <svg style={{ display: "inline", verticalAlign: "middle", marginLeft: 4 }} width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z"/>
+                </svg>
+              </dd>
             </div>
             {profile.username && (
               <div className={styles.profileRow}>
@@ -4990,7 +5055,17 @@ function Empty({ text }: { text: string }) {
 function StreakBadge({ current, best }: { current: number; best: number }) {
   return (
     <div className={styles.streakBadge}>
-      <span className={styles.streakFire}>{current > 0 ? "🔥" : "💤"}</span>
+      <span className={styles.streakIcon} data-active={current > 0 ? "true" : "false"}>
+        {current > 0 ? (
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 2c-1.2 2.9-3.8 5.1-3 8.5-.8-.9-1-2.2-.6-3.3C6 9 5.5 11.8 7 14c-1.2-1-1.8-2.6-1.5-4-2.2 2-3 5.2-1.5 7.8C5.4 20.1 8.4 22 12 22s6.6-1.9 8-5.2C22 13 19.4 9 15.5 7.5c.4 1.3.2 2.7-.5 3.8C14.2 7.8 13.5 4.7 12 2z"/>
+          </svg>
+        ) : (
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 3a9 9 0 1 0 9 9c0-.46-.04-.92-.1-1.36a5.4 5.4 0 0 1-4.4 2.26A5.4 5.4 0 0 1 11.1 7.5 5.4 5.4 0 0 1 13.36 3.1 9.05 9.05 0 0 0 12 3z"/>
+          </svg>
+        )}
+      </span>
       <div>
         <strong>
           {current > 0

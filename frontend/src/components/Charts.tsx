@@ -40,9 +40,6 @@ export function DonutChart({
   label?: string | number;
   sublabel?: string;
 }) {
-  const [animated, setAnimated] = useState(false);
-  useEffect(() => { const t = setTimeout(() => setAnimated(true), 50); return () => clearTimeout(t); }, []);
-
   const r = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * r;
   const cx = size / 2;
@@ -53,15 +50,13 @@ export function DonutChart({
   const arcs = visibleSegments.map((seg) => {
     const fraction = seg.value / total;
     const dash = fraction * circumference;
-    const gap = circumference - dash;
     const startOffset = circumference - offset * circumference / total;
     offset += seg.value;
-    return { ...seg, dash, gap, startOffset };
+    return { ...seg, dash, gap: circumference - dash, startOffset };
   });
 
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className={styles.donut}>
-      {/* background track */}
       <circle cx={cx} cy={cx} r={r} fill="none" stroke="#e8ecf0" strokeWidth={strokeWidth} />
       {arcs.map((arc, i) => (
         <circle
@@ -72,11 +67,11 @@ export function DonutChart({
           fill="none"
           stroke={arc.color}
           strokeWidth={strokeWidth}
-          strokeDasharray={`${animated ? arc.dash : 0} ${circumference}`}
+          strokeDasharray={`${arc.dash} ${arc.gap}`}
           strokeDashoffset={arc.startOffset}
           strokeLinecap="round"
           className={styles.donutArc}
-          style={{ transition: `stroke-dasharray 0.9s cubic-bezier(0.4,0,0.2,1) ${i * 0.1}s` }}
+          style={{ animationDelay: `${i * 0.1}s` }}
         />
       ))}
       {label !== undefined && (

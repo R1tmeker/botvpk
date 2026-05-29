@@ -14,6 +14,22 @@
   align-items: center;
   gap: 12px;
   color: #fff;
+}
+
+.headerHomeBtn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+
+  &:active { opacity: 0.8; }
 
   img {
     width: 48px;
@@ -21,6 +37,7 @@
     border: 1px solid rgba(255, 255, 255, 0.34);
     border-radius: 50%;
     object-fit: cover;
+    flex-shrink: 0;
   }
 
   div {
@@ -98,6 +115,21 @@
     font-size: 15px;
     font-weight: 900;
   }
+}
+
+@keyframes carouselSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.carouselSlide {
+  animation: carouselSlideIn 0.28s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .statusCarousel {
@@ -1690,10 +1722,59 @@ button[data-active="true"] .navIcon img {
   }
 }
 
-.streakFire {
-  font-size: 28px;
-  line-height: 1;
+.streakIcon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
   flex-shrink: 0;
+  border-radius: 50%;
+
+  &[data-active="true"] {
+    background: rgba(231, 76, 60, 0.12);
+    color: #e74c3c;
+  }
+
+  &[data-active="false"] {
+    background: rgba(130, 144, 168, 0.12);
+    color: #8a96b0;
+  }
+
+  svg {
+    width: 22px;
+    height: 22px;
+  }
+}
+
+/* ── Normative Locked ────────────────────────── */
+.normLocked {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border: 1.5px solid rgba(39, 174, 96, 0.28);
+  border-radius: 10px;
+  background: rgba(39, 174, 96, 0.06);
+  color: #27ae60;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.normPending {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border: 1.5px solid rgba(243, 156, 18, 0.28);
+  border-radius: 10px;
+  background: rgba(243, 156, 18, 0.06);
+  color: #d68910;
+  font-size: 12px;
+  font-weight: 900;
 }
 
 /* ── Activity Header / Collapse ─────────────── */
@@ -2065,9 +2146,11 @@ button[data-active="true"] .navIcon img {
     color: #fff;
   }
 
-  &[data-color="green"][data-active="true"] { border-color: #27ae60; background: #27ae60; }
-  &[data-color="red"][data-active="true"] { border-color: #e74c3c; background: #e74c3c; }
-  &[data-color="orange"][data-active="true"] { border-color: #f39c12; background: #f39c12; }
+  &[data-color="green"] { border-color: rgba(39,174,96,0.4); color: #27ae60; }
+  &[data-color="red"] { border-color: rgba(231,76,60,0.4); color: #c0392b; }
+  &[data-color="green"][data-active="true"] { border-color: #27ae60; background: #27ae60; color: #fff; }
+  &[data-color="red"][data-active="true"] { border-color: #e74c3c; background: #e74c3c; color: #fff; }
+  &[data-color="orange"][data-active="true"] { border-color: #f39c12; background: #f39c12; color: #fff; }
 }
 
 /* ── Charts Section ──────────────────────────── */

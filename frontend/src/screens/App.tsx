@@ -468,6 +468,130 @@ function avatarPath(fileId: number | null | undefined) {
   return fileId ? apiPath(`/files/avatars/${fileId}`) : null;
 }
 
+function runPromoAction(block: PromoBlock, navigate: (view: string) => void) {
+  if (block.button_url) {
+    window.open(block.button_url, "_blank", "noopener");
+    return;
+  }
+  const sectionMap: Record<string, string> = {
+    OPEN_SECTION: "dashboard",
+    OPEN_SCHEDULE: "schedule",
+    OPEN_NORMATIVE: "normatives",
+    OPEN_COURSE: "learning",
+    OPEN_FORM: "appeals",
+  };
+  const section = block.action_type_code ? sectionMap[block.action_type_code] : null;
+  if (section) navigate(section);
+}
+
+function StatusCarousel({
+  profile,
+  level,
+  unreadCount,
+  promo,
+  navigate,
+}: {
+  profile: UserProfile;
+  level: number;
+  unreadCount: number;
+  promo: PromoBlock[];
+  navigate: (view: string) => void;
+}) {
+  const slides = useMemo(
+    () => [
+      { type: "profile" as const, key: "profile" },
+      ...promo.filter((block) => block.is_active).slice(0, 5).map((block) => ({
+        type: "promo" as const,
+        key: `promo-${block.id}`,
+        block,
+      })),
+    ],
+    [promo],
+  );
+  const [index, setIndex] = useState(0);
+  const touchStartX = useRef<number | null>(null);
+  const current = slides[index % slides.length];
+  const goTo = useCallback((next: number) => {
+    setIndex((next + slides.length) % slides.length);
+  }, [slides.length]);
+
+  useEffect(() => {
+    if (index >= slides.length) setIndex(0);
+  }, [index, slides.length]);
+
+  useEffect(() => {
+    if (slides.length <= 1) return undefined;
+    const timer = window.setInterval(() => goTo(index + 1), 6500);
+    return () => window.clearInterval(timer);
+  }, [goTo, index, slides.length]);
+
+  const promoTheme: Record<string, string> = {
+    INFO: "linear-gradient(135deg, rgba(41,128,185,0.96), rgba(31,111,168,0.96))",
+    SUCCESS: "linear-gradient(135deg, rgba(39,174,96,0.96), rgba(30,148,80,0.96))",
+    WARNING: "linear-gradient(135deg, rgba(230,126,34,0.96), rgba(212,96,16,0.96))",
+    DANGER: "linear-gradient(135deg, rgba(231,76,60,0.96), rgba(192,57,43,0.96))",
+    PROMO: "linear-gradient(135deg, rgba(18,37,83,0.98), rgba(44,74,138,0.96))",
+    DEFAULT: "linear-gradient(135deg, rgba(18,37,83,0.98), rgba(44,74,138,0.96))",
+  };
+
+  return (
+    <section
+      className={`${styles.statusPanel} ${styles.statusCarousel} ${current.type === "promo" ? styles.statusPromoPanel : ""}`}
+      style={current.type === "promo" ? { background: promoTheme[current.block.style_code] ?? promoTheme.DEFAULT } : undefined}
+      onTouchStart={(event) => { touchStartX.current = event.touches[0].clientX; }}
+      onTouchEnd={(event) => {
+        if (touchStartX.current === null || slides.length <= 1) return;
+        const diff = touchStartX.current - event.changedTouches[0].clientX;
+        if (Math.abs(diff) > 42) goTo(index + (diff > 0 ? 1 : -1));
+        touchStartX.current = null;
+      }}
+    >
+      {current.type === "profile" ? (
+        <>
+          <div>
+            <h1>{level >= 3 ? "Личный кабинет" : "Вступление в клуб"}</h1>
+            <p>{profile.full_name}</p>
+          </div>
+          <dl>
+            <div>
+              <dt>Отделение</dt>
+              <dd>{profile.squad_id ?? "—"}</dd>
+            </div>
+            <div>
+              <dt>Уведомления</dt>
+              <dd>{unreadCount}</dd>
+            </div>
+          </dl>
+        </>
+      ) : (
+        <div className={styles.statusPromoContent}>
+          <span>Промо ВПК</span>
+          <h1>{current.block.title}</h1>
+          {current.block.body && <p>{current.block.body}</p>}
+          {current.block.button_text && (current.block.button_url || current.block.action_type_code) && (
+            <button type="button" onClick={() => runPromoAction(current.block, navigate)}>
+              {current.block.button_text}
+            </button>
+          )}
+        </div>
+      )}
+      {slides.length > 1 && (
+        <div className={styles.statusDots} aria-label="Слайды">
+          {slides.map((slide, dotIndex) => (
+            <button
+              key={slide.key}
+              type="button"
+              aria-label={`Открыть слайд ${dotIndex + 1}`}
+              data-active={dotIndex === index % slides.length}
+              onClick={() => goTo(dotIndex)}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 /* ─────────────────────────── App ─────────────────────────── */
 
 export function App({ webApp }: Props) {
@@ -648,22 +772,13 @@ export function App({ webApp }: Props) {
         </div>
       </header>
 
-      <section className={styles.statusPanel}>
-        <div>
-          <h1>{level >= 3 ? "Личный кабинет" : "Вступление в клуб"}</h1>
-          <p>{profile.full_name}</p>
-        </div>
-        <dl>
-          <div>
-            <dt>Отделение</dt>
-            <dd>{profile.squad_id ?? "—"}</dd>
-          </div>
-          <div>
-            <dt>Новых</dt>
-            <dd>{unreadCount}</dd>
-          </div>
-        </dl>
-      </section>
+      <StatusCarousel
+        profile={profile}
+        level={level}
+        unreadCount={unreadCount}
+        promo={promo.data ?? []}
+        navigate={openView}
+      />
 
       <section className={styles.menuGrid} aria-label="Разделы">
         {cards.map((card) => (

@@ -18,7 +18,6 @@ import {
   useCreateJoinApplication,
   useCreateSquad,
   useDashboardSettings,
-  useDownloadFile,
   useExportReport,
   useGradesReport,
   useJoinEvents,
@@ -106,6 +105,7 @@ import { api } from "../api/client";
 import type {
   Appeal,
   AppealMessage,
+  Announcement,
   AuditLog,
   AttendanceRecord,
   CandidateEvent,
@@ -140,7 +140,7 @@ import { ToastContainer, toast } from "../components/Toast";
 import { PromoCard, PromoStrip, AdminPromoCard, PromoEditForm } from "../components/PromoCard";
 import { MilestoneToast } from "../components/Confetti";
 
-function FilePicker({ accept, onFile, label = "📎 Прикрепить файл", className }: {
+function FilePicker({ accept, onFile, label = "Прикрепить файл", className }: {
   accept: string;
   onFile: (file: File) => void;
   label?: string;
@@ -165,6 +165,16 @@ function FilePicker({ accept, onFile, label = "📎 Прикрепить фай�
       />
     </>
   );
+}
+
+const FILE_PREVIEW_ACCEPT = "video/*,image/*,application/pdf";
+
+function materialTypeFromMime(mimeType?: string | null) {
+  if (!mimeType) return "FILE";
+  if (mimeType.startsWith("video/")) return "VIDEO";
+  if (mimeType.startsWith("image/")) return "IMAGE";
+  if (mimeType === "application/pdf") return "PDF";
+  return "FILE";
 }
 
 type Props = {
@@ -212,6 +222,7 @@ type AppealPayload = {
   category_code: string;
   urgency_code: string;
   is_anonymous: boolean;
+  file_id?: number | null;
 };
 
 type AnnouncementPayload = {
@@ -219,6 +230,7 @@ type AnnouncementPayload = {
   body: string;
   target_type: string;
   target_squad_id?: number | null;
+  file_id?: number | null;
   status_code: string;
   send_to_tg: boolean;
   send_to_app: boolean;
@@ -2006,8 +2018,12 @@ function NormativesView({
   }, [tab, canReview]);
 
   const handleFileChange = async (normativeId: number, file: File) => {
-    const result = await upload.mutateAsync(file);
-    setUploadedFiles((prev) => ({ ...prev, [normativeId]: [...(prev[normativeId] ?? []), { id: result.id, name: file.name }] }));
+    try {
+      const result = await upload.mutateAsync(file);
+      setUploadedFiles((prev) => ({ ...prev, [normativeId]: [...(prev[normativeId] ?? []), { id: result.id, name: file.name }] }));
+    } catch {
+      toast("Не удалось загрузить файл", "error");
+    }
   };
 
   return (
@@ -2055,9 +2071,10 @@ function NormativesView({
                 <span>{item.description ?? "описание будет добавлено"} · до {formatDate(item.deadline_at)}</span>
               </div>
               {(item.instruction_video_url || item.instruction_video_file_id) && (
-                <div className={styles.commandStrip} style={{ gridColumn: "1/-1", marginTop: 4 }}>
+                <div className={styles.filePreviewActions}>
                   <button
                     type="button"
+                    disabled={openFile.isPending}
                     onClick={() => {
                       if (item.instruction_video_url) {
                         window.open(item.instruction_video_url, "_blank");
@@ -2066,7 +2083,7 @@ function NormativesView({
                       }
                     }}
                   >
-                    Видео выполнения
+                    {openFile.isPending ? "Открываем..." : "Смотреть видео выполнения"}
                   </button>
                 </div>
               )}
@@ -2083,7 +2100,7 @@ function NormativesView({
                   </div>
                 ))}
                 <FilePicker
-                  accept="video/*,image/*,application/pdf"
+                  accept={FILE_PREVIEW_ACCEPT}
                   label={attached.length ? "Добавить ещё файл" : "Прикрепить файл"}
                   onFile={(file) => handleFileChange(item.id, file)}
                   className={styles.fileButton}
@@ -2131,15 +2148,16 @@ function NormativesView({
                 <span>{item.description ?? "закрытый норматив"} · до {formatDate(item.deadline_at)}</span>
               </div>
               {(item.instruction_video_url || item.instruction_video_file_id) && (
-                <div className={styles.commandStrip} style={{ gridColumn: "1/-1", marginTop: 4 }}>
+                <div className={styles.filePreviewActions}>
                   <button
                     type="button"
+                    disabled={openFile.isPending}
                     onClick={() => {
                       if (item.instruction_video_url) window.open(item.instruction_video_url, "_blank");
                       else if (item.instruction_video_file_id) openFile.mutate({ fileId: item.instruction_video_file_id });
                     }}
                   >
-                    Видео выполнения
+                    {openFile.isPending ? "Открываем..." : "Смотреть видео выполнения"}
                   </button>
                 </div>
               )}
@@ -2200,12 +2218,15 @@ function AnnouncementsView({
   onCreate,
   isSubmitting,
 }: {
-  items: Array<{ id: number; title: string; body: string; status_code: string }>;
+  items: Announcement[];
   onCreate: (payload: AnnouncementPayload) => void;
   isSubmitting: boolean;
 }) {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  const [attachment, setAttachment] = useState<{ id: number; name: string } | null>(null);
+  const upload = useUploadFile();
+  const openFile = useOpenFile();
   const canSubmit = title.trim().length > 0 && body.trim().length > 0;
   return (
     <div className={styles.panel}>
@@ -2216,10 +2237,29 @@ function AnnouncementsView({
       <div className={styles.formBlock}>
         <input placeholder="Заголовок" value={title} onChange={(e) => setTitle(e.target.value)} />
         <textarea placeholder="Текст объявления" rows={3} value={body} onChange={(e) => setBody(e.target.value)} />
+        {attachment && (
+          <div className={styles.fileAttached}>
+            <span>{attachment.name}</span>
+            <button type="button" onClick={() => setAttachment(null)}>Убрать</button>
+          </div>
+        )}
+        <FilePicker
+          accept={FILE_PREVIEW_ACCEPT}
+          label={upload.isPending ? "Загружаем..." : attachment ? "Заменить вложение" : "Прикрепить файл или видео"}
+          className={styles.fileButton}
+          onFile={async (file) => {
+            try {
+              const result = await upload.mutateAsync(file);
+              setAttachment({ id: result.id, name: result.original_name || file.name });
+            } catch {
+              toast("Не удалось загрузить вложение", "error");
+            }
+          }}
+        />
         <button
           type="button"
-          disabled={!canSubmit || isSubmitting}
-          onClick={() => onCreate({ title, body, target_type: "SQUAD", status_code: "DRAFT", send_to_tg: true, send_to_app: true })}
+          disabled={!canSubmit || isSubmitting || upload.isPending}
+          onClick={() => onCreate({ title, body, target_type: "SQUAD", file_id: attachment?.id ?? null, status_code: "DRAFT", send_to_tg: true, send_to_app: true })}
         >
           {isSubmitting ? "Отправляем..." : "Отправить объявление"}
         </button>
@@ -2232,6 +2272,13 @@ function AnnouncementsView({
               <strong>{item.title}</strong>
               <span>{item.status_code} · {item.body?.slice(0, 60)}</span>
             </div>
+            {item.file_id && (
+              <div className={styles.filePreviewActions}>
+                <button type="button" disabled={openFile.isPending} onClick={() => openFile.mutate({ fileId: item.file_id ?? undefined })}>
+                  {openFile.isPending ? "Открываем..." : "Открыть вложение"}
+                </button>
+              </div>
+            )}
           </article>
         ))}
       </div>
@@ -2257,10 +2304,14 @@ function AppealsView({
     category_code: "OTHER",
     urgency_code: "NORMAL",
     is_anonymous: false,
+    file_id: null,
   });
+  const [appealAttachment, setAppealAttachment] = useState<{ id: number; name: string } | null>(null);
   const canSubmit = form.subject.trim().length > 0 && form.description.trim().length > 0;
   const [openAppealId, setOpenAppealId] = useState<number | null>(null);
 
+  const upload = useUploadFile();
+  const openFile = useOpenFile();
   const messages = useAppealMessages(openAppealId, openAppealId !== null);
   const createMessage = useCreateAppealMessage();
   const [msgText, setMsgText] = useState("");
@@ -2310,7 +2361,27 @@ function AppealsView({
               />
               <span>Отправить анонимно</span>
             </label>
-            <button type="button" disabled={!canSubmit || isSubmitting} onClick={() => onCreate(form)}>
+            {appealAttachment && (
+              <div className={styles.fileAttached}>
+                <span>{appealAttachment.name}</span>
+                <button type="button" onClick={() => { setAppealAttachment(null); setForm({ ...form, file_id: null }); }}>Убрать</button>
+              </div>
+            )}
+            <FilePicker
+              accept={FILE_PREVIEW_ACCEPT}
+              label={upload.isPending ? "Загружаем..." : appealAttachment ? "Заменить вложение" : "Прикрепить файл или видео"}
+              className={styles.fileButton}
+              onFile={async (file) => {
+                try {
+                  const result = await upload.mutateAsync(file);
+                  setAppealAttachment({ id: result.id, name: result.original_name || file.name });
+                  setForm((prev) => ({ ...prev, file_id: result.id }));
+                } catch {
+                  toast("Не удалось загрузить вложение", "error");
+                }
+              }}
+            />
+            <button type="button" disabled={!canSubmit || isSubmitting || upload.isPending} onClick={() => onCreate(form)}>
               {isSubmitting ? "Отправляем..." : "Отправить обращение"}
             </button>
           </div>
@@ -2324,6 +2395,20 @@ function AppealsView({
                   <strong>{item.subject}</strong>
                   <span>{appealStatusLabel(item.status_code)} · {item.category_code} · {formatDate(item.created_at)}</span>
                 </div>
+                {item.file_id && (
+                  <div className={styles.filePreviewActions}>
+                    <button
+                      type="button"
+                      disabled={openFile.isPending}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        openFile.mutate({ fileId: item.file_id ?? undefined });
+                      }}
+                    >
+                      {openFile.isPending ? "Открываем..." : "Открыть вложение"}
+                    </button>
+                  </div>
+                )}
                 <span style={{ fontSize: 10, color: "#8a96b0", gridColumn: "1/-1" }}>Нажмите чтобы открыть переписку →</span>
               </article>
             ))}
@@ -2342,6 +2427,13 @@ function AppealsView({
                 <strong>{appeal.subject}</strong>
                 <small>{appealStatusLabel(appeal.status_code)} · {appeal.urgency_code}</small>
                 {appeal.resolution_text && <small>Решение: {appeal.resolution_text}</small>}
+                {appeal.file_id && (
+                  <div className={styles.filePreviewActions}>
+                    <button type="button" disabled={openFile.isPending} onClick={() => openFile.mutate({ fileId: appeal.file_id ?? undefined })}>
+                      {openFile.isPending ? "Открываем..." : "Открыть вложение"}
+                    </button>
+                  </div>
+                )}
               </div>
             ) : null;
           })()}
@@ -2539,7 +2631,7 @@ function LearningView({ items, courses, canTrack }: { items: LearningMaterial[];
   const [tab, setTab] = useState<"main" | "candidates" | "courses">("main");
   const [selectedCourseId, setSelectedCourseId] = useState<number | null>(null);
   const markViewed = useMarkMaterialViewed();
-  const downloadFile = useDownloadFile();
+  const openFile = useOpenFile();
   const audienceItems = items.filter((item) => {
     if (tab === "candidates") return item.audience_code === "CANDIDATE";
     return item.audience_code !== "CANDIDATE";
@@ -2554,6 +2646,7 @@ function LearningView({ items, courses, canTrack }: { items: LearningMaterial[];
     IMAGE: "Изображение",
     LINK: "Ссылка",
     PDF: "PDF",
+    FILE: "Файл",
     COLLECTION: "Подборка",
   };
 
@@ -2588,7 +2681,7 @@ function LearningView({ items, courses, canTrack }: { items: LearningMaterial[];
               }
               if (item.file_id) {
                 if (canTrack) markViewed.mutate(item.id);
-                downloadFile.mutate({ fileId: item.file_id, fileName: item.title });
+                openFile.mutate({ fileId: item.file_id });
               }
             }}
           >
@@ -2598,9 +2691,11 @@ function LearningView({ items, courses, canTrack }: { items: LearningMaterial[];
               <span>{typeLabels[item.type_code] ?? item.type_code} · {item.description ?? "материал подготовки"}{item.duration_minutes ? ` · ${item.duration_minutes} мин` : ""}</span>
             </div>
             {(item.external_url || item.file_id) && (
-              <span style={{ gridColumn: "1/-1", fontSize: 10, color: "#3498db" }}>
-                {item.external_url ? "Открыть →" : downloadFile.isPending ? "Скачиваем..." : "Скачать файл"}
-              </span>
+              <div className={styles.filePreviewActions}>
+                <button type="button" disabled={openFile.isPending}>
+                  {item.external_url ? "Открыть материал" : openFile.isPending ? "Открываем..." : item.type_code === "VIDEO" ? "Смотреть видео" : "Открыть файл"}
+                </button>
+              </div>
             )}
           </article>
         ))}
@@ -3148,9 +3243,25 @@ function AdminView({
   const [userSearch, setUserSearch] = useState("");
   const [appStatusFilter, setAppStatusFilter] = useState("");
   const [logFilter, setLogFilter] = useState({ action_code: "", entity_name: "" });
-  const [newNorm, setNewNorm] = useState({ title: "", description: "", target_audience: "PARTICIPANTS", squad_id: "", instruction_video_url: "" });
+  const [newNorm, setNewNorm] = useState({
+    title: "",
+    description: "",
+    target_audience: "PARTICIPANTS",
+    squad_id: "",
+    instruction_video_url: "",
+    instruction_video_file_id: null as number | null,
+    instruction_video_file_name: "",
+  });
   const [normVideoDrafts, setNormVideoDrafts] = useState<Record<number, string>>({});
-  const [newMaterial, setNewMaterial] = useState({ title: "", type_code: "TEXT", external_url: "", audience_code: "PARTICIPANTS", is_active: true });
+  const [newMaterial, setNewMaterial] = useState({
+    title: "",
+    type_code: "TEXT",
+    external_url: "",
+    audience_code: "PARTICIPANTS",
+    is_active: true,
+    file_id: null as number | null,
+    file_name: "",
+  });
   const [newCourse, setNewCourse] = useState({ title: "", description: "", audience_code: "PARTICIPANTS" });
   const [learningScope, setLearningScope] = useState<"main" | "candidates">("main");
   const [newCandEvent, setNewCandEvent] = useState({ title: "", start_datetime: "", place: "", description: "" });
@@ -3202,10 +3313,13 @@ function AdminView({
   const createNorm = useCreateNormative();
   const updateNorm = useUpdateNormative();
   const deleteNorm = useDeleteNormative();
+  const uploadNormVideo = useUploadFile();
   const adminMaterials = useAdminLearningMaterials(tab === "learning");
   const adminCourses = useAdminLearningCourses(tab === "learning");
   const createMaterial = useCreateLearningMaterial();
   const updateMaterial = useUpdateLearningMaterial();
+  const uploadLearningFile = useUploadFile();
+  const openFile = useOpenFile();
   const createCourse = useCreateLearningCourse();
   const updateCourse = useUpdateLearningCourse();
   const auditFiltered = useAdminAuditFiltered(
@@ -3241,6 +3355,72 @@ function AdminView({
     .map((group) => ({ ...group, tabs: group.tabs.filter(([, , minLevel]) => level >= minLevel) }))
     .filter((group) => group.tabs.length > 0);
   const currentLearningAudience = learningScope === "candidates" ? "CANDIDATE" : "PARTICIPANTS";
+  const resetNewNorm = () => setNewNorm({
+    title: "",
+    description: "",
+    target_audience: "PARTICIPANTS",
+    squad_id: "",
+    instruction_video_url: "",
+    instruction_video_file_id: null,
+    instruction_video_file_name: "",
+  });
+  const resetNewMaterial = () => setNewMaterial({
+    title: "",
+    type_code: "TEXT",
+    external_url: "",
+    audience_code: currentLearningAudience,
+    is_active: true,
+    file_id: null,
+    file_name: "",
+  });
+  const handleNewNormVideoUpload = async (file: File) => {
+    try {
+      const result = await uploadNormVideo.mutateAsync(file);
+      setNewNorm((prev) => ({
+        ...prev,
+        instruction_video_file_id: result.id,
+        instruction_video_file_name: result.original_name || file.name,
+        instruction_video_url: "",
+      }));
+    } catch {
+      toast("Не удалось загрузить видео", "error");
+    }
+  };
+  const handleNormVideoUpload = async (normId: number, file: File) => {
+    try {
+      const result = await uploadNormVideo.mutateAsync(file);
+      updateNorm.mutate(
+        { id: normId, instruction_video_file_id: result.id, instruction_video_url: null },
+        { onSuccess: () => toast("Видеофайл норматива сохранён", "success") },
+      );
+    } catch {
+      toast("Не удалось загрузить видео", "error");
+    }
+  };
+  const handleNewMaterialFileUpload = async (file: File) => {
+    try {
+      const result = await uploadLearningFile.mutateAsync(file);
+      setNewMaterial((prev) => ({
+        ...prev,
+        file_id: result.id,
+        file_name: result.original_name || file.name,
+        type_code: materialTypeFromMime(result.mime_type),
+      }));
+    } catch {
+      toast("Не удалось загрузить файл", "error");
+    }
+  };
+  const handleMaterialFileUpload = async (materialId: number, file: File) => {
+    try {
+      const result = await uploadLearningFile.mutateAsync(file);
+      updateMaterial.mutate(
+        { id: materialId, file_id: result.id, type_code: materialTypeFromMime(result.mime_type) },
+        { onSuccess: () => toast("Файл материала сохранён", "success") },
+      );
+    } catch {
+      toast("Не удалось загрузить файл", "error");
+    }
+  };
 
   useEffect(() => {
     if (!visibleTabs.some(([value]) => value === tab)) {
@@ -3977,6 +4157,18 @@ function AdminView({
                 <input placeholder="Название норматива *" value={newNorm.title} onChange={(e) => setNewNorm({ ...newNorm, title: e.target.value })} />
                 <input placeholder="Описание" value={newNorm.description} onChange={(e) => setNewNorm({ ...newNorm, description: e.target.value })} />
                 <input placeholder="Ссылка на видео правильного выполнения" value={newNorm.instruction_video_url} onChange={(e) => setNewNorm({ ...newNorm, instruction_video_url: e.target.value })} />
+                {newNorm.instruction_video_file_id && (
+                  <div className={styles.fileAttached}>
+                    <span>{newNorm.instruction_video_file_name || "Видеофайл прикреплён"}</span>
+                    <button type="button" onClick={() => setNewNorm({ ...newNorm, instruction_video_file_id: null, instruction_video_file_name: "" })}>Убрать</button>
+                  </div>
+                )}
+                <FilePicker
+                  accept="video/*"
+                  label={uploadNormVideo.isPending ? "Загружаем видео..." : newNorm.instruction_video_file_id ? "Заменить видеофайл" : "Прикрепить видеофайл"}
+                  className={styles.fileButton}
+                  onFile={handleNewNormVideoUpload}
+                />
                 <select value={newNorm.target_audience} onChange={(e) => setNewNorm({ ...newNorm, target_audience: e.target.value })}>
                   <option value="ALL">Для всех</option>
                   <option value="PARTICIPANTS">Основной состав</option>
@@ -3990,16 +4182,17 @@ function AdminView({
                 </select>
                 <button
                   type="button"
-                  disabled={!newNorm.title.trim() || createNorm.isPending}
+                  disabled={!newNorm.title.trim() || createNorm.isPending || uploadNormVideo.isPending}
                   onClick={() => createNorm.mutate(
                     {
                       title: newNorm.title.trim(),
                       description: newNorm.description || undefined,
                       target_audience: newNorm.target_audience,
                       squad_id: newNorm.squad_id ? Number(newNorm.squad_id) : null,
+                      instruction_video_file_id: newNorm.instruction_video_file_id,
                       instruction_video_url: newNorm.instruction_video_url || null,
                     },
-                    { onSuccess: () => { setNewNorm({ title: "", description: "", target_audience: "PARTICIPANTS", squad_id: "", instruction_video_url: "" }); toast("Норматив создан", "success"); } },
+                    { onSuccess: () => { resetNewNorm(); toast("Норматив создан", "success"); } },
                   )}
                 >
                   {createNorm.isPending ? "Создаём..." : "Создать норматив"}
@@ -4018,10 +4211,25 @@ function AdminView({
                     )}
                   </div>
                   <div className={styles.memberControls}>
+                    {norm.instruction_video_file_id && (
+                      <button
+                        type="button"
+                        disabled={openFile.isPending}
+                        onClick={() => openFile.mutate({ fileId: norm.instruction_video_file_id ?? undefined })}
+                      >
+                        {openFile.isPending ? "Открываем..." : "Смотреть видеофайл"}
+                      </button>
+                    )}
                     <input
                       placeholder="Видео выполнения URL"
                       value={normVideoDrafts[norm.id] ?? norm.instruction_video_url ?? ""}
                       onChange={(event) => setNormVideoDrafts((prev) => ({ ...prev, [norm.id]: event.target.value }))}
+                    />
+                    <FilePicker
+                      accept="video/*"
+                      label={uploadNormVideo.isPending ? "Загружаем..." : norm.instruction_video_file_id ? "Заменить видеофайл" : "Прикрепить видеофайл"}
+                      className={styles.fileButton}
+                      onFile={(file) => handleNormVideoUpload(norm.id, file)}
                     />
                     <button
                       type="button"
@@ -4101,9 +4309,23 @@ function AdminView({
                 <strong style={{ display: "block", marginBottom: 6 }}>Новый материал</strong>
                 <input placeholder="Название материала *" value={newMaterial.title} onChange={(e) => setNewMaterial({ ...newMaterial, title: e.target.value })} />
                 <input placeholder="URL (видео/ссылка)" value={newMaterial.external_url} onChange={(e) => setNewMaterial({ ...newMaterial, external_url: e.target.value })} />
+                {newMaterial.file_id && (
+                  <div className={styles.fileAttached}>
+                    <span>{newMaterial.file_name || "Файл прикреплён"}</span>
+                    <button type="button" onClick={() => setNewMaterial({ ...newMaterial, file_id: null, file_name: "" })}>Убрать</button>
+                  </div>
+                )}
+                <FilePicker
+                  accept={FILE_PREVIEW_ACCEPT}
+                  label={uploadLearningFile.isPending ? "Загружаем..." : newMaterial.file_id ? "Заменить файл или видео" : "Прикрепить файл или видео"}
+                  className={styles.fileButton}
+                  onFile={handleNewMaterialFileUpload}
+                />
                 <select value={newMaterial.type_code} onChange={(e) => setNewMaterial({ ...newMaterial, type_code: e.target.value })}>
                   <option value="TEXT">Текст</option>
                   <option value="VIDEO">Видео</option>
+                  <option value="IMAGE">Изображение</option>
+                  <option value="PDF">PDF</option>
                   <option value="LINK">Ссылка</option>
                   <option value="FILE">Файл</option>
                 </select>
@@ -4115,10 +4337,17 @@ function AdminView({
                 </select>
                 <button
                   type="button"
-                  disabled={!newMaterial.title.trim() || createMaterial.isPending}
+                  disabled={!newMaterial.title.trim() || createMaterial.isPending || uploadLearningFile.isPending}
                   onClick={() => createMaterial.mutate(
-                    { title: newMaterial.title.trim(), type_code: newMaterial.type_code, external_url: newMaterial.external_url || undefined, audience_code: newMaterial.audience_code, is_active: true },
-                    { onSuccess: () => { setNewMaterial({ title: "", type_code: "TEXT", external_url: "", audience_code: currentLearningAudience, is_active: true }); toast("Материал добавлен", "success"); } },
+                    {
+                      title: newMaterial.title.trim(),
+                      type_code: newMaterial.type_code,
+                      file_id: newMaterial.file_id,
+                      external_url: newMaterial.external_url || undefined,
+                      audience_code: newMaterial.audience_code,
+                      is_active: true,
+                    },
+                    { onSuccess: () => { resetNewMaterial(); toast("Материал добавлен", "success"); } },
                   )}
                 >
                   {createMaterial.isPending ? "Создаём..." : "Добавить материал"}
@@ -4152,7 +4381,24 @@ function AdminView({
                     <strong>{mat.title}</strong>
                     <span>{mat.type_code} · {mat.audience_code} · {mat.is_active ? "активен" : "скрыт"}</span>
                     {mat.external_url && <span style={{ fontSize: "0.75rem", wordBreak: "break-all" }}>{mat.external_url}</span>}
+                    {mat.file_id && <span style={{ color: "#1a2f5a" }}>Файл или видео прикреплены</span>}
                   </div>
+                  <div className={styles.memberControls}>
+                    {mat.file_id && (
+                      <button
+                        type="button"
+                        disabled={openFile.isPending}
+                        onClick={() => openFile.mutate({ fileId: mat.file_id ?? undefined })}
+                      >
+                        {openFile.isPending ? "Открываем..." : mat.type_code === "VIDEO" ? "Смотреть видео" : "Открыть файл"}
+                      </button>
+                    )}
+                    <FilePicker
+                      accept={FILE_PREVIEW_ACCEPT}
+                      label={uploadLearningFile.isPending ? "Загружаем..." : mat.file_id ? "Заменить файл/видео" : "Прикрепить файл/видео"}
+                      className={styles.fileButton}
+                      onFile={(file) => handleMaterialFileUpload(mat.id, file)}
+                    />
                   <button
                     type="button"
                     className={styles.iconAction}
@@ -4163,6 +4409,7 @@ function AdminView({
                   >
                     {mat.is_active ? "Скрыть" : "Показать"}
                   </button>
+                  </div>
                 </div>
               ))}
             </>
@@ -4563,7 +4810,7 @@ function SubmissionRow({
         if (tgMatch) {
           const tgFileId = tgMatch[1];
           return (
-            <div className={styles.commandStrip} style={{ gridColumn: "1/-1", marginTop: 4, flexDirection: "column", alignItems: "flex-start", gap: 4 }}>
+            <div className={styles.filePreviewActions}>
               <small style={{ color: "#65708a", fontSize: 11, fontWeight: 700 }}>Файл отправлен через бот</small>
               <button
                 type="button"
@@ -4577,7 +4824,7 @@ function SubmissionRow({
         }
         if (fileIds.length > 0) {
           return (
-            <div className={styles.commandStrip} style={{ gridColumn: "1/-1", marginTop: 4, flexDirection: "column", alignItems: "stretch" }}>
+            <div className={styles.filePreviewActions}>
               {fileIds.map((fileId, index) => (
                 <button
                   key={fileId}

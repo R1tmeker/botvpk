@@ -1497,7 +1497,7 @@ button[data-active="true"] .navIcon img {
 .fileUploadArea {
   grid-column: 1 / -1;
   display: grid;
-  gap: 4px;
+  gap: 6px;
 }
 
 .fileAttached {
@@ -1505,13 +1505,19 @@ button[data-active="true"] .navIcon img {
   gap: 8px;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 10px;
-  border: 1px solid #27ae60;
-  border-radius: 8px;
-  background: rgba(39, 174, 96, 0.06);
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(39, 174, 96, 0.28);
+  border-radius: 10px;
+  background: rgba(39, 174, 96, 0.08);
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 850;
   color: #27ae60;
+
+  span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
 
   button {
     min-height: unset !important;
@@ -1519,6 +1525,37 @@ button[data-active="true"] .navIcon img {
     color: #e74c3c !important;
     padding: 0 4px !important;
     font-size: 12px !important;
+  }
+}
+
+.filePreviewActions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 4px;
+
+  small {
+    width: 100%;
+  }
+
+  button {
+    min-height: 34px;
+    min-width: 0;
+    border: 1px solid rgba(26, 47, 90, 0.16);
+    border-radius: 10px;
+    background: #eef3fb;
+    color: #1a2f5a;
+    padding: 0 12px;
+    font-size: 11px;
+    font-weight: 900;
+    overflow-wrap: anywhere;
+
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
   }
 }
 

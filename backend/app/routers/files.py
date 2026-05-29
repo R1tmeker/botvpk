@@ -8,12 +8,13 @@ import httpx
 
 from fastapi import APIRouter, Depends, File as UploadParam, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings, get_settings
 from ..database import get_db_session
-from ..dependencies.auth import CurrentUser, require_role
+from ..dependencies.auth import CurrentUser, can_manage_squad, require_role
+from ..models import Announcement, Appeal, LearningMaterial, Normative, NormativeSubmission, NormativeSubmissionFile
 from ..models import File as StoredFile
 from ..models import User
 from ..roles import RoleLevel
@@ -98,11 +99,101 @@ async def upload_file(
     return stored
 
 
-def _check_file_access(stored: StoredFile, current_user: CurrentUser) -> None:
+def _learning_audience_visible(audience_code: str, current_user: CurrentUser) -> bool:
+    if audience_code == "ALL" or audience_code == current_user.role_code:
+        return True
+    if audience_code == "PARTICIPANTS":
+        return current_user.role_level >= RoleLevel.PARTICIPANT
+    if audience_code == "COMMANDERS":
+        return current_user.role_level >= RoleLevel.DEPUTY_SQUAD_COMMANDER
+    return False
+
+
+def _normative_visible(normative: Normative, current_user: CurrentUser) -> bool:
+    if current_user.role_level >= RoleLevel.DEPUTY_PLATOON_COMMANDER:
+        return True
+    if not normative.is_active:
+        return False
+    if normative.squad_id is not None and normative.squad_id != current_user.squad_id:
+        return False
+    if normative.target_audience in {"ALL", current_user.role_code}:
+        return True
+    if normative.target_audience == "SQUAD" and normative.squad_id == current_user.squad_id:
+        return True
+    if normative.target_audience == "COMMANDERS":
+        return current_user.role_level >= RoleLevel.DEPUTY_SQUAD_COMMANDER
+    return normative.target_audience == "PARTICIPANTS" and current_user.role_level >= RoleLevel.PARTICIPANT
+
+
+def _announcement_visible(item: Announcement, current_user: CurrentUser) -> bool:
+    if current_user.role_level >= RoleLevel.DEPUTY_PLATOON_COMMANDER:
+        return True
+    if item.status_code not in {"SENT", "PUBLISHED"}:
+        return False
+    if item.target_type == "ALL":
+        return True
+    if item.target_type == "SQUAD":
+        return item.target_squad_id == current_user.squad_id
+    if item.target_type == "ROLE":
+        return item.target_role_code == current_user.role_code
+    return False
+
+
+async def _check_file_access(stored: StoredFile, current_user: CurrentUser, session: AsyncSession) -> None:
     if current_user.role_level >= RoleLevel.DEPUTY_PLATOON_COMMANDER:
         return
     if stored.uploaded_by_id is not None and stored.uploaded_by_id == current_user.user_id:
         return
+    materials = list((
+        await session.scalars(
+            select(LearningMaterial).where(
+                LearningMaterial.file_id == stored.id,
+                LearningMaterial.is_active.is_(True),
+            )
+        )
+    ).all())
+    if any(_learning_audience_visible(item.audience_code, current_user) for item in materials):
+        return
+    normatives = list((
+        await session.scalars(
+            select(Normative).where(
+                or_(
+                    Normative.file_id == stored.id,
+                    Normative.instruction_video_file_id == stored.id,
+                )
+            )
+        )
+    ).all())
+    if any(_normative_visible(item, current_user) for item in normatives):
+        return
+    announcements = list((
+        await session.scalars(select(Announcement).where(Announcement.file_id == stored.id))
+    ).all())
+    if any(_announcement_visible(item, current_user) for item in announcements):
+        return
+    appeals = list((await session.scalars(select(Appeal).where(Appeal.file_id == stored.id))).all())
+    if any(item.author_user_id == current_user.user_id for item in appeals):
+        return
+    if appeals and current_user.role_level >= RoleLevel.DEPUTY_SQUAD_COMMANDER:
+        return
+    submissions = list((
+        await session.scalars(
+            select(NormativeSubmission)
+            .outerjoin(NormativeSubmissionFile, NormativeSubmissionFile.submission_id == NormativeSubmission.id)
+            .where(
+                or_(
+                    NormativeSubmission.file_id == stored.id,
+                    NormativeSubmissionFile.file_id == stored.id,
+                )
+            )
+        )
+    ).all())
+    for submission in submissions:
+        if submission.user_id == current_user.user_id:
+            return
+        submitter_squad_id = await session.scalar(select(User.squad_id).where(User.id == submission.user_id))
+        if can_manage_squad(current_user, submitter_squad_id):
+            return
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
 
 
@@ -115,7 +206,7 @@ async def get_file_meta(
     stored = await session.get(StoredFile, file_id)
     if stored is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found.")
-    _check_file_access(stored, current_user)
+    await _check_file_access(stored, current_user, session)
     return stored
 
 
@@ -128,7 +219,7 @@ async def download_file(
     stored = await session.get(StoredFile, file_id)
     if stored is None or not stored.file_path:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found.")
-    _check_file_access(stored, current_user)
+    await _check_file_access(stored, current_user, session)
     path = Path(stored.file_path)
     if not path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File content not found.")

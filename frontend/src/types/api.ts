@@ -194,6 +194,7 @@ export type Announcement = {
   title: string;
   body: string;
   importance_code: string;
+  file_id: number | null;
   status_code: string;
   created_at: string;
 };
@@ -229,6 +230,7 @@ export type Appeal = {
   category_code: string;
   description: string;
   urgency_code: string;
+  file_id: number | null;
   status_code: string;
   resolution_text: string | null;
   assignee_user_id: number | null;

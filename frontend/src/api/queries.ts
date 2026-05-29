@@ -471,6 +471,7 @@ export function useCreateAppeal() {
       category_code: string;
       urgency_code: string;
       is_anonymous: boolean;
+      file_id?: number | null;
     }) => {
       const { data } = await api.post("/appeals", payload);
       return data;
@@ -485,6 +486,7 @@ export function useCreateAnnouncement() {
       body: string;
       target_type: string;
       target_squad_id?: number | null;
+      file_id?: number | null;
       status_code: string;
       send_to_tg: boolean;
       send_to_app: boolean;
@@ -1239,7 +1241,7 @@ export function useAdminLearningCourses(enabled: boolean) {
 export function useCreateLearningMaterial() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (payload: { title: string; description?: string; type_code?: string; external_url?: string; audience_code?: string; sort_order?: number; is_active?: boolean; course_id?: number | null }) => {
+    mutationFn: async (payload: { title: string; description?: string; type_code?: string; file_id?: number | null; external_url?: string; audience_code?: string; sort_order?: number; is_active?: boolean; course_id?: number | null; duration_minutes?: number | null }) => {
       const { data } = await api.post<LearningMaterial>("/admin/learning/materials", payload);
       return data;
     },
@@ -1253,7 +1255,7 @@ export function useCreateLearningMaterial() {
 export function useUpdateLearningMaterial() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, ...payload }: { id: number; title?: string; description?: string; is_active?: boolean; external_url?: string; audience_code?: string }) => {
+    mutationFn: async ({ id, ...payload }: { id: number; title?: string; description?: string; type_code?: string; file_id?: number | null; is_active?: boolean; external_url?: string; audience_code?: string; course_id?: number | null; duration_minutes?: number | null; sort_order?: number }) => {
       const { data } = await api.patch<LearningMaterial>(`/admin/learning/materials/${id}`, payload);
       return data;
     },

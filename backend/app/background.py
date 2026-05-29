@@ -106,9 +106,9 @@ def _build_notification_keyboard(notification: Notification, settings: Settings)
     if notification.type_code == "SCHEDULE_POLL" and notification.entity_id:
         event_id = notification.entity_id
         return InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="✅ Приду", callback_data=f"event:{event_id}:COMING"),
-            InlineKeyboardButton(text="❌ Не приду", callback_data=f"event:{event_id}:NOT_COMING"),
-            InlineKeyboardButton(text="⏳ Уточню", callback_data=f"event:{event_id}:MAYBE"),
+            InlineKeyboardButton(text="Приду", callback_data=f"event:{event_id}:COMING"),
+            InlineKeyboardButton(text="Не приду", callback_data=f"event:{event_id}:NOT_COMING"),
+            InlineKeyboardButton(text="Уточню", callback_data=f"event:{event_id}:MAYBE"),
         ]])
     if notification.type_code == "NORMATIVE" and notification.entity_id and "Новая сдача" in (notification.title or ""):
         submission_id = notification.entity_id
@@ -119,7 +119,7 @@ def _build_notification_keyboard(notification: Notification, settings: Settings)
         ]])
     if notification.type_code == "NEW_APPLICATION" and settings.mini_app_url:
         return InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="👥 Открыть заявки", web_app=WebAppInfo(url=settings.mini_app_url)),
+            InlineKeyboardButton(text="Открыть приложение", web_app=WebAppInfo(url=settings.mini_app_url)),
         ]])
     if notification.type_code in ("APPLICATION", "NORMATIVE") and settings.mini_app_url:
         return InlineKeyboardMarkup(inline_keyboard=[[

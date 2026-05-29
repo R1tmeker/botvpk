@@ -179,6 +179,7 @@ export type NormativeSubmission = {
   user_id: number;
   status_code: string;
   file_id: number | null;
+  file_ids: number[];
   comment: string | null;
   reviewer_comment: string | null;
   grade_value: string | null;

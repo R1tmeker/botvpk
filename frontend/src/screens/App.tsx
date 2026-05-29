@@ -35,6 +35,7 @@ import {
   useNormatives,
   useNormativesReport,
   useNotifications,
+  useOpenFile,
   usePendingNormativeSubmissions,
   usePromo,
   usePublicContent,
@@ -785,11 +786,11 @@ export function App({ webApp }: Props) {
             submissions={mySubmissions.data ?? []}
             pending={pendingSubmissions.data ?? []}
             canReview={level >= 4}
-            onSubmit={(normativeId, comment, fileId) =>
+            onSubmit={(normativeId, comment, fileIds) =>
               submitNormative.mutate(
-                { normativeId, comment, fileId },
+                { normativeId, comment, fileIds },
                 {
-                  onSuccess: () => { hapticSuccess(); toast("Сдача отправлена на проверку 📋", "success"); },
+                  onSuccess: () => { hapticSuccess(); toast("Сдача отправлена на проверку", "success"); },
                   onError: () => { hapticError(); toast("Ошибка при отправке", "error"); },
                 },
               )
@@ -985,7 +986,7 @@ function ResponseButtons({
   const reasons = useAbsenceReasons();
   const activeReasons = reasons.data?.filter((r) => r.is_active) ?? [];
 
-  const responseLabels: Record<string, string> = { COMING: "✅ Приду", NOT_COMING: "❌ Не приду", MAYBE: "⏳ Уточню" };
+  const responseLabels: Record<string, string> = { COMING: "Приду", NOT_COMING: "Не приду", MAYBE: "Уточню" };
   const responseStyles: Record<string, string> = { COMING: styles.btnComing, NOT_COMING: styles.btnNotComing, MAYBE: styles.btnMaybe };
 
   if (pickingReason) {
@@ -1067,7 +1068,7 @@ function ResponseButtons({
         className={styles.btnComingOutline}
         onClick={() => onRespond(eventId, "COMING")}
       >
-        ✅ Приду
+        Приду
       </button>
       <button
         type="button"
@@ -1080,14 +1081,14 @@ function ResponseButtons({
           }
         }}
       >
-        ❌ Не приду
+        Не приду
       </button>
       <button
         type="button"
         className={styles.btnMaybeOutline}
         onClick={() => onRespond(eventId, "MAYBE")}
       >
-        ⏳ Уточню
+        Уточню
       </button>
     </div>
   );
@@ -1141,7 +1142,7 @@ function Dashboard({
     !settingByCode.get(code)?.is_hidden || dashboardBlocks.find((block) => block.code === code)?.required;
   const statsItems = attendanceStats?.items ?? [];
 
-  const nextEvent = schedule[0];
+  const nextEvent = schedule.find((event) => event.status_code !== "CANCELLED" && (!event.requires_response || event.my_response_code !== "COMING"));
   const presentCount = streak?.present_count ?? attendance.filter((r) => r.status_code === "PRESENT").length;
   const absentCount = attendance.filter((r) => r.status_code === "ABSENT").length;
   const percent = streak?.percent ?? (attendance.length ? Math.round((presentCount / attendance.length) * 100) : 0);
@@ -1576,7 +1577,7 @@ function EventVoterList({ eventId, squads, canView }: { eventId: number; squads:
     return acc;
   }, {}) ?? {};
 
-  const codeLabel: Record<string, string> = { COMING: "Идут ✅", NOT_COMING: "Не идут ❌", MAYBE: "Уточняют ⏳" };
+  const codeLabel: Record<string, string> = { COMING: "Идут", NOT_COMING: "Не идут", MAYBE: "Уточняют", NO_RESPONSE: "Без ответа" };
 
   return (
     <div style={{ gridColumn: "1/-1", marginTop: 4 }}>
@@ -1589,6 +1590,7 @@ function EventVoterList({ eventId, squads, canView }: { eventId: number; squads:
         {open ? "Скрыть ответы" : "Посмотреть ответы"}
       </button>
       {open && responses.isLoading && <div className={styles.empty} style={{ minHeight: 40, marginTop: 6 }}>Загрузка...</div>}
+      {open && responses.isError && <div className={styles.empty} style={{ minHeight: 40, marginTop: 6 }}>Не удалось загрузить ответы</div>}
       {open && responses.data && (
         <div style={{ marginTop: 6, display: "grid", gap: 8 }}>
           {Object.entries(codeLabel).map(([code, label]) => {
@@ -1979,7 +1981,7 @@ function NormativesView({
   submissions: NormativeSubmission[];
   pending: NormativeSubmission[];
   canReview: boolean;
-  onSubmit: (normativeId: number, comment?: string, fileId?: number | null) => void;
+  onSubmit: (normativeId: number, comment?: string, fileIds?: number[]) => void;
   onReview: (submissionId: number, statusCode: string, reviewerComment?: string) => void;
   isBusy: boolean;
 }) {
@@ -1988,8 +1990,8 @@ function NormativesView({
   const activeItems = items.filter((item) => item.is_active);
   const archiveItems = items.filter((item) => !item.is_active);
   const upload = useUploadFile();
-  const downloadFile = useDownloadFile();
-  const [uploadedFiles, setUploadedFiles] = useState<Record<number, { id: number; name: string }>>({});
+  const openFile = useOpenFile();
+  const [uploadedFiles, setUploadedFiles] = useState<Record<number, Array<{ id: number; name: string }>>>({});
   const [comments, setComments] = useState<Record<number, string>>({});
   const tabs: Array<["active" | "mine" | "pending" | "accepted" | "archive", string]> = [
     ["active", "Активные"],
@@ -2005,7 +2007,7 @@ function NormativesView({
 
   const handleFileChange = async (normativeId: number, file: File) => {
     const result = await upload.mutateAsync(file);
-    setUploadedFiles((prev) => ({ ...prev, [normativeId]: { id: result.id, name: file.name } }));
+    setUploadedFiles((prev) => ({ ...prev, [normativeId]: [...(prev[normativeId] ?? []), { id: result.id, name: file.name }] }));
   };
 
   return (
@@ -2044,7 +2046,7 @@ function NormativesView({
           </>
         )}
         {tab === "active" && activeItems.map((item) => {
-          const attached = uploadedFiles[item.id];
+          const attached = uploadedFiles[item.id] ?? [];
           return (
             <article className={styles.row} key={item.id}>
               <img src={iconPath("norms")} alt="" />
@@ -2060,7 +2062,7 @@ function NormativesView({
                       if (item.instruction_video_url) {
                         window.open(item.instruction_video_url, "_blank");
                       } else if (item.instruction_video_file_id) {
-                        downloadFile.mutate({ fileId: item.instruction_video_file_id, fileName: `${item.title}-video` });
+                        openFile.mutate({ fileId: item.instruction_video_file_id });
                       }
                     }}
                   >
@@ -2069,18 +2071,23 @@ function NormativesView({
                 </div>
               )}
               <div className={styles.fileUploadArea}>
-                {attached ? (
-                  <div className={styles.fileAttached}>
-                    📎 {attached.name}
-                    <button type="button" onClick={() => setUploadedFiles((prev) => { const next = { ...prev }; delete next[item.id]; return next; })}>✕</button>
+                {attached.map((file) => (
+                  <div className={styles.fileAttached} key={file.id}>
+                    <span>{file.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => setUploadedFiles((prev) => ({ ...prev, [item.id]: (prev[item.id] ?? []).filter((entry) => entry.id !== file.id) }))}
+                    >
+                      Убрать
+                    </button>
                   </div>
-                ) : (
-                  <FilePicker
-                    accept="video/*,image/*,application/pdf"
-                    onFile={(file) => handleFileChange(item.id, file)}
-                    className={styles.fileButton}
-                  />
-                )}
+                ))}
+                <FilePicker
+                  accept="video/*,image/*,application/pdf"
+                  label={attached.length ? "Добавить ещё файл" : "Прикрепить файл"}
+                  onFile={(file) => handleFileChange(item.id, file)}
+                  className={styles.fileButton}
+                />
                 <input
                   placeholder="Комментарий к сдаче..."
                   value={comments[item.id] ?? ""}
@@ -2091,7 +2098,7 @@ function NormativesView({
                   className={styles.iconAction}
                   type="button"
                   disabled={isBusy || upload.isPending}
-                  onClick={() => onSubmit(item.id, comments[item.id] || undefined, attached?.id ?? null)}
+                  onClick={() => onSubmit(item.id, comments[item.id] || undefined, attached.map((file) => file.id))}
                 >
                   {isBusy || upload.isPending ? "Отправляем..." : "Отправить на проверку"}
                 </button>
@@ -2129,7 +2136,7 @@ function NormativesView({
                     type="button"
                     onClick={() => {
                       if (item.instruction_video_url) window.open(item.instruction_video_url, "_blank");
-                      else if (item.instruction_video_file_id) downloadFile.mutate({ fileId: item.instruction_video_file_id, fileName: `${item.title}-video` });
+                      else if (item.instruction_video_file_id) openFile.mutate({ fileId: item.instruction_video_file_id });
                     }}
                   >
                     Видео выполнения
@@ -2874,6 +2881,7 @@ function ProfileRosterTabs({
   squads: Squad[];
 }) {
   const [tab, setTab] = useState<"roster" | "my_squad">("my_squad");
+  const [selectedUser, setSelectedUser] = useState<UserRecord | null>(null);
   const rosterUsers = allUsers.filter(
     (u) => ROSTER_ROLE_CODES.has(u.role_code) && u.status_code === "ACTIVE"
   );
@@ -2887,7 +2895,8 @@ function ProfileRosterTabs({
         active={tab}
         onChange={(value) => setTab(value as typeof tab)}
       />
-      <RosterTable users={visible} squads={squads} compact emptyText={tab === "my_squad" ? "Отделение не назначено" : "Состав пока пуст"} />
+      <RosterTable users={visible} squads={squads} compact emptyText={tab === "my_squad" ? "Отделение не назначено" : "Состав пока пуст"} onRowClick={setSelectedUser} />
+      {selectedUser && <MemberModal user={selectedUser} squads={squads} onClose={() => setSelectedUser(null)} />}
     </div>
   );
 }
@@ -4520,8 +4529,9 @@ function SubmissionRow({
   onReview?: (submissionId: number, statusCode: string, reviewerComment?: string) => void;
   isBusy?: boolean;
 }) {
-  const downloadFile = useDownloadFile();
+  const openFile = useOpenFile();
   const [reviewComment, setReviewComment] = useState("");
+  const fileIds = item.file_ids?.length ? item.file_ids : (item.file_id ? [item.file_id] : []);
   const statusColors: Record<string, string> = {
     PENDING: "#f39c12",
     ACCEPTED: "#27ae60",
@@ -4557,23 +4567,27 @@ function SubmissionRow({
               <small style={{ color: "#65708a", fontSize: 11, fontWeight: 700 }}>Файл отправлен через бот</small>
               <button
                 type="button"
-                onClick={() => window.open(`/api/files/tg/${encodeURIComponent(tgFileId)}`, "_blank")}
+                disabled={openFile.isPending}
+                onClick={() => openFile.mutate({ tgFileId })}
               >
-                📎 Открыть файл
+                {openFile.isPending ? "Открываем..." : "Открыть файл"}
               </button>
             </div>
           );
         }
-        if (item.file_id) {
+        if (fileIds.length > 0) {
           return (
-            <div className={styles.commandStrip} style={{ gridColumn: "1/-1", marginTop: 4 }}>
-              <button
-                type="button"
-                disabled={downloadFile.isPending}
-                onClick={() => downloadFile.mutate({ fileId: item.file_id as number, fileName: `submission-${item.id}` })}
-              >
-                {downloadFile.isPending ? "Загрузка..." : "📎 Просмотреть файл"}
-              </button>
+            <div className={styles.commandStrip} style={{ gridColumn: "1/-1", marginTop: 4, flexDirection: "column", alignItems: "stretch" }}>
+              {fileIds.map((fileId, index) => (
+                <button
+                  key={fileId}
+                  type="button"
+                  disabled={openFile.isPending}
+                  onClick={() => openFile.mutate({ fileId })}
+                >
+                  {openFile.isPending ? "Открываем..." : `Открыть файл ${fileIds.length > 1 ? index + 1 : ""}`.trim()}
+                </button>
+              ))}
             </div>
           );
         }

@@ -55,3 +55,16 @@ class NormativeSubmission(Base):
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class NormativeSubmissionFile(Base):
+    __tablename__ = "normative_submission_files"
+    __table_args__ = (
+        UniqueConstraint("submission_id", "file_id"),
+        Index("idx_normative_submission_files_submission", "submission_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    submission_id: Mapped[int] = mapped_column(ForeignKey("normative_submissions.id", ondelete="CASCADE"), nullable=False)
+    file_id: Mapped[int] = mapped_column(ForeignKey("files.id", ondelete="CASCADE"), nullable=False)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

@@ -456,29 +456,45 @@ async def event_responses(
     current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_SQUAD_COMMANDER)),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[dict]:
-    """Get all responses for an event grouped by response_code, with user info."""
+    """Get event responses with user info, including people who have not answered yet."""
     event = await session.get(ScheduleEvent, event_id)
     if not event:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
-    rows = (
-        await session.execute(
-            select(EventResponse, UserModel)
-            .join(UserModel, UserModel.id == EventResponse.user_id)
-            .where(EventResponse.event_id == event_id)
-            .order_by(UserModel.full_name)
-        )
-    ).all()
+    if not can_view_event(current_user, event):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot view this event.")
+    users_statement = (
+        select(UserModel)
+        .where(UserModel.status_code == "ACTIVE", UserModel.role_code.in_(CONFIRMED_ROLES))
+        .order_by(UserModel.squad_id.nullslast(), UserModel.full_name)
+    )
+    if event.squad_id is not None:
+        users_statement = users_statement.where(UserModel.squad_id == event.squad_id)
+    elif current_user.role_level < RoleLevel.SQUAD_COMMANDER:
+        if current_user.squad_id is None:
+            return []
+        users_statement = users_statement.where(UserModel.squad_id == current_user.squad_id)
+    users = list((await session.scalars(users_statement)).all())
+    response_rows = list(
+        (
+            await session.scalars(
+                select(EventResponse).where(EventResponse.event_id == event_id)
+            )
+        ).all()
+    )
+    responses_by_user = {row.user_id: row for row in response_rows}
     return [
         {
-            "user_id": r.EventResponse.user_id,
-            "full_name": r.UserModel.full_name,
-            "username": r.UserModel.username,
-            "squad_id": r.UserModel.squad_id,
-            "response_code": r.EventResponse.response_code,
-            "custom_reason": r.EventResponse.custom_reason,
-            "responded_at": r.EventResponse.responded_at.isoformat() if r.EventResponse.responded_at else None,
+            "user_id": user.id,
+            "full_name": user.full_name,
+            "username": user.username,
+            "squad_id": user.squad_id,
+            "response_code": responses_by_user[user.id].response_code if user.id in responses_by_user else "NO_RESPONSE",
+            "custom_reason": responses_by_user[user.id].custom_reason if user.id in responses_by_user else None,
+            "responded_at": responses_by_user[user.id].responded_at.isoformat()
+            if user.id in responses_by_user and responses_by_user[user.id].responded_at
+            else None,
         }
-        for r in rows
+        for user in users
     ]
 
 

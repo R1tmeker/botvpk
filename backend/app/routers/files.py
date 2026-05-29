@@ -60,7 +60,7 @@ async def download_avatar(
 @router.post("/upload", response_model=FileRead, status_code=status.HTTP_201_CREATED)
 async def upload_file(
     upload: UploadFile = UploadParam(...),
-    current_user: CurrentUser = Depends(require_role(RoleLevel.PARTICIPANT)),
+    current_user: CurrentUser = Depends(require_role(RoleLevel.CANDIDATE)),
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> StoredFile:
@@ -109,7 +109,7 @@ def _check_file_access(stored: StoredFile, current_user: CurrentUser) -> None:
 @router.get("/{file_id}", response_model=FileRead)
 async def get_file_meta(
     file_id: int,
-    current_user: CurrentUser = Depends(require_role(RoleLevel.PARTICIPANT)),
+    current_user: CurrentUser = Depends(require_role(RoleLevel.CANDIDATE)),
     session: AsyncSession = Depends(get_db_session),
 ) -> StoredFile:
     stored = await session.get(StoredFile, file_id)
@@ -122,7 +122,7 @@ async def get_file_meta(
 @router.get("/{file_id}/download")
 async def download_file(
     file_id: int,
-    current_user: CurrentUser = Depends(require_role(RoleLevel.PARTICIPANT)),
+    current_user: CurrentUser = Depends(require_role(RoleLevel.CANDIDATE)),
     session: AsyncSession = Depends(get_db_session),
 ):
     stored = await session.get(StoredFile, file_id)

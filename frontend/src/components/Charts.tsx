@@ -46,10 +46,11 @@ export function DonutChart({
   const r = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * r;
   const cx = size / 2;
-  const total = segments.reduce((s, seg) => s + seg.value, 0) || 1;
+  const visibleSegments = segments.filter((seg) => seg.value > 0);
+  const total = visibleSegments.reduce((s, seg) => s + seg.value, 0) || 1;
 
   let offset = 0;
-  const arcs = segments.map((seg) => {
+  const arcs = visibleSegments.map((seg) => {
     const fraction = seg.value / total;
     const dash = fraction * circumference;
     const gap = circumference - dash;
@@ -193,6 +194,12 @@ export function BarChart({
 export function CalendarHeatmap({ records }: { records: Array<{ date: string; status: string }> }) {
   const today = new Date();
   const weeks = 13; // ~3 months
+  const dateKey = (value: Date) => {
+    const y = value.getFullYear();
+    const m = String(value.getMonth() + 1).padStart(2, "0");
+    const d = String(value.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  };
 
   // Build date map
   const byDate = new Map<string, string>();
@@ -222,7 +229,7 @@ export function CalendarHeatmap({ records }: { records: Array<{ date: string; st
     for (let d = 0; d < 7; d++) {
       const dt = new Date(start);
       dt.setDate(start.getDate() + w * 7 + d);
-      col.push({ date: dt, dateStr: dt.toISOString().slice(0, 10) });
+      col.push({ date: dt, dateStr: dateKey(dt) });
     }
     cells.push(col);
   }

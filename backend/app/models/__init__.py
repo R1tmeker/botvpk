@@ -3,7 +3,7 @@ from .attendance import Attendance, AttendanceGrade, AttendanceHistory
 from .audit import AuditLog
 from .file import File
 from .learning import LearningCourse, LearningMaterial, LearningProgress
-from .normative import Normative, NormativeSubmission, NormativeTarget
+from .normative import Normative, NormativeSubmission, NormativeSubmissionFile, NormativeTarget
 from .notification import Notification
 from .announcement import Announcement
 from .appeal import Appeal, AppealMessage
@@ -36,6 +36,7 @@ __all__ = [
     "MenuCard",
     "Normative",
     "NormativeSubmission",
+    "NormativeSubmissionFile",
     "NormativeTarget",
     "Notification",
     "PromoBlock",

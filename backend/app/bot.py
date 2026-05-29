@@ -18,6 +18,7 @@ from aiogram.types import (
     InlineQueryResultArticle,
     InputTextMessageContent,
     KeyboardButton,
+    MenuButtonWebApp,
     Message,
     ReplyKeyboardMarkup,
     WebAppInfo,
@@ -84,13 +85,11 @@ def user_role(user: User | None) -> RoleLevel:
 
 def main_keyboard(role: RoleLevel) -> ReplyKeyboardMarkup:
     settings = get_settings()
-    rows: list[list[KeyboardButton]] = [
-        [KeyboardButton(text="📅 Расписание"), KeyboardButton(text="🔔 Уведомления")],
-    ]
+    rows: list[list[KeyboardButton]] = [[KeyboardButton(text="Расписание"), KeyboardButton(text="Уведомления")]]
     if role >= RoleLevel.DEPUTY_SQUAD_COMMANDER:
-        rows.append([KeyboardButton(text="👥 Заявки")])
+        rows.append([KeyboardButton(text="Заявки")])
     if settings.mini_app_url:
-        rows.append([KeyboardButton(text="🚀 Открыть приложение", web_app=WebAppInfo(url=settings.mini_app_url))])
+        rows.append([KeyboardButton(text="Открыть приложение", web_app=WebAppInfo(url=settings.mini_app_url))])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=False)
 
 
@@ -98,9 +97,9 @@ def event_keyboard(event_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="✅ Приду", callback_data=f"event:{event_id}:COMING"),
-                InlineKeyboardButton(text="❌ Не приду", callback_data=f"event:{event_id}:NOT_COMING"),
-                InlineKeyboardButton(text="⏳ Уточню", callback_data=f"event:{event_id}:MAYBE"),
+                InlineKeyboardButton(text="Приду", callback_data=f"event:{event_id}:COMING"),
+                InlineKeyboardButton(text="Не приду", callback_data=f"event:{event_id}:NOT_COMING"),
+                InlineKeyboardButton(text="Уточню", callback_data=f"event:{event_id}:MAYBE"),
             ]
         ]
     )
@@ -112,7 +111,7 @@ def mini_app_keyboard() -> InlineKeyboardMarkup | None:
         return None
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Открыть ВПК «Звезда»", web_app=WebAppInfo(url=settings.mini_app_url))]
+            [InlineKeyboardButton(text="Открыть приложение", web_app=WebAppInfo(url=settings.mini_app_url))]
         ]
     )
 
@@ -1074,6 +1073,13 @@ async def main() -> None:
         logger.info("Starting VPK Zvezda Telegram bot in DRYRUN mode; polling is disabled")
         await asyncio.Event().wait()
     bot = Bot(settings.bot_token)
+    if settings.mini_app_url:
+        await bot.set_chat_menu_button(
+            menu_button=MenuButtonWebApp(
+                text="Открыть приложение",
+                web_app=WebAppInfo(url=settings.mini_app_url),
+            )
+        )
     await bot.set_my_commands([
         BotCommand(command="start", description="Главное меню"),
         BotCommand(command="schedule", description="Расписание занятий"),

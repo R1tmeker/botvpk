@@ -3,12 +3,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db_session
 from ..dependencies.auth import CurrentUser, can_manage_squad, require_role
-from ..models import Normative, NormativeSubmission, Notification, User
+from ..models import Normative, NormativeSubmission, NormativeSubmissionFile, Notification, User
 from ..roles import ROLE_LEVELS, RoleLevel
 from ..schemas.core import (
     MessageResponse,
@@ -57,6 +57,28 @@ async def get_normative_or_404(session: AsyncSession, normative_id: int) -> Norm
     return normative
 
 
+async def attach_submission_files(session: AsyncSession, submissions: list[NormativeSubmission]) -> list[NormativeSubmission]:
+    submission_ids = [item.id for item in submissions if item.id is not None]
+    if not submission_ids:
+        return submissions
+    rows = (
+        await session.execute(
+            select(NormativeSubmissionFile.submission_id, NormativeSubmissionFile.file_id)
+            .where(NormativeSubmissionFile.submission_id.in_(submission_ids))
+            .order_by(NormativeSubmissionFile.id)
+        )
+    ).all()
+    by_submission: dict[int, list[int]] = {}
+    for submission_id, file_id in rows:
+        by_submission.setdefault(submission_id, []).append(file_id)
+    for submission in submissions:
+        ids = by_submission.get(submission.id, [])
+        if not ids and submission.file_id is not None:
+            ids = [submission.file_id]
+        setattr(submission, "file_ids", ids)
+    return submissions
+
+
 @router.get("", response_model=list[NormativeRead])
 async def list_normatives(
     active_only: bool = True,
@@ -83,7 +105,7 @@ async def my_submissions(
         .where(NormativeSubmission.user_id == user_id)
         .order_by(NormativeSubmission.submitted_at.desc())
     )
-    return list((await session.scalars(statement)).all())
+    return await attach_submission_files(session, list((await session.scalars(statement)).all()))
 
 
 @router.get("/submissions/pending", response_model=list[NormativeSubmissionRead])
@@ -104,7 +126,7 @@ async def pending_submissions(
         statement = statement.where(User.squad_id == squad_id)
     elif current_user.role_level < RoleLevel.DEPUTY_PLATOON_COMMANDER:
         statement = statement.where(User.squad_id == current_user.squad_id)
-    return list((await session.scalars(statement)).all())
+    return await attach_submission_files(session, list((await session.scalars(statement)).all()))
 
 
 @router.patch("/submissions/{submission_id}/review", response_model=NormativeSubmissionRead)
@@ -163,6 +185,7 @@ async def review_submission(
     )
     await session.commit()
     await session.refresh(submission)
+    await attach_submission_files(session, [submission])
     return submission
 
 
@@ -199,11 +222,17 @@ async def submit_normative(
         submission = NormativeSubmission(normative_id=normative_id, user_id=user_id)
         session.add(submission)
     old = model_snapshot(submission, ["status_code", "file_id", "comment"]) if submission.id else None
+    file_ids = payload.file_ids if payload.file_ids is not None else ([] if payload.file_id is None else [payload.file_id])
+    file_ids = list(dict.fromkeys(file_ids))
     submission.status_code = "SUBMITTED"
-    submission.file_id = payload.file_id
+    submission.file_id = file_ids[0] if file_ids else None
     submission.comment = payload.comment
+    submission.submitted_at = utcnow()
     submission.updated_at = utcnow()
     await session.flush()
+    await session.execute(delete(NormativeSubmissionFile).where(NormativeSubmissionFile.submission_id == submission.id))
+    for file_id in file_ids:
+        session.add(NormativeSubmissionFile(submission_id=submission.id, file_id=file_id))
     await record_audit(
         session,
         user_id=user_id,
@@ -233,6 +262,7 @@ async def submit_normative(
         )
     await session.commit()
     await session.refresh(submission)
+    await attach_submission_files(session, [submission])
     return submission
 
 

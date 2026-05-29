@@ -507,8 +507,9 @@ export function useSendAnnouncement() {
 export function useSubmitNormative() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ normativeId, comment, fileId }: { normativeId: number; comment?: string; fileId?: number | null }) => {
-      const { data } = await api.post(`/normatives/${normativeId}/submit`, { comment, file_id: fileId ?? undefined });
+    mutationFn: async ({ normativeId, comment, fileId, fileIds }: { normativeId: number; comment?: string; fileId?: number | null; fileIds?: number[] }) => {
+      const ids = fileIds?.length ? fileIds : (fileId ? [fileId] : []);
+      const { data } = await api.post(`/normatives/${normativeId}/submit`, { comment, file_id: ids[0] ?? undefined, file_ids: ids });
       return data;
     },
     onSuccess: () => {
@@ -669,6 +670,33 @@ export function useDownloadFile() {
       link.download = fileName || `file-${fileId}`;
       link.click();
       URL.revokeObjectURL(url);
+    },
+  });
+}
+
+export function useOpenFile() {
+  return useMutation({
+    mutationFn: async ({ fileId, tgFileId }: { fileId?: number; tgFileId?: string }) => {
+      const viewer = window.open("", "_blank");
+      try {
+        const response = await api.get(
+          fileId ? `/files/${fileId}/download` : `/files/tg/${encodeURIComponent(tgFileId ?? "")}`,
+          { responseType: "blob" },
+        );
+        const blob = new Blob([response.data as BlobPart], {
+          type: String(response.headers["content-type"] ?? "application/octet-stream"),
+        });
+        const url = URL.createObjectURL(blob);
+        if (viewer) {
+          viewer.location.href = url;
+        } else {
+          window.open(url, "_blank");
+        }
+        window.setTimeout(() => URL.revokeObjectURL(url), 120000);
+      } catch (error) {
+        viewer?.close();
+        throw error;
+      }
     },
   });
 }

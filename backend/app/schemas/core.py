@@ -380,6 +380,7 @@ class NormativeSubmissionRead(ORMModel):
     user_id: int
     status_code: str
     file_id: int | None = None
+    file_ids: list[int] = Field(default_factory=list)
     comment: str | None = None
     reviewer_comment: str | None = None
     grade_value: str | None = None
@@ -391,6 +392,7 @@ class NormativeSubmissionRead(ORMModel):
 
 class NormativeSubmitRequest(BaseModel):
     file_id: int | None = None
+    file_ids: list[int] | None = None
     comment: str | None = None
 
 

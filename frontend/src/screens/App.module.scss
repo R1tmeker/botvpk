@@ -439,6 +439,60 @@
   }
 }
 
+.row .inlineBadge,
+.inlineBadge {
+  display: inline-grid;
+  place-items: center;
+  width: fit-content;
+  min-width: 28px;
+  margin: 0 0 0 6px;
+  border: 1px solid rgba(26, 47, 90, 0.18);
+  border-radius: 999px;
+  background: #edf1f8;
+  color: #1a2f5a;
+  padding: 2px 7px;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
+  vertical-align: middle;
+}
+
+.inlineBadge[data-tone="warning"] {
+  border-color: rgba(231, 76, 60, 0.24);
+  background: #fff0ed;
+  color: #c0392b;
+}
+
+.weekBadge {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  border: 1px solid rgba(26, 47, 90, 0.12);
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px 12px;
+
+  span {
+    color: #65708a;
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  b {
+    display: grid;
+    place-items: center;
+    min-width: 34px;
+    min-height: 28px;
+    border-radius: 8px;
+    color: #fff;
+    background: #1a2f5a;
+    font-size: 14px;
+    line-height: 1;
+  }
+}
+
 /* ── Event Response Actions ──────────────────── */
 .actions {
   grid-column: 1 / -1;
@@ -1743,5 +1797,43 @@ button[data-active="true"] .navIcon img {
 
   .statusPanel dl {
     grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* ── Roster section grouping ────────────────── */
+.sectionHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 10px 0 6px;
+  border-bottom: 1px solid #e8ecf2;
+  margin-bottom: 4px;
+  margin-top: 8px;
+
+  &:first-child {
+    margin-top: 0;
+  }
+
+  strong {
+    font-size: 14px;
+    color: #1a2f5a;
+  }
+
+  span {
+    font-size: 11px;
+    color: #8a96b0;
+    font-weight: 600;
+  }
+}
+
+.squadMeta {
+  display: flex;
+  gap: 12px;
+  padding: 2px 0 6px;
+  flex-wrap: wrap;
+
+  small {
+    font-size: 11px;
+    color: #69758e;
   }
 }

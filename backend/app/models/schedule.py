@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, time
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, String, Text, Time, UniqueConstraint, func
+from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, String, Text, Time, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -11,11 +11,15 @@ from ..database import Base
 
 class ScheduleTemplate(Base):
     __tablename__ = "schedule_templates"
+    __table_args__ = (
+        CheckConstraint("week_parity IS NULL OR week_parity IN ('A', 'B')", name="ck_schedule_templates_week_parity"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     week_days: Mapped[str] = mapped_column(String(20), nullable=False)
+    week_parity: Mapped[str | None] = mapped_column(String(1))
     start_time: Mapped[time] = mapped_column(Time, nullable=False)
     end_time: Mapped[time | None] = mapped_column(Time)
     place: Mapped[str | None] = mapped_column(String(255))
@@ -48,6 +52,7 @@ class ScheduleEvent(Base):
     squad_id: Mapped[int | None] = mapped_column(ForeignKey("squads.id", ondelete="SET NULL"))
     status_code: Mapped[str] = mapped_column(String(50), nullable=False, server_default="PLANNED")
     requires_response: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    is_overridden: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     response_deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     grading_type: Mapped[str] = mapped_column(String(50), nullable=False, server_default="FIVE_POINT")
     file_id: Mapped[int | None] = mapped_column(ForeignKey("files.id", ondelete="SET NULL"))

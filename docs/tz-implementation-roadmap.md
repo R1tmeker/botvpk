@@ -30,7 +30,22 @@ The final target is a full VPK Zvezda information system:
 - Local Docker check passed for `postgres`, `backend`, `bot`, `frontend`, `nginx`; the bot was verified in `DRYRUN=true` mode.
 - Daily backup and restore scripts are documented in `docs/production-ops.md`.
 
+## Completed in Session 6 (May 2026 — Security audit + bot unification)
+
+- Critical RBAC vulnerabilities fixed: role whitelist on application accept, file IDOR protection,
+  export squad filtering, settings key whitelist.
+- RBAC integrity: squad-ownership checks on schedule templates, user edit, admin/users squad scoping.
+- Admin panel extended: appeals, candidate events, normatives, learning materials management tabs;
+  search, status filters, delete confirmations, audit log filters.
+- **Bot unification complete**: legacy CSV bot (`bot/`, `main.py`, CSV data files) removed.
+  Single bot is `backend/app/bot.py` (DB-first, connected to PostgreSQL).
+- **CSV→DB migration complete**: all 27 members from `data/members.csv` migrated to `users` table.
+  Three squads created. No legacy role codes remain in DB. Idempotency verified.
+- Single role model: `backend/app/roles.py` only. No legacy role mapping needed.
+
 ## Not Complete Yet
 
 - Telegram polling with a real renewed bot token still needs a production smoke test.
 - Production HTTPS/Let's Encrypt setup still needs environment-specific deployment configuration.
+- `audit_log.ip_address` not populated (low priority, requires Request injection to all endpoints).
+- Optional: CHECK constraints / Enum on `users.role_code` and `status_code` columns.

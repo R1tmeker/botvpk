@@ -79,7 +79,7 @@ async def update_promo_block(
 @router.delete("/{promo_id}", response_model=MessageResponse)
 async def delete_promo_block(
     promo_id: int,
-    current_user: CurrentUser = Depends(require_role(RoleLevel.ADMIN)),
+    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_PLATOON_COMMANDER)),
     session: AsyncSession = Depends(get_db_session),
 ) -> MessageResponse:
     item = await session.get(PromoBlock, promo_id)

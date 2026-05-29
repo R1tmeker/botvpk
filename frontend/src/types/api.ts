@@ -33,6 +33,7 @@ export type AuthResponse = {
   access_token: string;
   token_type: "bearer";
   profile: UserProfile;
+  app_timezone: string;
 };
 
 export type MenuCard = {
@@ -51,6 +52,8 @@ export type MenuCard = {
 
 export type ScheduleEvent = {
   id: number;
+  template_id: number | null;
+  event_type_code: string;
   title: string;
   description: string | null;
   start_datetime: string;
@@ -59,7 +62,34 @@ export type ScheduleEvent = {
   squad_id: number | null;
   status_code: string;
   requires_response: boolean;
+  is_overridden: boolean;
+  response_deadline_at: string | null;
+  grading_type: string;
+  file_id: number | null;
+  created_by_user_id: number;
+  created_at: string;
+  updated_at: string | null;
   my_response_code?: string | null;
+};
+
+export type ScheduleTemplate = {
+  id: number;
+  title: string;
+  description: string | null;
+  week_days: string;
+  week_parity: "A" | "B" | null;
+  start_time: string;
+  end_time: string | null;
+  place: string | null;
+  squad_id: number | null;
+  requires_response: boolean;
+  response_deadline_minutes: number | null;
+  reminder_minutes: number[] | null;
+  is_active: boolean;
+  valid_from: string | null;
+  valid_to: string | null;
+  created_by_user_id: number;
+  created_at: string;
 };
 
 export type CandidateEvent = {

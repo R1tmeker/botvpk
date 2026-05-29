@@ -96,6 +96,14 @@ async def upload_file(
     return stored
 
 
+def _check_file_access(stored: StoredFile, current_user: CurrentUser) -> None:
+    if current_user.role_level >= RoleLevel.DEPUTY_PLATOON_COMMANDER:
+        return
+    if stored.uploaded_by_id is not None and stored.uploaded_by_id == current_user.user_id:
+        return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
+
+
 @router.get("/{file_id}", response_model=FileRead)
 async def get_file_meta(
     file_id: int,
@@ -105,6 +113,7 @@ async def get_file_meta(
     stored = await session.get(StoredFile, file_id)
     if stored is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found.")
+    _check_file_access(stored, current_user)
     return stored
 
 
@@ -117,7 +126,17 @@ async def download_file(
     stored = await session.get(StoredFile, file_id)
     if stored is None or not stored.file_path:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found.")
+    _check_file_access(stored, current_user)
     path = Path(stored.file_path)
     if not path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File content not found.")
+    await record_audit(
+        session,
+        user_id=current_user.user_id,
+        action_code="file.download",
+        entity_name="files",
+        entity_id=stored.id,
+        new_value={"original_name": stored.original_name, "size_bytes": stored.size_bytes},
+    )
+    await session.commit()
     return FileResponse(path, media_type=stored.mime_type, filename=stored.original_name or path.name)

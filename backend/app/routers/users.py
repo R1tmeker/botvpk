@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db_session
-from ..dependencies.auth import CurrentUser, get_current_user, require_role
+from ..dependencies.auth import CurrentUser, can_manage_squad, get_current_user, require_role
 from ..models import User
 from ..roles import RoleLevel, ROLE_LEVELS
 from ..schemas.core import UserCreate, UserRead, UserUpdate
@@ -83,8 +83,18 @@ async def update_user(
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
     updates = payload.model_dump(exclude_unset=True)
-    if "role_code" in updates and updates["role_code"] not in ROLE_LEVELS:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown role_code.")
+    if "role_code" in updates and updates["role_code"] is not None:
+        if updates["role_code"] not in ROLE_LEVELS:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown role_code.")
+        target_level = ROLE_LEVELS.get(updates["role_code"], RoleLevel.PUBLIC_USER)
+        if target_level >= current_user.role_level and current_user.role_level < RoleLevel.ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot assign a role equal to or higher than your own.",
+            )
+    if current_user.role_level < RoleLevel.ADMIN:
+        if user.squad_id is not None and not can_manage_squad(current_user, user.squad_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot manage this user.")
     old = model_snapshot(user, list(updates))
     for key, value in updates.items():
         setattr(user, key, value)

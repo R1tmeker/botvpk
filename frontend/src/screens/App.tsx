@@ -64,9 +64,37 @@ import {
   useUpdateMenuCard,
   useAdminSchedule,
   useCreateScheduleEvent,
+  useCreateScheduleTemplate,
   useDeleteScheduleEvent,
+  useGenerateScheduleTemplate,
+  useScheduleTemplates,
+  useScheduleWeekType,
+  useUpdateScheduleEvent,
   useUpdateSquad,
   useUpdateUser,
+  useAdminAppeals,
+  useUpdateAppeal,
+  useAdminJoinEvents,
+  useAdminUpdateApplication,
+  useCreateCandidateEvent,
+  useUpdateCandidateEvent,
+  useNormativesAdmin,
+  useCreateNormative,
+  useUpdateNormative,
+  useDeleteNormative,
+  useAdminLearningMaterials,
+  useAdminLearningCourses,
+  useCreateLearningMaterial,
+  useUpdateLearningMaterial,
+  useCreateLearningCourse,
+  useUpdateLearningCourse,
+  useAdminAuditFiltered,
+  useAdminUpdateUser,
+  useDeactivateUser,
+  useAdminSettings,
+  useUpdateSettings,
+  useExportUsersCSV,
+  useExportUsersXLSX,
 } from "../api/queries";
 import { api } from "../api/client";
 import type {
@@ -88,6 +116,7 @@ import type {
   ReportSummary,
   RoleCode,
   ScheduleEvent,
+  ScheduleTemplate,
   Squad,
   UserProfile,
   UserRecord,
@@ -343,14 +372,30 @@ function applyPhoneMask(value: string): string {
   return result;
 }
 
+// Set after auth to use server-configured timezone instead of browser-local
+let _appTimezone = "Asia/Novosibirsk";
+
 function formatDate(value: string | null) {
   if (!value) return "без даты";
-  return new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+    timeZone: _appTimezone,
+  }).format(new Date(value));
+}
+
+function toDateTimeLocal(value: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 16);
 }
 
 function formatDateFull(value: string | null) {
   if (!value) return "—";
-  return new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "long", year: "numeric" }).format(new Date(value));
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit", month: "long", year: "numeric",
+    timeZone: _appTimezone,
+  }).format(new Date(value));
 }
 
 type NavItem = {
@@ -428,6 +473,7 @@ export function App({ webApp }: Props) {
   const joinMe = useJoinMe(hasToken && profile.role_code === "CANDIDATE");
   const joinEvents = useJoinEvents(hasToken && profile.role_code === "CANDIDATE");
   const schedule = useSchedule(internalMode);
+  const scheduleWeekType = useScheduleWeekType(internalMode);
   const attendance = useMyAttendance(internalMode);
   const attendanceStats = useMyAttendanceStats(internalMode);
   const normatives = useNormatives(internalMode, level >= 6);
@@ -447,7 +493,7 @@ export function App({ webApp }: Props) {
   const myStreak = useMyStreak(internalMode);
   const allUsers = useUsers(internalMode);
   const activityFeed = useActivityFeed(hasToken && level >= 4);
-  const adminUsers = useAdminUsers(hasToken && level >= 6);
+  const adminUsers = useAdminUsers(hasToken && level >= 4);
   const adminApplications = useAdminApplications(hasToken && level >= 6);
   const adminPromo = useAdminPromo(hasToken && level >= 6);
   const adminMenu = useAdminMenu(hasToken && level >= 6);
@@ -480,7 +526,12 @@ export function App({ webApp }: Props) {
     const initData = webApp.initData;
     if (!initData) return;
     auth.mutate(initData, {
-      onSuccess: (data) => setProfile(data.profile),
+      onSuccess: (data) => {
+        setProfile(data.profile);
+        if (data.app_timezone) {
+          _appTimezone = data.app_timezone;
+        }
+      },
     });
   }, []);
 
@@ -692,6 +743,7 @@ export function App({ webApp }: Props) {
           ) : (
             <ScheduleView
               events={visibleSchedule}
+              weekType={scheduleWeekType.data}
               onRespond={(eventId, responseCode, absenceReasonId, customReason) => {
                 respondEvent.mutate(
                   { eventId, responseCode, absenceReasonId, customReason },
@@ -1398,7 +1450,15 @@ function CandidateEventsView({
 }
 
 /* ─────────── ScheduleView ─────────── */
-function ScheduleView({ events, onRespond }: { events: ScheduleEvent[]; onRespond: RespondFn }) {
+function ScheduleView({
+  events,
+  weekType,
+  onRespond,
+}: {
+  events: ScheduleEvent[];
+  weekType?: { parity: "A" | "B" | null; week_a_start: string | null };
+  onRespond: RespondFn;
+}) {
   const [tab, setTab] = useState<"today" | "week" | "month" | "archive">("week");
   const [filter, setFilter] = useState<"all" | "unanswered" | "coming" | "not_coming">("all");
   const now = Date.now();
@@ -1425,6 +1485,12 @@ function ScheduleView({ events, onRespond }: { events: ScheduleEvent[]; onRespon
         <h2>Расписание</h2>
         <span>{events.length} событий</span>
       </div>
+      {weekType?.parity && (
+        <div className={styles.weekBadge}>
+          <span>Текущая неделя</span>
+          <b>{weekType.parity === "A" ? "А" : "Б"}</b>
+        </div>
+      )}
       <Tabs
         tabs={[["today", "Сегодня"], ["week", "Неделя"], ["month", "Месяц"], ["archive", "Архив"]]}
         active={tab}
@@ -1444,7 +1510,10 @@ function ScheduleView({ events, onRespond }: { events: ScheduleEvent[]; onRespon
           <article className={styles.row} key={event.id}>
             <img src={iconPath("schedule")} alt="" />
             <div>
-              <strong>{event.title}</strong>
+              <strong>
+                {event.title}
+                {event.is_overridden && <span className={styles.inlineBadge}>изм.</span>}
+              </strong>
               <span>{formatDate(event.start_datetime)} · {event.place ?? "место уточняется"}</span>
             </div>
             {event.requires_response && event.status_code !== "CANCELLED" && tab !== "archive" && (
@@ -1544,7 +1613,7 @@ function AttendanceView({
   const monthCounts: Record<string, number> = {};
   for (const r of records) {
     if (!r.marked_at) continue;
-    const month = new Intl.DateTimeFormat("ru-RU", { month: "short" }).format(new Date(r.marked_at));
+    const month = new Intl.DateTimeFormat("ru-RU", { month: "short", timeZone: _appTimezone }).format(new Date(r.marked_at));
     if (r.status_code === "PRESENT") monthCounts[month] = (monthCounts[month] ?? 0) + 1;
   }
   const barData = Object.entries(monthCounts).slice(-6).map(([label, value]) => ({ label, value, color: "#27ae60" }));
@@ -2303,6 +2372,11 @@ function LearningView({ items, courses }: { items: LearningMaterial[]; courses: 
 }
 
 /* ─────────── PeopleView ─────────── */
+const ROSTER_ROLE_CODES = new Set([
+  "PARTICIPANT", "DEPUTY_SQUAD_COMMANDER", "SQUAD_COMMANDER",
+  "DEPUTY_PLATOON_COMMANDER", "PLATOON_COMMANDER", "ADMIN", "SUPER_ADMIN",
+]);
+
 function PeopleView({
   level,
   profile,
@@ -2316,73 +2390,144 @@ function PeopleView({
   allUsers: UserRecord[];
   squads: Squad[];
 }) {
-  const [tab, setTab] = useState<"my_squad" | "all" | "commanders" | "pending">("my_squad");
+  type PeopleSegment = "roster" | "candidates" | "archive";
+  const [segment, setSegment] = useState<PeopleSegment>("roster");
   const [search, setSearch] = useState("");
 
-  const mySquadMembers = allUsers.filter((u) => u.squad_id === profile.squad_id && u.status_code !== "ARCHIVED");
-  const allActive = allUsers.filter((u) => u.status_code !== "ARCHIVED");
-  const commanders = allUsers.filter((u) =>
-    ["SQUAD_COMMANDER", "DEPUTY_SQUAD_COMMANDER", "PLATOON_COMMANDER", "DEPUTY_PLATOON_COMMANDER"].includes(u.role_code)
+  const squadMap = new Map(squads.map((s) => [s.id, s]));
+
+  // Основной состав: подтверждённые участники + непривязанные (USER_PENDING), исключаем PUBLIC_USER
+  const rosterUsers = allUsers.filter(
+    (u) => (ROSTER_ROLE_CODES.has(u.role_code) || u.role_code === "USER_PENDING") && u.status_code === "ACTIVE"
   );
-  const pending = allUsers.filter((u) => u.role_code === "USER_PENDING");
+  // Кандидаты: подали заявку
+  const candidateUsers = allUsers.filter((u) => u.role_code === "CANDIDATE" && u.status_code === "ACTIVE");
+  // Архив
+  const archivedUsers = allUsers.filter((u) => u.status_code === "ARCHIVED");
 
-  const tabs: Array<[string, string]> = [["my_squad", "Моё отделение"], ["all", "Все"]];
-  if (level >= 4) tabs.push(["commanders", "Командиры"]);
-  if (level >= 6) tabs.push(["pending", "Непривязанные"]);
+  const sourceBySegment: Record<PeopleSegment, UserRecord[]> = {
+    roster: rosterUsers,
+    candidates: candidateUsers,
+    archive: archivedUsers,
+  };
+  const rawUsers = sourceBySegment[segment];
 
-  const rawUsers =
-    tab === "my_squad" ? mySquadMembers :
-    tab === "commanders" ? commanders :
-    tab === "pending" ? pending :
-    allActive;
-
-  const displayUsers = search.trim()
-    ? rawUsers.filter((u) => u.full_name.toLowerCase().includes(search.toLowerCase()) || u.username?.toLowerCase().includes(search.toLowerCase()))
+  const filteredUsers = search.trim()
+    ? rawUsers.filter(
+        (u) =>
+          u.full_name.toLowerCase().includes(search.toLowerCase()) ||
+          (u.username ?? "").toLowerCase().includes(search.toLowerCase())
+      )
     : rawUsers;
 
-  const squadMap = new Map(squads.map((s) => [s.id, s.name]));
+  // Для сегмента "roster" — группируем по отделениям
+  const groupedRoster = useMemo(() => {
+    if (segment !== "roster") return null;
+    const groups = new Map<number | null, UserRecord[]>();
+    for (const user of filteredUsers) {
+      const key = user.squad_id ?? null;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(user);
+    }
+    // Сортируем участников внутри: командиры сначала
+    const sortWeight = (u: UserRecord) => {
+      if (u.role_code === "PLATOON_COMMANDER" || u.role_code === "DEPUTY_PLATOON_COMMANDER") return 0;
+      if (u.role_code === "SQUAD_COMMANDER" || u.role_code === "DEPUTY_SQUAD_COMMANDER") return 1;
+      if (u.role_code === "PARTICIPANT") return 2;
+      return 3;
+    };
+    for (const [, members] of groups) {
+      members.sort((a, b) => sortWeight(a) - sortWeight(b) || a.full_name.localeCompare(b.full_name, "ru"));
+    }
+    // Сортируем группы: отделения по имени, «без отделения» в конце
+    const sortedKeys = [...groups.keys()].sort((a, b) => {
+      if (a === null) return 1;
+      if (b === null) return -1;
+      return (squadMap.get(a)?.name ?? "").localeCompare(squadMap.get(b)?.name ?? "", "ru");
+    });
+    return sortedKeys.map((k) => ({ squadId: k, squad: k !== null ? squadMap.get(k) ?? null : null, members: groups.get(k)! }));
+  }, [filteredUsers, segment, squads]);
+
+  const segmentTabs: Array<[PeopleSegment, string]> = [
+    ["roster", `Состав (${rosterUsers.length})`],
+    ["candidates", `Заявки (${candidateUsers.length})`],
+    ["archive", `Архив (${archivedUsers.length})`],
+  ];
 
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
         <h2>Состав</h2>
-        <span>{tab === "my_squad" && mySquad ? mySquad.name : `${displayUsers.length} человек`}</span>
+        <span>{filteredUsers.length} чел.</span>
       </div>
-      <Tabs tabs={tabs} active={tab} onChange={(v) => { setTab(v as typeof tab); setSearch(""); }} />
+
+      <Tabs tabs={segmentTabs} active={segment} onChange={(v) => { setSegment(v as PeopleSegment); setSearch(""); }} />
 
       <div className={styles.searchBar}>
         <input
-          placeholder={`Поиск по ${rawUsers.length} участникам...`}
+          placeholder="Поиск по имени или @username"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
       </div>
 
-      {mySquad && tab === "my_squad" && !search && (
-        <div className={styles.nextItem}>
-          <span>Отделение</span>
-          <strong>{mySquad.name}</strong>
-          <small>
-            {mySquad.commander_user_id ? `Командир: ${allUsers.find((u) => u.id === mySquad.commander_user_id)?.full_name ?? "не указан"}` : "Командир не назначен"}
-          </small>
+      {/* Состав — сгруппирован по отделениям */}
+      {segment === "roster" && (
+        <div>
+          {filteredUsers.length === 0 && <Empty text="Участников нет" />}
+          {groupedRoster?.map(({ squadId, squad, members }) => (
+            <div key={squadId ?? "none"}>
+              <div className={styles.sectionHeader}>
+                <strong>{squad ? squad.name : "Без отделения / Не привязаны"}</strong>
+                <span>{members.length} чел.</span>
+              </div>
+              {squad && (squad.commander_user_id || squad.deputy_user_id) && (
+                <div className={styles.squadMeta}>
+                  {squad.commander_user_id && (
+                    <small>Ком: {allUsers.find((u) => u.id === squad.commander_user_id)?.full_name ?? "—"}</small>
+                  )}
+                  {squad.deputy_user_id && (
+                    <small>Зам: {allUsers.find((u) => u.id === squad.deputy_user_id)?.full_name ?? "—"}</small>
+                  )}
+                </div>
+              )}
+              <div className={styles.list}>
+                {members.map((user) => (
+                  <div className={styles.memberRow} key={user.id ?? user.telegram_id}>
+                    <div>
+                      <strong>{user.full_name}</strong>
+                      <span>
+                        {user.username ? `@${user.username}` : "без username"}
+                        {user.birth_date ? ` · ${new Date(user.birth_date).toLocaleDateString("ru-RU", { day: "2-digit", month: "long" })}` : ""}
+                      </span>
+                    </div>
+                    <span className={styles.roleBadge}>{roleLabels[user.role_code as RoleCode] ?? user.role_code}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
-      <div className={styles.list}>
-        {displayUsers.length === 0 && <Empty text="Участников в этой категории нет" />}
-        {displayUsers.map((user) => (
-          <div className={styles.memberRow} key={user.id ?? user.telegram_id}>
-            <div>
-              <strong>{user.full_name}</strong>
-              <span>
-                {tab === "all" && user.squad_id ? squadMap.get(user.squad_id) ?? `Отделение ${user.squad_id}` : ""}
-                {user.username ? ` @${user.username}` : ""}
-              </span>
+      {/* Кандидаты и Архив — простой список */}
+      {segment !== "roster" && (
+        <div className={styles.list}>
+          {filteredUsers.length === 0 && <Empty text="Записей нет" />}
+          {filteredUsers.map((user) => (
+            <div className={styles.memberRow} key={user.id ?? user.telegram_id}>
+              <div>
+                <strong>{user.full_name}</strong>
+                <span>
+                  {(squadMap.get(user.squad_id ?? -1) as Squad | undefined)?.name ?? "без отделения"}
+                  {user.username ? ` · @${user.username}` : ""}
+                </span>
+              </div>
+              <span className={styles.roleBadge}>{roleLabels[user.role_code as RoleCode] ?? user.role_code}</span>
             </div>
-            <span className={styles.roleBadge}>{roleLabels[user.role_code as RoleCode] ?? user.role_code}</span>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -2599,35 +2744,108 @@ function AdminView({
   onReject: (id: number, reason?: string) => void;
   isBusy: boolean;
 }) {
-  type AdminTab = "users" | "applications" | "squads" | "schedule" | "promo" | "menu" | "logs";
+  type AdminTab = "users" | "applications" | "appeals" | "squads" | "schedule" | "events" | "normatives" | "learning" | "promo" | "menu" | "logs" | "settings";
   const [tab, setTab] = useState<AdminTab>("users");
   const [editingPromo, setEditingPromo] = useState<PromoBlock | null | "new">(null);
   const [applicationSquads, setApplicationSquads] = useState<Record<number, string>>({});
   const [rejectReasons, setRejectReasons] = useState<Record<number, string>>({});
   const [newSquadName, setNewSquadName] = useState("");
   const [squadNames, setSquadNames] = useState<Record<number, string>>({});
+  const [userSearch, setUserSearch] = useState("");
+  const [appStatusFilter, setAppStatusFilter] = useState("");
+  const [logFilter, setLogFilter] = useState({ action_code: "", entity_name: "" });
+  const [newNorm, setNewNorm] = useState({ title: "", description: "", target_audience: "ALL", squad_id: "" });
+  const [newMaterial, setNewMaterial] = useState({ title: "", type_code: "TEXT", external_url: "", audience_code: "ALL", is_active: true });
+  const [newCourse, setNewCourse] = useState({ title: "", description: "", audience_code: "ALL" });
+  const [newCandEvent, setNewCandEvent] = useState({ title: "", start_datetime: "", place: "", description: "" });
+  const [newTemplate, setNewTemplate] = useState({
+    title: "",
+    description: "",
+    week_days: "1",
+    week_parity: "",
+    start_time: "16:00",
+    end_time: "",
+    place: "",
+    squad_id: "",
+    valid_from: "",
+    valid_to: "",
+    requires_response: true,
+  });
+  const [editingEventId, setEditingEventId] = useState<number | null>(null);
+  const [eventEdits, setEventEdits] = useState<Record<number, {
+    title: string;
+    description: string;
+    start_datetime: string;
+    end_datetime: string;
+    place: string;
+  }>>({});
+
   const createPromo = useCreatePromoBlock();
   const updatePromo = useUpdatePromoBlock();
   const deletePromo = useDeletePromoBlock();
-  const updateUser = useUpdateUser();
+  const updateUser = useAdminUpdateUser();
+  const deactivateUser = useDeactivateUser();
   const createSquad = useCreateSquad();
   const updateSquad = useUpdateSquad();
   const updateMenu = useUpdateMenuCard();
   const adminSchedule = useAdminSchedule(tab === "schedule");
+  const scheduleTemplates = useScheduleTemplates(tab === "schedule");
   const createEvent = useCreateScheduleEvent();
+  const updateEvent = useUpdateScheduleEvent();
   const deleteEvent = useDeleteScheduleEvent();
+  const createTemplate = useCreateScheduleTemplate();
+  const generateTemplate = useGenerateScheduleTemplate();
+  const adminAppeals = useAdminAppeals(tab === "appeals");
+  const updateAppeal = useUpdateAppeal();
+  const adminJoinEvents = useAdminJoinEvents(tab === "events");
+  const createCandEvent = useCreateCandidateEvent();
+  const updateCandEvent = useUpdateCandidateEvent();
+  const updateApplication = useAdminUpdateApplication();
+  const adminNorms = useNormativesAdmin(tab === "normatives");
+  const createNorm = useCreateNormative();
+  const updateNorm = useUpdateNormative();
+  const deleteNorm = useDeleteNormative();
+  const adminMaterials = useAdminLearningMaterials(tab === "learning");
+  const adminCourses = useAdminLearningCourses(tab === "learning");
+  const createMaterial = useCreateLearningMaterial();
+  const updateMaterial = useUpdateLearningMaterial();
+  const createCourse = useCreateLearningCourse();
+  const updateCourse = useUpdateLearningCourse();
+  const auditFiltered = useAdminAuditFiltered(
+    { action_code: logFilter.action_code || undefined, entity_name: logFilter.entity_name || undefined },
+    tab === "logs",
+  );
+  const adminSettings = useAdminSettings(tab === "settings" && level >= 9);
+  const updateSettings = useUpdateSettings();
+  const exportCSV = useExportUsersCSV();
+  const exportXLSX = useExportUsersXLSX();
+  const [settingsDraft, setSettingsDraft] = useState<Record<string, string>>({});
+
   const squadMap = new Map(squads.map((s) => [s.id, s.name]));
   const roleOptions = Object.keys(roleLabels) as RoleCode[];
   const statusOptions = ["ACTIVE", "INACTIVE", "ARCHIVED", "BLOCKED"];
   const [newEvent, setNewEvent] = useState({ title: "", start_datetime: "", end_datetime: "", place: "", squad_id: "", requires_response: true });
+
+  const filteredUsers = userSearch.trim()
+    ? users.filter((u) => u.full_name.toLowerCase().includes(userSearch.toLowerCase()) || (u.username ?? "").toLowerCase().includes(userSearch.toLowerCase()))
+    : users;
+  const filteredApps = appStatusFilter
+    ? applications.filter((a) => a.status_code === appStatusFilter)
+    : applications;
+
   const adminTabs: Array<[AdminTab, string, number]> = [
-    ["users", "Люди", 6],
+    ["users", "Люди", 4],
     ["applications", "Заявки", 6],
+    ["appeals", "Обращения", 6],
     ["squads", "Отделения", 6],
     ["schedule", "Расписание", 6],
+    ["events", "События канд.", 6],
+    ["normatives", "Нормативы", 6],
+    ["learning", "Материалы", 6],
     ["promo", "Промо", 6],
     ["menu", "Меню", 6],
     ["logs", "Логи", 8],
+    ["settings", "Настройки", 9],
   ];
   const visibleTabs = adminTabs.filter(([, , minLevel]) => level >= minLevel);
 
@@ -2642,7 +2860,7 @@ function AdminView({
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
         <h2>Админка</h2>
-        <span>{level >= 8 ? "полный доступ" : "командирский доступ"}</span>
+        <span>{level >= 8 ? "полный доступ" : level >= 6 ? "командирский доступ" : "доступ командира отделения"}</span>
       </div>
       <Tabs
         tabs={visibleTabs.map(([value, label]) => [value, label] as [string, string])}
@@ -2704,9 +2922,10 @@ function AdminView({
                     onSuccess: () => toast(active ? "Блок показан" : "Блок скрыт", "info"),
                   })}
                   onEdit={(block) => setEditingPromo(block)}
-                  onDelete={(id) => deletePromo.mutate(id, {
-                    onSuccess: () => toast("Блок удалён", "warning"),
-                  })}
+                  onDelete={(id) => {
+                    if (!window.confirm("Удалить промо-блок?")) return;
+                    deletePromo.mutate(id, { onSuccess: () => toast("Блок удалён", "warning") });
+                  }}
                 />
               ))}
             </div>
@@ -2717,48 +2936,191 @@ function AdminView({
       {/* ── Other tabs ── */}
       {tab !== "promo" && (
         <div className={styles.list}>
-          {tab === "users" && (users.length === 0 ? <Empty text="Пользователей нет" /> : users.slice(0, 50).map((user) => (
-            <div className={styles.memberRow} key={user.id ?? user.telegram_id}>
-              <div>
-                <strong>{user.full_name}</strong>
-                <span>{squadMap.get(user.squad_id ?? -1) ?? "без отделения"}{user.username ? ` · @${user.username}` : ""}</span>
-              </div>
-              <div className={styles.memberControls}>
-                <select
-                  value={user.role_code}
-                  disabled={user.id === null || updateUser.isPending}
-                  onChange={(event) => user.id !== null && updateUser.mutate({ userId: user.id, role_code: event.target.value })}
-                >
-                  {roleOptions.map((role) => (
-                    <option key={role} value={role}>{roleLabels[role]}</option>
-                  ))}
-                </select>
-                <select
-                  value={user.squad_id ?? ""}
-                  disabled={user.id === null || updateUser.isPending}
-                  onChange={(event) => user.id !== null && updateUser.mutate({ userId: user.id, squad_id: event.target.value ? Number(event.target.value) : null })}
-                >
-                  <option value="">Без отделения</option>
-                  {squads.map((squad) => (
-                    <option key={squad.id} value={squad.id}>{squad.name}</option>
-                  ))}
-                </select>
-                <select
-                  value={user.status_code}
-                  disabled={user.id === null || updateUser.isPending}
-                  onChange={(event) => user.id !== null && updateUser.mutate({ userId: user.id, status_code: event.target.value })}
-                >
-                  {statusOptions.map((status) => (
-                    <option key={status} value={status}>{status}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          )))}
 
+          {/* ── Users ── */}
+          {tab === "users" && (
+            <>
+              <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+                <input
+                  style={{ flex: 1 }}
+                  placeholder="Поиск по имени или @username"
+                  value={userSearch}
+                  onChange={(e) => setUserSearch(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className={styles.iconAction}
+                  disabled={exportCSV.isPending}
+                  onClick={() => exportCSV.mutate({ search: userSearch || undefined })}
+                  title="Выгрузить CSV"
+                >
+                  {exportCSV.isPending ? "..." : "↓ CSV"}
+                </button>
+                <button
+                  type="button"
+                  className={styles.iconAction}
+                  disabled={exportXLSX.isPending}
+                  onClick={() => exportXLSX.mutate({ search: userSearch || undefined })}
+                  title="Выгрузить Excel"
+                >
+                  {exportXLSX.isPending ? "..." : "↓ Excel"}
+                </button>
+              </div>
+              {filteredUsers.length === 0 ? <Empty text="Пользователей нет" /> : filteredUsers.map((user) => (
+                <div className={styles.memberRow} key={user.id ?? user.telegram_id}>
+                  <div>
+                    <strong>{user.full_name}</strong>
+                    <span>{squadMap.get(user.squad_id ?? -1) ?? "без отделения"}{user.username ? ` · @${user.username}` : ""} · {user.status_code}</span>
+                  </div>
+                  <div className={styles.memberControls}>
+                    <select
+                      value={user.role_code}
+                      disabled={user.id === null || updateUser.isPending}
+                      onChange={(event) => user.id !== null && updateUser.mutate({ userId: user.id, role_code: event.target.value })}
+                    >
+                      {roleOptions.map((role) => (
+                        <option key={role} value={role}>{roleLabels[role]}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={user.squad_id ?? ""}
+                      disabled={user.id === null || updateUser.isPending}
+                      onChange={(event) => user.id !== null && updateUser.mutate({ userId: user.id, squad_id: event.target.value ? Number(event.target.value) : null })}
+                    >
+                      <option value="">Без отделения</option>
+                      {squads.map((squad) => (
+                        <option key={squad.id} value={squad.id}>{squad.name}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={user.status_code}
+                      disabled={user.id === null || updateUser.isPending}
+                      onChange={(event) => user.id !== null && updateUser.mutate({ userId: user.id, status_code: event.target.value })}
+                    >
+                      {statusOptions.map((s) => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </select>
+                    {level >= 8 && user.id !== null && user.status_code !== "ARCHIVED" && (
+                      <button
+                        type="button"
+                        className={styles.btnNotComing}
+                        disabled={deactivateUser.isPending}
+                        onClick={() => {
+                          if (!window.confirm(`Деактивировать ${user.full_name}?`)) return;
+                          deactivateUser.mutate(user.id as number, { onSuccess: () => toast("Пользователь деактивирован", "warning") });
+                        }}
+                      >
+                        Деактивировать
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+
+          {/* ── Schedule ── */}
           {tab === "schedule" && (
             <>
               <div className={styles.formBlock}>
+                <strong className={styles.formTitle}>Шаблон занятий</strong>
+                <input placeholder="Название шаблона *" value={newTemplate.title} onChange={(e) => setNewTemplate({ ...newTemplate, title: e.target.value })} />
+                <textarea placeholder="Описание" rows={2} value={newTemplate.description} onChange={(e) => setNewTemplate({ ...newTemplate, description: e.target.value })} />
+                <label className={styles.fieldLabel}>
+                  <span>Дни недели ISO (1=пн, 3=ср)</span>
+                  <input value={newTemplate.week_days} onChange={(e) => setNewTemplate({ ...newTemplate, week_days: e.target.value })} />
+                </label>
+                <label className={styles.fieldLabel}>
+                  <span>Чередование</span>
+                  <select value={newTemplate.week_parity} onChange={(e) => setNewTemplate({ ...newTemplate, week_parity: e.target.value })}>
+                    <option value="">Каждую неделю</option>
+                    <option value="A">Неделя А</option>
+                    <option value="B">Неделя Б</option>
+                  </select>
+                </label>
+                <div className={styles.twoCol}>
+                  <label className={styles.fieldLabel}>
+                    <span>Начало</span>
+                    <input type="time" value={newTemplate.start_time} onChange={(e) => setNewTemplate({ ...newTemplate, start_time: e.target.value })} />
+                  </label>
+                  <label className={styles.fieldLabel}>
+                    <span>Конец</span>
+                    <input type="time" value={newTemplate.end_time} onChange={(e) => setNewTemplate({ ...newTemplate, end_time: e.target.value })} />
+                  </label>
+                </div>
+                <input placeholder="Место" value={newTemplate.place} onChange={(e) => setNewTemplate({ ...newTemplate, place: e.target.value })} />
+                <select value={newTemplate.squad_id} onChange={(e) => setNewTemplate({ ...newTemplate, squad_id: e.target.value })}>
+                  <option value="">Для всех отделений</option>
+                  {squads.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+                <div className={styles.twoCol}>
+                  <label className={styles.fieldLabel}>
+                    <span>Действует с</span>
+                    <input type="date" value={newTemplate.valid_from} onChange={(e) => setNewTemplate({ ...newTemplate, valid_from: e.target.value })} />
+                  </label>
+                  <label className={styles.fieldLabel}>
+                    <span>Действует до</span>
+                    <input type="date" value={newTemplate.valid_to} onChange={(e) => setNewTemplate({ ...newTemplate, valid_to: e.target.value })} />
+                  </label>
+                </div>
+                <label className={styles.checkboxLine}>
+                  <input type="checkbox" checked={newTemplate.requires_response} onChange={(e) => setNewTemplate({ ...newTemplate, requires_response: e.target.checked })} />
+                  <span>Требуется ответ участников</span>
+                </label>
+                <button
+                  type="button"
+                  disabled={!newTemplate.title.trim() || !newTemplate.week_days.trim() || !newTemplate.start_time || createTemplate.isPending}
+                  onClick={() => createTemplate.mutate(
+                    {
+                      title: newTemplate.title.trim(),
+                      description: newTemplate.description || undefined,
+                      week_days: newTemplate.week_days,
+                      week_parity: newTemplate.week_parity ? (newTemplate.week_parity as "A" | "B") : null,
+                      start_time: newTemplate.start_time,
+                      end_time: newTemplate.end_time || null,
+                      place: newTemplate.place || null,
+                      squad_id: newTemplate.squad_id ? Number(newTemplate.squad_id) : null,
+                      valid_from: newTemplate.valid_from || null,
+                      valid_to: newTemplate.valid_to || null,
+                      requires_response: newTemplate.requires_response,
+                    },
+                    { onSuccess: () => { setNewTemplate({ title: "", description: "", week_days: "1", week_parity: "", start_time: "16:00", end_time: "", place: "", squad_id: "", valid_from: "", valid_to: "", requires_response: true }); toast("Шаблон создан", "success"); } },
+                  )}
+                >
+                  {createTemplate.isPending ? "Создаём..." : "Создать шаблон"}
+                </button>
+              </div>
+              <div className={styles.list}>
+                {scheduleTemplates.data?.length === 0 && <Empty text="Шаблонов пока нет" />}
+                {scheduleTemplates.data?.map((template: ScheduleTemplate) => (
+                  <div className={styles.row} key={template.id}>
+                    <img src={iconPath("schedule")} alt="" />
+                    <div>
+                      <strong>
+                        {template.title}
+                        <span className={styles.inlineBadge}>
+                          {template.week_parity === "A" ? "А" : template.week_parity === "B" ? "Б" : "каждую"}
+                        </span>
+                      </strong>
+                      <span>{template.week_days} · {template.start_time.slice(0, 5)}{template.place ? ` · ${template.place}` : ""}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className={styles.iconAction}
+                      disabled={generateTemplate.isPending}
+                      onClick={() => generateTemplate.mutate(
+                        { id: template.id, days: 60 },
+                        { onSuccess: (created) => toast(`Сгенерировано: ${created.length}`, "success"), onError: () => toast("Проверьте дату начала недели А", "error") },
+                      )}
+                    >
+                      Сгенерировать на 60 дней
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div className={styles.formBlock}>
+                <strong className={styles.formTitle}>Разовое событие</strong>
                 <input placeholder="Название события *" value={newEvent.title} onChange={(e) => setNewEvent({ ...newEvent, title: e.target.value })} />
                 <label className={styles.fieldLabel}>
                   <span>Начало *</span>
@@ -2800,69 +3162,213 @@ function AdminView({
                 <div className={styles.row} key={ev.id}>
                   <img src={iconPath("schedule")} alt="" />
                   <div>
-                    <strong>{ev.title}</strong>
+                    <strong>
+                      {ev.title}
+                      {ev.is_overridden && <span className={styles.inlineBadge} data-tone="warning">изм.</span>}
+                    </strong>
                     <span>{formatDate(ev.start_datetime)}{ev.place ? ` · ${ev.place}` : ""}{ev.squad_id ? ` · ${squadMap.get(ev.squad_id) ?? "отделение"}` : " · все"}</span>
                   </div>
-                  <button type="button" className={styles.btnNotComing} style={{ gridColumn: "1/-1" }} onClick={() => deleteEvent.mutate(ev.id, { onSuccess: () => toast("Событие удалено", "warning") })}>
-                    Удалить
-                  </button>
+                  {editingEventId === ev.id && (
+                    <div className={styles.formBlock} style={{ gridColumn: "1/-1" }}>
+                      <input value={eventEdits[ev.id]?.title ?? ""} onChange={(e) => setEventEdits({ ...eventEdits, [ev.id]: { ...eventEdits[ev.id], title: e.target.value } })} />
+                      <label className={styles.fieldLabel}>
+                        <span>Начало</span>
+                        <input type="datetime-local" value={eventEdits[ev.id]?.start_datetime ?? ""} onChange={(e) => setEventEdits({ ...eventEdits, [ev.id]: { ...eventEdits[ev.id], start_datetime: e.target.value } })} />
+                      </label>
+                      <label className={styles.fieldLabel}>
+                        <span>Конец</span>
+                        <input type="datetime-local" value={eventEdits[ev.id]?.end_datetime ?? ""} onChange={(e) => setEventEdits({ ...eventEdits, [ev.id]: { ...eventEdits[ev.id], end_datetime: e.target.value } })} />
+                      </label>
+                      <input placeholder="Место" value={eventEdits[ev.id]?.place ?? ""} onChange={(e) => setEventEdits({ ...eventEdits, [ev.id]: { ...eventEdits[ev.id], place: e.target.value } })} />
+                      <textarea rows={2} placeholder="Описание" value={eventEdits[ev.id]?.description ?? ""} onChange={(e) => setEventEdits({ ...eventEdits, [ev.id]: { ...eventEdits[ev.id], description: e.target.value } })} />
+                      <div className={styles.commandStrip}>
+                        <button
+                          type="button"
+                          disabled={updateEvent.isPending || !eventEdits[ev.id]?.title?.trim() || !eventEdits[ev.id]?.start_datetime}
+                          onClick={() => {
+                            const edit = eventEdits[ev.id];
+                            updateEvent.mutate(
+                              {
+                                id: ev.id,
+                                title: edit.title.trim(),
+                                description: edit.description || null,
+                                start_datetime: new Date(edit.start_datetime).toISOString(),
+                                end_datetime: edit.end_datetime ? new Date(edit.end_datetime).toISOString() : null,
+                                place: edit.place || null,
+                              },
+                              { onSuccess: () => { setEditingEventId(null); toast("Событие изменено", "success"); } },
+                            );
+                          }}
+                        >
+                          Сохранить изменение
+                        </button>
+                        <button type="button" disabled={updateEvent.isPending} onClick={() => setEditingEventId(null)}>Отмена</button>
+                      </div>
+                    </div>
+                  )}
+                  <div className={styles.commandStrip} style={{ gridColumn: "1/-1" }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingEventId(ev.id);
+                        setEventEdits({
+                          ...eventEdits,
+                          [ev.id]: {
+                            title: ev.title,
+                            description: ev.description ?? "",
+                            start_datetime: toDateTimeLocal(ev.start_datetime),
+                            end_datetime: toDateTimeLocal(ev.end_datetime),
+                            place: ev.place ?? "",
+                          },
+                        });
+                      }}
+                    >
+                      Изменить
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.btnNotComing}
+                      onClick={() => {
+                        if (!window.confirm(`Удалить событие «${ev.title}»?`)) return;
+                        deleteEvent.mutate(ev.id, { onSuccess: () => toast("Событие удалено", "warning") });
+                      }}
+                    >
+                      Удалить
+                    </button>
+                  </div>
                 </div>
               ))}
             </>
           )}
 
-          {tab === "applications" && (applications.length === 0 ? <Empty text="Заявок нет" /> : applications.slice(0, 30).map((item) => (
-            <article className={styles.row} key={item.id}>
-              <img src={iconPath("my_squad")} alt="" />
-              <div>
-                <strong>{item.full_name}</strong>
-                <span>{applicationStatusLabels[item.status_code] ?? item.status_code} · {item.phone ? formatPhoneDisplay(item.phone) : "телефон не указан"}</span>
-              </div>
-              {!["ACCEPTED", "REJECTED", "ARCHIVED"].includes(item.status_code) && (
-                <div className={styles.applicationActions}>
-                  <select
-                    value={applicationSquads[item.id] ?? ""}
-                    disabled={isBusy}
-                    onChange={(event) => setApplicationSquads((prev) => ({ ...prev, [item.id]: event.target.value }))}
-                  >
-                    <option value="">Без отделения</option>
-                    {squads.map((squad) => (
-                      <option key={squad.id} value={squad.id}>{squad.name}</option>
-                    ))}
-                  </select>
-                  <input
-                    value={rejectReasons[item.id] ?? ""}
-                    disabled={isBusy}
-                    placeholder="Причина отказа"
-                    onChange={(event) => setRejectReasons((prev) => ({ ...prev, [item.id]: event.target.value }))}
-                  />
-                  <button
-                    type="button"
-                    className={styles.btnComing}
-                    disabled={isBusy}
-                    onClick={() => {
-                      const squadId = applicationSquads[item.id];
-                      onAccept(item.id, squadId ? Number(squadId) : null);
-                    }}
-                  >
-                    Принять
-                  </button>
-                  <button
-                    type="button"
-                    className={styles.btnNotComing}
-                    disabled={isBusy}
-                    onClick={() => onReject(item.id, rejectReasons[item.id]?.trim() || undefined)}
-                  >
-                    Отклонить
-                  </button>
-                  <button type="button" className={styles.btnMaybe} disabled>
-                    {applicationStatusLabels[item.status_code] ?? "—"}
-                  </button>
-                </div>
-              )}
-            </article>
-          )))}
+          {/* ── Applications ── */}
+          {tab === "applications" && (
+            <>
+              <select
+                value={appStatusFilter}
+                onChange={(e) => setAppStatusFilter(e.target.value)}
+                style={{ marginBottom: 8 }}
+              >
+                <option value="">Все статусы</option>
+                {Object.entries(applicationStatusLabels).map(([k, v]) => (
+                  <option key={k} value={k}>{v}</option>
+                ))}
+              </select>
+              {filteredApps.length === 0 ? <Empty text="Заявок нет" /> : filteredApps.map((item) => (
+                <article className={styles.row} key={item.id}>
+                  <img src={iconPath("my_squad")} alt="" />
+                  <div>
+                    <strong>{item.full_name}</strong>
+                    <span>{applicationStatusLabels[item.status_code] ?? item.status_code} · {item.phone ? formatPhoneDisplay(item.phone) : "телефон не указан"}</span>
+                    {item.city && <span>{item.city}{item.education_place ? ` · ${item.education_place}` : ""}</span>}
+                    {item.admin_comment && <span style={{ color: "#65708a" }}>Комментарий: {item.admin_comment}</span>}
+                  </div>
+                  {!["ACCEPTED", "REJECTED", "ARCHIVED"].includes(item.status_code) && (
+                    <div className={styles.applicationActions}>
+                      <select
+                        value={applicationSquads[item.id] ?? ""}
+                        disabled={isBusy}
+                        onChange={(event) => setApplicationSquads((prev) => ({ ...prev, [item.id]: event.target.value }))}
+                      >
+                        <option value="">Без отделения</option>
+                        {squads.map((squad) => (
+                          <option key={squad.id} value={squad.id}>{squad.name}</option>
+                        ))}
+                      </select>
+                      <input
+                        value={rejectReasons[item.id] ?? ""}
+                        disabled={isBusy}
+                        placeholder="Причина отказа / комментарий"
+                        onChange={(event) => setRejectReasons((prev) => ({ ...prev, [item.id]: event.target.value }))}
+                      />
+                      <select
+                        defaultValue=""
+                        disabled={isBusy}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          if (!value) return;
+                          updateApplication.mutate(
+                            { id: item.id, status_code: value, admin_comment: rejectReasons[item.id] || undefined },
+                            { onSuccess: () => toast(`Статус → ${applicationStatusLabels[value] ?? value}`, "info") },
+                          );
+                          event.target.value = "";
+                        }}
+                      >
+                        <option value="">Изменить статус...</option>
+                        {["REVIEWING", "NEEDS_INFO", "INVITED_MEETING", "INVITED_NORMATIVES", "AWAITING_DECISION"].map((s) => (
+                          <option key={s} value={s}>{applicationStatusLabels[s] ?? s}</option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        className={styles.btnComing}
+                        disabled={isBusy}
+                        onClick={() => {
+                          const squadId = applicationSquads[item.id];
+                          onAccept(item.id, squadId ? Number(squadId) : null);
+                        }}
+                      >
+                        Принять
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.btnNotComing}
+                        disabled={isBusy}
+                        onClick={() => onReject(item.id, rejectReasons[item.id]?.trim() || undefined)}
+                      >
+                        Отклонить
+                      </button>
+                    </div>
+                  )}
+                </article>
+              ))}
+            </>
+          )}
 
+          {/* ── Appeals (обращения) ── */}
+          {tab === "appeals" && (
+            adminAppeals.isLoading ? <Empty text="Загрузка..." /> :
+            (adminAppeals.data ?? []).length === 0 ? <Empty text="Обращений нет" /> :
+            (adminAppeals.data ?? []).map((item) => (
+              <article className={styles.row} key={item.id}>
+                <img src={iconPath("appeal")} alt="" />
+                <div>
+                  <strong>{item.subject}</strong>
+                  <span>
+                    {appealStatusLabel(item.status_code)} · {item.urgency_code} · {item.category_code}
+                    {!item.is_anonymous && item.author_user_id ? ` · пользователь #${item.author_user_id}` : " · анонимно"}
+                  </span>
+                  <span>{formatDate(item.created_at)}</span>
+                  {item.resolution_text && <span style={{ color: "#27ae60" }}>Решение: {item.resolution_text}</span>}
+                </div>
+                {item.status_code !== "CLOSED" && (
+                  <div className={styles.memberControls}>
+                    <select
+                      defaultValue=""
+                      disabled={updateAppeal.isPending}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        if (!value) return;
+                        updateAppeal.mutate(
+                          { appealId: item.id, status_code: value },
+                          { onSuccess: () => toast(`Статус → ${value}`, "info") },
+                        );
+                        event.target.value = "";
+                      }}
+                    >
+                      <option value="">Изменить статус...</option>
+                      <option value="IN_PROGRESS">В работе</option>
+                      <option value="NEEDS_INFO">Нужна информация</option>
+                      <option value="RESOLVED">Решено</option>
+                      <option value="CLOSED">Закрыто</option>
+                    </select>
+                  </div>
+                )}
+              </article>
+            ))
+          )}
+
+          {/* ── Squads ── */}
           {tab === "squads" && (
             <>
               <div className={styles.formBlock}>
@@ -2894,7 +3400,7 @@ function AdminView({
                         onChange={(event) => setSquadNames((prev) => ({ ...prev, [squad.id]: event.target.value }))}
                       />
                       <span>
-                        {users.filter((u) => u.squad_id === squad.id).length} участников
+                        {users.filter((u) => u.squad_id === squad.id).length} участников · {squad.is_active ? "активно" : "неактивно"}
                         {squad.commander_user_id ? ` · Ком: ${users.find((u) => u.id === squad.commander_user_id)?.full_name ?? "—"}` : ""}
                       </span>
                     </div>
@@ -2931,7 +3437,7 @@ function AdminView({
                         disabled={updateSquad.isPending}
                         onClick={() => updateSquad.mutate({ id: squad.id, is_active: !squad.is_active })}
                       >
-                        {squad.is_active ? "Выключить" : "Включить"}
+                        {squad.is_active ? "Деактивировать" : "Активировать"}
                       </button>
                     </div>
                   </div>
@@ -2940,38 +3446,368 @@ function AdminView({
             </>
           )}
 
-          {tab === "menu" && (menu.length === 0 ? <Empty text="Карточек меню нет" /> : menu.slice(0, 12).map((item) => (
+          {/* ── Candidate Events ── */}
+          {tab === "events" && (
+            <>
+              <div className={styles.formBlock}>
+                <input placeholder="Название события *" value={newCandEvent.title} onChange={(e) => setNewCandEvent({ ...newCandEvent, title: e.target.value })} />
+                <label className={styles.fieldLabel}>
+                  <span>Начало *</span>
+                  <input type="datetime-local" value={newCandEvent.start_datetime} onChange={(e) => setNewCandEvent({ ...newCandEvent, start_datetime: e.target.value })} />
+                </label>
+                <input placeholder="Место проведения" value={newCandEvent.place} onChange={(e) => setNewCandEvent({ ...newCandEvent, place: e.target.value })} />
+                <input placeholder="Описание" value={newCandEvent.description} onChange={(e) => setNewCandEvent({ ...newCandEvent, description: e.target.value })} />
+                <button
+                  type="button"
+                  disabled={!newCandEvent.title.trim() || !newCandEvent.start_datetime || createCandEvent.isPending}
+                  onClick={() => createCandEvent.mutate(
+                    {
+                      title: newCandEvent.title.trim(),
+                      start_datetime: new Date(newCandEvent.start_datetime).toISOString(),
+                      place: newCandEvent.place || undefined,
+                      description: newCandEvent.description || undefined,
+                    },
+                    { onSuccess: () => { setNewCandEvent({ title: "", start_datetime: "", place: "", description: "" }); toast("Событие создано", "success"); } },
+                  )}
+                >
+                  {createCandEvent.isPending ? "Создаём..." : "Создать событие для кандидатов"}
+                </button>
+              </div>
+              {adminJoinEvents.isLoading && <Empty text="Загрузка..." />}
+              {(adminJoinEvents.data ?? []).length === 0 && !adminJoinEvents.isLoading && <Empty text="Событий нет" />}
+              {(adminJoinEvents.data ?? []).map((ev) => (
+                <div className={styles.row} key={ev.id}>
+                  <img src={iconPath("schedule")} alt="" />
+                  <div>
+                    <strong>{ev.title}</strong>
+                    <span>{formatDate(ev.start_datetime)}{ev.place ? ` · ${ev.place}` : ""} · {ev.is_active ? "активно" : "неактивно"}</span>
+                  </div>
+                  <button
+                    type="button"
+                    className={styles.iconAction}
+                    onClick={() => updateCandEvent.mutate({ id: ev.id, is_active: !ev.is_active }, {
+                      onSuccess: () => toast(ev.is_active ? "Скрыто" : "Показано", "info"),
+                    })}
+                  >
+                    {ev.is_active ? "Скрыть" : "Показать"}
+                  </button>
+                </div>
+              ))}
+            </>
+          )}
+
+          {/* ── Normatives ── */}
+          {tab === "normatives" && (
+            <>
+              <div className={styles.formBlock}>
+                <input placeholder="Название норматива *" value={newNorm.title} onChange={(e) => setNewNorm({ ...newNorm, title: e.target.value })} />
+                <input placeholder="Описание" value={newNorm.description} onChange={(e) => setNewNorm({ ...newNorm, description: e.target.value })} />
+                <select value={newNorm.target_audience} onChange={(e) => setNewNorm({ ...newNorm, target_audience: e.target.value })}>
+                  <option value="ALL">Для всех</option>
+                  <option value="SQUAD">Для отделения</option>
+                  <option value="PLATOON">Для взвода</option>
+                </select>
+                <select value={newNorm.squad_id} onChange={(e) => setNewNorm({ ...newNorm, squad_id: e.target.value })}>
+                  <option value="">Без привязки к отделению</option>
+                  {squads.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+                <button
+                  type="button"
+                  disabled={!newNorm.title.trim() || createNorm.isPending}
+                  onClick={() => createNorm.mutate(
+                    { title: newNorm.title.trim(), description: newNorm.description || undefined, target_audience: newNorm.target_audience, squad_id: newNorm.squad_id ? Number(newNorm.squad_id) : null },
+                    { onSuccess: () => { setNewNorm({ title: "", description: "", target_audience: "ALL", squad_id: "" }); toast("Норматив создан", "success"); } },
+                  )}
+                >
+                  {createNorm.isPending ? "Создаём..." : "Создать норматив"}
+                </button>
+              </div>
+              {adminNorms.isLoading && <Empty text="Загрузка..." />}
+              {(adminNorms.data ?? []).length === 0 && !adminNorms.isLoading && <Empty text="Нормативов нет" />}
+              {(adminNorms.data ?? []).map((norm) => (
+                <div className={styles.row} key={norm.id}>
+                  <img src={iconPath("norms")} alt="" />
+                  <div>
+                    <strong>{norm.title}</strong>
+                    <span>{norm.target_audience}{norm.squad_id ? ` · ${squadMap.get(norm.squad_id) ?? "#" + norm.squad_id}` : ""} · {norm.is_active ? "активен" : "архив"}</span>
+                  </div>
+                  <div className={styles.memberControls}>
+                    <button
+                      type="button"
+                      className={styles.iconAction}
+                      disabled={updateNorm.isPending}
+                      onClick={() => updateNorm.mutate({ id: norm.id, is_active: !norm.is_active }, {
+                        onSuccess: () => toast(norm.is_active ? "Архивирован" : "Восстановлен", "info"),
+                      })}
+                    >
+                      {norm.is_active ? "Архивировать" : "Восстановить"}
+                    </button>
+                    {!norm.is_active && (
+                      <button
+                        type="button"
+                        className={styles.btnNotComing}
+                        disabled={deleteNorm.isPending}
+                        onClick={() => {
+                          if (!window.confirm(`Удалить норматив «${norm.title}»?`)) return;
+                          deleteNorm.mutate(norm.id, { onSuccess: () => toast("Норматив удалён", "warning") });
+                        }}
+                      >
+                        Удалить
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+
+          {/* ── Learning materials ── */}
+          {tab === "learning" && (
+            <>
+              <div className={styles.formBlock}>
+                <strong style={{ display: "block", marginBottom: 6 }}>Новый курс</strong>
+                <input placeholder="Название курса *" value={newCourse.title} onChange={(e) => setNewCourse({ ...newCourse, title: e.target.value })} />
+                <input placeholder="Описание" value={newCourse.description} onChange={(e) => setNewCourse({ ...newCourse, description: e.target.value })} />
+                <select value={newCourse.audience_code} onChange={(e) => setNewCourse({ ...newCourse, audience_code: e.target.value })}>
+                  <option value="ALL">Для всех</option>
+                  <option value="PARTICIPANT">Для участников</option>
+                  <option value="COMMANDERS">Для командиров</option>
+                  <option value="CANDIDATE">Для кандидатов</option>
+                </select>
+                <button
+                  type="button"
+                  disabled={!newCourse.title.trim() || createCourse.isPending}
+                  onClick={() => createCourse.mutate(
+                    { title: newCourse.title.trim(), description: newCourse.description || undefined, audience_code: newCourse.audience_code },
+                    { onSuccess: () => { setNewCourse({ title: "", description: "", audience_code: "ALL" }); toast("Курс создан", "success"); } },
+                  )}
+                >
+                  {createCourse.isPending ? "Создаём..." : "Создать курс"}
+                </button>
+              </div>
+              <div className={styles.formBlock}>
+                <strong style={{ display: "block", marginBottom: 6 }}>Новый материал</strong>
+                <input placeholder="Название материала *" value={newMaterial.title} onChange={(e) => setNewMaterial({ ...newMaterial, title: e.target.value })} />
+                <input placeholder="URL (видео/ссылка)" value={newMaterial.external_url} onChange={(e) => setNewMaterial({ ...newMaterial, external_url: e.target.value })} />
+                <select value={newMaterial.type_code} onChange={(e) => setNewMaterial({ ...newMaterial, type_code: e.target.value })}>
+                  <option value="TEXT">Текст</option>
+                  <option value="VIDEO">Видео</option>
+                  <option value="LINK">Ссылка</option>
+                  <option value="FILE">Файл</option>
+                </select>
+                <select value={newMaterial.audience_code} onChange={(e) => setNewMaterial({ ...newMaterial, audience_code: e.target.value })}>
+                  <option value="ALL">Для всех</option>
+                  <option value="PARTICIPANT">Для участников</option>
+                  <option value="COMMANDERS">Для командиров</option>
+                  <option value="CANDIDATE">Для кандидатов</option>
+                </select>
+                <button
+                  type="button"
+                  disabled={!newMaterial.title.trim() || createMaterial.isPending}
+                  onClick={() => createMaterial.mutate(
+                    { title: newMaterial.title.trim(), type_code: newMaterial.type_code, external_url: newMaterial.external_url || undefined, audience_code: newMaterial.audience_code, is_active: true },
+                    { onSuccess: () => { setNewMaterial({ title: "", type_code: "TEXT", external_url: "", audience_code: "ALL", is_active: true }); toast("Материал добавлен", "success"); } },
+                  )}
+                >
+                  {createMaterial.isPending ? "Создаём..." : "Добавить материал"}
+                </button>
+              </div>
+              {adminCourses.isLoading && <Empty text="Загрузка курсов..." />}
+              {(adminCourses.data ?? []).map((course) => (
+                <div className={styles.row} key={course.id}>
+                  <img src={iconPath("learning")} alt="" />
+                  <div>
+                    <strong>{course.title}</strong>
+                    <span>Курс · {course.audience_code} · {course.is_active ? "активен" : "скрыт"}</span>
+                  </div>
+                  <button
+                    type="button"
+                    className={styles.iconAction}
+                    disabled={updateCourse.isPending}
+                    onClick={() => updateCourse.mutate({ id: course.id, is_active: !course.is_active }, {
+                      onSuccess: () => toast(course.is_active ? "Скрыт" : "Показан", "info"),
+                    })}
+                  >
+                    {course.is_active ? "Скрыть" : "Показать"}
+                  </button>
+                </div>
+              ))}
+              {adminMaterials.isLoading && <Empty text="Загрузка материалов..." />}
+              {(adminMaterials.data ?? []).map((mat) => (
+                <div className={styles.row} key={mat.id}>
+                  <img src={iconPath("learning")} alt="" />
+                  <div>
+                    <strong>{mat.title}</strong>
+                    <span>{mat.type_code} · {mat.audience_code} · {mat.is_active ? "активен" : "скрыт"}</span>
+                    {mat.external_url && <span style={{ fontSize: "0.75rem", wordBreak: "break-all" }}>{mat.external_url}</span>}
+                  </div>
+                  <button
+                    type="button"
+                    className={styles.iconAction}
+                    disabled={updateMaterial.isPending}
+                    onClick={() => updateMaterial.mutate({ id: mat.id, is_active: !mat.is_active }, {
+                      onSuccess: () => toast(mat.is_active ? "Скрыт" : "Показан", "info"),
+                    })}
+                  >
+                    {mat.is_active ? "Скрыть" : "Показать"}
+                  </button>
+                </div>
+              ))}
+            </>
+          )}
+
+          {/* ── Menu ── */}
+          {tab === "menu" && (menu.length === 0 ? <Empty text="Карточек меню нет" /> : menu.map((item) => (
             <article className={styles.row} key={item.id ?? item.code}>
               <img src={iconPath(item.icon_code ?? item.code)} alt="" />
               <div>
                 <strong>{item.title}</strong>
-                <span>{item.is_required ? "обязательная" : "обычная"} · {item.is_active ? "активна" : "скрыта"}</span>
+                <span>{item.is_required ? "обязательная" : "обычная"} · {item.is_active ? "активна" : "скрыта"} · порядок: {item.sort_order}</span>
               </div>
-              {level >= 8 && item.id && (
-                <button
-                  className={styles.iconAction}
-                  type="button"
-                  disabled={updateMenu.isPending}
-                  onClick={() => updateMenu.mutate({ id: item.id!, is_active: !item.is_active })}
-                >
-                  {item.is_active ? "Скрыть" : "Показать"}
-                </button>
+              {item.id && (
+                <div className={styles.memberControls}>
+                  <button
+                    className={styles.iconAction}
+                    type="button"
+                    disabled={updateMenu.isPending}
+                    onClick={() => updateMenu.mutate({ id: item.id!, is_active: !item.is_active })}
+                  >
+                    {item.is_active ? "Скрыть" : "Показать"}
+                  </button>
+                  <button
+                    className={styles.iconAction}
+                    type="button"
+                    disabled={updateMenu.isPending}
+                    onClick={() => updateMenu.mutate({ id: item.id!, sort_order: Math.max(0, item.sort_order - 1) })}
+                  >
+                    ▲
+                  </button>
+                  <button
+                    className={styles.iconAction}
+                    type="button"
+                    disabled={updateMenu.isPending}
+                    onClick={() => updateMenu.mutate({ id: item.id!, sort_order: item.sort_order + 1 })}
+                  >
+                    ▼
+                  </button>
+                </div>
               )}
             </article>
           )))}
 
+          {/* ── Audit Logs ── */}
           {tab === "logs" && (
-            audit.length === 0 ? <Empty text="Аудит-лог пуст" /> : audit.slice(0, 80).map((item) => (
-              <article className={styles.row} key={item.id}>
-                <img src={iconPath("admin")} alt="" />
-                <div>
-                  <strong>{item.action_code}</strong>
-                  <span>
-                    {item.entity_name ?? "entity"} #{item.entity_id ?? "—"} · user {item.user_id ?? "—"} · {formatDate(item.created_at)}
-                  </span>
-                </div>
-              </article>
-            ))
+            <>
+              <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+                <input
+                  placeholder="Код действия (фильтр)"
+                  value={logFilter.action_code}
+                  onChange={(e) => setLogFilter((f) => ({ ...f, action_code: e.target.value }))}
+                  style={{ flex: 1 }}
+                />
+                <input
+                  placeholder="Сущность (users, files...)"
+                  value={logFilter.entity_name}
+                  onChange={(e) => setLogFilter((f) => ({ ...f, entity_name: e.target.value }))}
+                  style={{ flex: 1 }}
+                />
+              </div>
+              {auditFiltered.isLoading && <Empty text="Загрузка..." />}
+              {(auditFiltered.data ?? audit).length === 0 ? <Empty text="Аудит-лог пуст" /> : (auditFiltered.data ?? audit).map((item) => (
+                <article className={styles.row} key={item.id}>
+                  <img src={iconPath("admin")} alt="" />
+                  <div>
+                    <strong>{item.action_code}</strong>
+                    <span>
+                      {item.entity_name ?? "—"} #{item.entity_id ?? "—"} · user {item.user_id ?? "—"} · {formatDate(item.created_at)}
+                    </span>
+                    {item.new_value != null && (
+                      <span style={{ fontSize: "0.72rem", color: "#65708a", wordBreak: "break-all" }}>
+                        {String(JSON.stringify(item.new_value)).slice(0, 120)}
+                      </span>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </>
+          )}
+
+          {/* ── Settings (SUPER_ADMIN only) ── */}
+          {tab === "settings" && (
+            <>
+              {adminSettings.isLoading && <Empty text="Загрузка настроек..." />}
+              {adminSettings.data && (() => {
+                const byKey = Object.fromEntries(adminSettings.data.map((s) => [s.key, s.value ?? ""]));
+                const draft = { ...byKey, ...settingsDraft };
+                const field = (key: string, label: string, placeholder = "", type: "text" | "textarea" | "date" = "text") => (
+                  <label key={key} className={styles.fieldLabel} style={{ flexDirection: "column", alignItems: "flex-start", gap: 4 }}>
+                    <span style={{ fontWeight: 600, fontSize: "0.85rem" }}>{label}</span>
+                    {type === "textarea" ? (
+                      <textarea
+                        value={draft[key] ?? ""}
+                        placeholder={placeholder}
+                        rows={3}
+                        style={{ width: "100%", resize: "vertical" }}
+                        onChange={(e) => setSettingsDraft((d) => ({ ...d, [key]: e.target.value }))}
+                      />
+                    ) : (
+                      <input
+                        type={type}
+                        value={draft[key] ?? ""}
+                        placeholder={placeholder}
+                        onChange={(e) => setSettingsDraft((d) => ({ ...d, [key]: e.target.value }))}
+                      />
+                    )}
+                  </label>
+                );
+                return (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                    <strong style={{ fontSize: "0.9rem", color: "#65708a" }}>🎂 Поздравления с днём рождения</strong>
+                    <label className={styles.checkboxLine}>
+                      <input
+                        type="checkbox"
+                        checked={(draft["birthday_enabled"] ?? "true") !== "false"}
+                        onChange={(e) => setSettingsDraft((d) => ({ ...d, birthday_enabled: e.target.checked ? "true" : "false" }))}
+                      />
+                      <span>Включить поздравления</span>
+                    </label>
+                    {field("birthday_time", "Время отправки (HH:MM)", "09:00")}
+                    {field("birthday_greeting_template", "Шаблон поздравления (плейсхолдеры: {name}, {first_name}, {age})", "🎉 Поздравляем {name} с днём рождения!", "textarea")}
+                    <strong style={{ fontSize: "0.9rem", color: "#65708a" }}>Расписание</strong>
+                    {field("schedule_week_a_start", "Дата начала недели А", "2026-06-02", "date")}
+                    <small style={{ color: "#65708a", fontWeight: 700 }}>
+                      Любой понедельник: эта неделя и все четные после нее считаются неделей А.
+                    </small>
+                    <label className={styles.fieldLabel} style={{ flexDirection: "column", alignItems: "flex-start", gap: 4 }}>
+                      <span style={{ fontWeight: 600, fontSize: "0.85rem" }}>Политика 29 февраля</span>
+                      <select
+                        value={draft["leap_policy"] ?? "28"}
+                        onChange={(e) => setSettingsDraft((d) => ({ ...d, leap_policy: e.target.value }))}
+                      >
+                        <option value="28">28 февраля</option>
+                        <option value="march1">1 марта</option>
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      disabled={Object.keys(settingsDraft).length === 0 || updateSettings.isPending}
+                      onClick={() => {
+                        const changed: Record<string, string | null> = {};
+                        for (const [k, v] of Object.entries(settingsDraft)) {
+                          changed[k] = v || null;
+                        }
+                        updateSettings.mutate(changed, {
+                          onSuccess: () => { toast("Настройки сохранены ✅", "success"); setSettingsDraft({}); },
+                          onError: () => toast("Ошибка сохранения", "error"),
+                        });
+                      }}
+                    >
+                      {updateSettings.isPending ? "Сохраняем..." : "Сохранить настройки"}
+                    </button>
+                  </div>
+                );
+              })()}
+            </>
           )}
         </div>
       )}

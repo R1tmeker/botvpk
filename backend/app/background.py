@@ -19,6 +19,7 @@ from .models import (
     NormativeSubmission,
     Notification,
     ScheduleEvent,
+    Setting,
     User,
 )
 
@@ -62,6 +63,8 @@ def create_scheduler(settings: Settings) -> AsyncIOScheduler:
     scheduler.add_job(check_low_attendance_and_grades, "cron", hour=20, minute=0, max_instances=1)
     # Daily at 19:00: overdue normative warnings to participants
     scheduler.add_job(check_overdue_normatives, "cron", hour=19, minute=0, max_instances=1)
+    # Daily at 09:00: birthday greetings
+    scheduler.add_job(send_birthday_greetings, "cron", hour=9, minute=0, args=[settings], max_instances=1)
     return scheduler
 
 
@@ -665,3 +668,121 @@ async def check_overdue_normatives() -> None:
                     )
                 )
         await session.commit()
+
+
+# ─────────────────────── birthday greetings ─────────────────
+
+
+_BIRTHDAY_ROLES = (
+    "PARTICIPANT",
+    "DEPUTY_SQUAD_COMMANDER",
+    "SQUAD_COMMANDER",
+    "DEPUTY_PLATOON_COMMANDER",
+    "PLATOON_COMMANDER",
+    "ADMIN",
+    "SUPER_ADMIN",
+)
+
+_DEFAULT_BIRTHDAY_TEMPLATE = "🎉 Поздравляем {name} с днём рождения! Желаем успехов и боевого духа!"
+
+
+def _is_birthday_today(birth_date, today, leap_policy: str) -> bool:
+    """Check if birth_date falls on today, respecting leap year policy for Feb 29."""
+    if birth_date.month == today.month and birth_date.day == today.day:
+        return True
+    if birth_date.month == 2 and birth_date.day == 29:
+        import calendar
+        is_leap = calendar.isleap(today.year)
+        if not is_leap:
+            if leap_policy == "28" and today.month == 2 and today.day == 28:
+                return True
+            if leap_policy == "march1" and today.month == 3 and today.day == 1:
+                return True
+    return False
+
+
+async def send_birthday_greetings(settings: Settings) -> None:
+    """Daily 09:00: send personal DM congratulations to active members whose birthday is today."""
+    import pytz
+    tz = pytz.timezone(settings.timezone)
+    today = datetime.now(tz).date()
+    now = utcnow()
+
+    async with AsyncSessionLocal() as session:
+        settings_rows = {
+            row.key: row.value
+            for row in (
+                await session.scalars(
+                    select(Setting).where(
+                        Setting.key.in_(["birthday_enabled", "birthday_greeting_template", "leap_policy"])
+                    )
+                )
+            ).all()
+        }
+
+        if settings_rows.get("birthday_enabled", "true").lower() in ("false", "0", "no", "off"):
+            return
+
+        template = settings_rows.get("birthday_greeting_template") or _DEFAULT_BIRTHDAY_TEMPLATE
+        leap_policy = settings_rows.get("leap_policy") or "28"
+
+        users = list(
+            (
+                await session.scalars(
+                    select(User).where(
+                        User.status_code == "ACTIVE",
+                        User.role_code.in_(_BIRTHDAY_ROLES),
+                        User.birth_date.is_not(None),
+                        User.telegram_id.is_not(None),
+                    )
+                )
+            ).all()
+        )
+
+        birthday_users = [u for u in users if _is_birthday_today(u.birth_date, today, leap_policy)]
+        if not birthday_users:
+            return
+
+        day_start_utc = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        bot = Bot(settings.bot_token)
+        try:
+            for user in birthday_users:
+                # Idempotency: skip if already greeted today
+                already_sent = await session.scalar(
+                    select(Notification.id).where(
+                        Notification.user_id == user.id,
+                        Notification.type_code == "BIRTHDAY",
+                        Notification.entity_name == "birthday_greeting",
+                        Notification.created_at >= day_start_utc,
+                    )
+                )
+                if already_sent:
+                    continue
+
+                age = today.year - user.birth_date.year if user.birth_date else 0
+                first_name = user.full_name.split()[0] if user.full_name else user.full_name
+                text = template.format(
+                    name=user.full_name,
+                    first_name=first_name,
+                    age=str(age),
+                ).strip()
+
+                try:
+                    await bot.send_message(user.telegram_id, text)
+                except Exception:
+                    logger.exception("Failed to send birthday DM to user_id=%s tg_id=%s", user.id, user.telegram_id)
+
+                session.add(
+                    Notification(
+                        user_id=user.id,
+                        type_code="BIRTHDAY",
+                        title="С днём рождения!",
+                        body=text,
+                        entity_name="birthday_greeting",
+                        entity_id=user.id,
+                        send_to_tg=False,
+                    )
+                )
+            await session.commit()
+        finally:
+            await bot.session.close()

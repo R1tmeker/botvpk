@@ -26,6 +26,7 @@ class AuthResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     profile: UserProfile
+    app_timezone: str = "Asia/Novosibirsk"
 
 
 class MenuCardResponse(BaseModel):

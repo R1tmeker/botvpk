@@ -7,7 +7,6 @@ Revises: 0001_initial_schema
 from collections.abc import Sequence
 
 from alembic import op
-import sqlalchemy as sa
 
 
 revision: str = "0002_user_avatar"
@@ -17,14 +16,24 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column("users", sa.Column("avatar_file_id", sa.Integer(), nullable=True))
-    op.create_foreign_key(
-        "fk_users_avatar_file_id_files",
-        "users",
-        "files",
-        ["avatar_file_id"],
-        ["id"],
-        ondelete="SET NULL",
+    op.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_file_id INTEGER")
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'fk_users_avatar_file_id_files'
+            ) THEN
+                ALTER TABLE users
+                ADD CONSTRAINT fk_users_avatar_file_id_files
+                FOREIGN KEY (avatar_file_id)
+                REFERENCES files(id)
+                ON DELETE SET NULL;
+            END IF;
+        END $$;
+        """
     )
 
 

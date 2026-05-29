@@ -181,6 +181,7 @@ class ScheduleEventRead(ORMModel):
     squad_id: int | None = None
     status_code: str
     requires_response: bool
+    is_overridden: bool = False
     response_deadline_at: datetime | None = None
     grading_type: str
     file_id: int | None = None
@@ -231,6 +232,7 @@ class ScheduleTemplateRead(ORMModel):
     title: str
     description: str | None = None
     week_days: str
+    week_parity: str | None = None
     start_time: time
     end_time: time | None = None
     place: str | None = None
@@ -249,6 +251,7 @@ class ScheduleTemplateCreate(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     description: str | None = None
     week_days: str
+    week_parity: str | None = Field(default=None, pattern="^(A|B)$")
     start_time: time
     end_time: time | None = None
     place: str | None = None
@@ -265,6 +268,7 @@ class ScheduleTemplateUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = None
     week_days: str | None = None
+    week_parity: str | None = Field(default=None, pattern="^(A|B)$")
     start_time: time | None = None
     end_time: time | None = None
     place: str | None = None

@@ -23,6 +23,7 @@ SETTING_SEEDS = {
     "leap_policy": "march1",
     "default_response_deadline_minutes": "120",
     "auto_absent_after_event": "true",
+    "schedule_week_a_start": "2026-06-02",
 }
 
 MENU_CARD_SEEDS = [

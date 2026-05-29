@@ -8,8 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...database import get_db_session
 from ...dependencies.auth import CurrentUser, require_role
-from ...models import ApplicationStatusHistory, CandidateEvent, JoinApplication, Notification, User
-from ...roles import RoleLevel
+from ...models import ApplicationStatusHistory, CandidateEvent, JoinApplication, Notification, Squad, User
+from ...roles import RoleCode, RoleLevel
 from ...schemas.core import (
     ApplicationAcceptRequest,
     ApplicationAdminUpdate,
@@ -18,6 +18,13 @@ from ...schemas.core import (
     JoinApplicationRead,
 )
 from ...utils.audit import model_snapshot, record_audit
+
+# Роли, которые можно выдать при приёме заявки (не выше командира отделения)
+_ACCEPT_ALLOWED_ROLES = {
+    RoleCode.PARTICIPANT,
+    RoleCode.DEPUTY_SQUAD_COMMANDER,
+    RoleCode.SQUAD_COMMANDER,
+}
 
 router = APIRouter(prefix="/admin/join", tags=["admin:join"])
 
@@ -102,6 +109,15 @@ async def accept_application(
     application = await session.get(JoinApplication, application_id)
     if not application:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found.")
+    if payload.role_code not in _ACCEPT_ALLOWED_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot assign role '{payload.role_code}' when accepting an application.",
+        )
+    if payload.squad_id is not None:
+        squad = await session.get(Squad, payload.squad_id)
+        if squad is None or not squad.is_active:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Squad not found or inactive.")
     user = await session.scalar(select(User).where(User.telegram_id == application.telegram_id))
     if user:
         user.full_name = application.full_name

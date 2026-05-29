@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db_session
 from ..dependencies.auth import CurrentUser, can_manage_squad, require_role
-from ..models import AbsenceReason, EventResponse, ScheduleEvent, ScheduleTemplate
+from ..models import AbsenceReason, EventResponse, ScheduleEvent, ScheduleTemplate, Setting
 from ..schemas.core import AbsenceReasonRead
 from ..roles import RoleLevel
 from ..schemas.core import (
@@ -36,11 +36,45 @@ def can_view_event(current_user: CurrentUser, event: ScheduleEvent) -> bool:
     return event.squad_id is None or event.squad_id == current_user.squad_id
 
 
+def week_parity_for_date(value: date, week_a_start: date) -> str:
+    monday = value - timedelta(days=value.weekday())
+    weeks = (monday - week_a_start).days // 7
+    return "A" if weeks % 2 == 0 else "B"
+
+
+async def get_week_a_start(session: AsyncSession) -> date | None:
+    raw_value = await session.scalar(select(Setting.value).where(Setting.key == "schedule_week_a_start"))
+    if not raw_value:
+        return None
+    try:
+        parsed = date.fromisoformat(raw_value)
+        return parsed - timedelta(days=parsed.weekday())
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Setting schedule_week_a_start must be an ISO date, for example 2026-06-02.",
+        ) from exc
+
+
 def serialize_event(event: ScheduleEvent, response_by_event: dict[int, str | None] | None = None) -> ScheduleEventRead:
     data = ScheduleEventRead.model_validate(event)
     if response_by_event is not None:
         data.my_response_code = response_by_event.get(event.id)
     return data
+
+
+@router.get("/current-week-type")
+async def current_week_type(
+    session: AsyncSession = Depends(get_db_session),
+    _current_user: CurrentUser = Depends(require_role(RoleLevel.PARTICIPANT)),
+) -> dict[str, str | None]:
+    week_a_start = await get_week_a_start(session)
+    if week_a_start is None:
+        return {"parity": None, "week_a_start": None}
+    return {
+        "parity": week_parity_for_date(date.today(), week_a_start),
+        "week_a_start": week_a_start.isoformat(),
+    }
 
 
 @router.get("", response_model=list[ScheduleEventRead])
@@ -163,7 +197,7 @@ async def respond_event(
 @router.post("/events", response_model=ScheduleEventRead, status_code=status.HTTP_201_CREATED)
 async def create_event(
     payload: ScheduleEventCreate,
-    current_user: CurrentUser = Depends(require_role(RoleLevel.ADMIN)),
+    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_PLATOON_COMMANDER)),
     session: AsyncSession = Depends(get_db_session),
 ) -> ScheduleEventRead:
     if not can_manage_squad(current_user, payload.squad_id):
@@ -197,9 +231,12 @@ async def update_event(
     if not can_manage_squad(current_user, event.squad_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot manage this event.")
     updates = payload.model_dump(exclude_unset=True)
+    audit_updates = payload.model_dump(exclude_unset=True, mode="json")
     old = model_snapshot(event, list(updates))
     for key, value in updates.items():
         setattr(event, key, value)
+    if event.template_id is not None and updates:
+        event.is_overridden = True
     event.updated_at = utcnow()
     await record_audit(
         session,
@@ -208,7 +245,7 @@ async def update_event(
         entity_name="schedule_events",
         entity_id=event.id,
         old_value=old,
-        new_value=updates,
+        new_value=audit_updates,
     )
     await session.commit()
     await session.refresh(event)
@@ -288,6 +325,8 @@ async def update_template(
     template = await session.get(ScheduleTemplate, template_id)
     if not template:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found.")
+    if not can_manage_squad(current_user, template.squad_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot manage this template.")
     updates = payload.model_dump(exclude_unset=True)
     old = model_snapshot(template, list(updates))
     for key, value in updates.items():
@@ -316,13 +355,42 @@ async def generate_template_events(
     template = await session.get(ScheduleTemplate, template_id)
     if not template:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found.")
+    if not can_manage_squad(current_user, template.squad_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot manage this template.")
+    week_a_start = None
+    if template.week_parity is not None:
+        week_a_start = await get_week_a_start(session)
+        if week_a_start is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="schedule_week_a_start is required for templates with week_parity A/B.",
+            )
     weekdays = {int(item.strip()) for item in template.week_days.split(",") if item.strip()}
     start_day = template.valid_from or date.today()
     end_day = min(template.valid_to or start_day + timedelta(days=days), start_day + timedelta(days=days))
+    existing_events = list(
+        (
+            await session.scalars(
+                select(ScheduleEvent).where(
+                    ScheduleEvent.template_id == template.id,
+                    ScheduleEvent.start_datetime >= datetime.combine(start_day, time.min),
+                    ScheduleEvent.start_datetime <= datetime.combine(end_day, time.max),
+                )
+            )
+        ).all()
+    )
+    existing_dates = {event.start_datetime.date() for event in existing_events}
     created: list[ScheduleEvent] = []
     current = start_day
     while current <= end_day:
         if current.isoweekday() in weekdays:
+            if current in existing_dates:
+                current += timedelta(days=1)
+                continue
+            if template.week_parity is not None and week_a_start is not None:
+                if week_parity_for_date(current, week_a_start) != template.week_parity:
+                    current += timedelta(days=1)
+                    continue
             start_dt = datetime.combine(current, template.start_time)
             end_dt = datetime.combine(current, template.end_time) if template.end_time else None
             deadline = (

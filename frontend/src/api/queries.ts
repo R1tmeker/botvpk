@@ -20,6 +20,7 @@ import type {
   PublicContent,
   ReportSummary,
   ScheduleEvent,
+  ScheduleTemplate,
   LearningMaterial,
   Squad,
   UserProfile,
@@ -917,15 +918,53 @@ export function useAdminSchedule(enabled: boolean) {
   });
 }
 
+export function useScheduleWeekType(enabled: boolean) {
+  return useQuery({
+    queryKey: ["schedule", "current-week-type"],
+    queryFn: async () => {
+      const { data } = await api.get<{ parity: "A" | "B" | null; week_a_start: string | null }>("/schedule/current-week-type");
+      return data;
+    },
+    enabled,
+  });
+}
+
+export function useScheduleTemplates(enabled: boolean) {
+  return useQuery({
+    queryKey: ["admin", "schedule", "templates"],
+    queryFn: async () => {
+      const { data } = await api.get<ScheduleTemplate[]>("/schedule/templates");
+      return data;
+    },
+    enabled,
+  });
+}
+
 type ScheduleEventPayload = {
   title: string;
   start_datetime: string;
-  end_datetime?: string;
-  place?: string;
+  end_datetime?: string | null;
+  place?: string | null;
   squad_id?: number | null;
   event_type_code?: string;
   requires_response?: boolean;
+  description?: string | null;
+};
+
+type ScheduleTemplatePayload = {
+  title: string;
   description?: string;
+  week_days: string;
+  week_parity?: "A" | "B" | null;
+  start_time: string;
+  end_time?: string | null;
+  place?: string | null;
+  squad_id?: number | null;
+  requires_response?: boolean;
+  response_deadline_minutes?: number | null;
+  is_active?: boolean;
+  valid_from?: string | null;
+  valid_to?: string | null;
 };
 
 export function useCreateScheduleEvent() {
@@ -933,6 +972,47 @@ export function useCreateScheduleEvent() {
   return useMutation({
     mutationFn: async (payload: ScheduleEventPayload) => {
       const { data } = await api.post<ScheduleEvent>("/schedule/events", payload);
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "schedule"] });
+      queryClient.invalidateQueries({ queryKey: ["schedule"] });
+    },
+  });
+}
+
+export function useUpdateScheduleEvent() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, ...payload }: { id: number } & Partial<ScheduleEventPayload>) => {
+      const { data } = await api.patch<ScheduleEvent>(`/schedule/events/${id}`, payload);
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "schedule"] });
+      queryClient.invalidateQueries({ queryKey: ["schedule"] });
+    },
+  });
+}
+
+export function useCreateScheduleTemplate() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: ScheduleTemplatePayload) => {
+      const { data } = await api.post<ScheduleTemplate>("/schedule/templates", payload);
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "schedule", "templates"] });
+    },
+  });
+}
+
+export function useGenerateScheduleTemplate() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, days }: { id: number; days: number }) => {
+      const { data } = await api.post<ScheduleEvent[]>(`/schedule/templates/${id}/generate?days=${days}`);
       return data;
     },
     onSuccess: () => {
@@ -951,6 +1031,279 @@ export function useDeleteScheduleEvent() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin", "schedule"] });
       queryClient.invalidateQueries({ queryKey: ["schedule"] });
+    },
+  });
+}
+
+export function useAdminUsersSearch(search: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["admin", "users", "search", search],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (search) params.set("search", search);
+      const { data } = await api.get<UserRecord[]>(`/admin/users?${params}`);
+      return data;
+    },
+    enabled,
+  });
+}
+
+export function useAdminUpdateUser() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ userId, ...payload }: { userId: number; squad_id?: number | null; role_code?: string; status_code?: string; full_name?: string }) => {
+      const { data } = await api.patch<UserRecord>(`/admin/users/${userId}`, payload);
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+    },
+  });
+}
+
+export function useDeactivateUser() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (userId: number) => {
+      const { data } = await api.patch<UserRecord>(`/admin/users/${userId}/deactivate`);
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+    },
+  });
+}
+
+export function useNormativesAdmin(enabled: boolean) {
+  return useQuery({
+    queryKey: ["normatives", "admin"],
+    queryFn: async () => {
+      const { data } = await api.get<Normative[]>("/normatives?active_only=false");
+      return data;
+    },
+    enabled,
+  });
+}
+
+export function useCreateNormative() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: { title: string; description?: string; type_code?: string; target_audience?: string; squad_id?: number | null; is_active?: boolean }) => {
+      const { data } = await api.post<Normative>("/normatives", payload);
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["normatives"] });
+      queryClient.invalidateQueries({ queryKey: ["normatives", "admin"] });
+    },
+  });
+}
+
+export function useUpdateNormative() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, ...payload }: { id: number; title?: string; description?: string; is_active?: boolean; target_audience?: string; squad_id?: number | null }) => {
+      const { data } = await api.patch<Normative>(`/normatives/${id}`, payload);
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["normatives"] });
+      queryClient.invalidateQueries({ queryKey: ["normatives", "admin"] });
+    },
+  });
+}
+
+export function useDeleteNormative() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: number) => {
+      const { data } = await api.delete(`/normatives/${id}`);
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["normatives"] });
+      queryClient.invalidateQueries({ queryKey: ["normatives", "admin"] });
+    },
+  });
+}
+
+export function useAdminLearningMaterials(enabled: boolean) {
+  return useQuery({
+    queryKey: ["admin", "learning", "materials"],
+    queryFn: async () => {
+      const { data } = await api.get<LearningMaterial[]>("/learning/materials?active_only=false");
+      return data;
+    },
+    enabled,
+  });
+}
+
+export function useAdminLearningCourses(enabled: boolean) {
+  return useQuery({
+    queryKey: ["admin", "learning", "courses"],
+    queryFn: async () => {
+      const { data } = await api.get<LearningCourse[]>("/learning/courses?active_only=false");
+      return data;
+    },
+    enabled,
+  });
+}
+
+export function useCreateLearningMaterial() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: { title: string; description?: string; type_code?: string; external_url?: string; audience_code?: string; sort_order?: number; is_active?: boolean; course_id?: number | null }) => {
+      const { data } = await api.post<LearningMaterial>("/admin/learning/materials", payload);
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "learning", "materials"] });
+      queryClient.invalidateQueries({ queryKey: ["learning", "materials"] });
+    },
+  });
+}
+
+export function useUpdateLearningMaterial() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, ...payload }: { id: number; title?: string; description?: string; is_active?: boolean; external_url?: string; audience_code?: string }) => {
+      const { data } = await api.patch<LearningMaterial>(`/admin/learning/materials/${id}`, payload);
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "learning", "materials"] });
+      queryClient.invalidateQueries({ queryKey: ["learning", "materials"] });
+    },
+  });
+}
+
+export function useCreateLearningCourse() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: { title: string; description?: string; audience_code?: string; sort_order?: number; is_active?: boolean }) => {
+      const { data } = await api.post<LearningCourse>("/admin/learning/courses", payload);
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "learning", "courses"] });
+      queryClient.invalidateQueries({ queryKey: ["learning", "courses"] });
+    },
+  });
+}
+
+export function useUpdateLearningCourse() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, ...payload }: { id: number; title?: string; description?: string; is_active?: boolean; audience_code?: string }) => {
+      const { data } = await api.patch<LearningCourse>(`/admin/learning/courses/${id}`, payload);
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "learning", "courses"] });
+      queryClient.invalidateQueries({ queryKey: ["learning", "courses"] });
+    },
+  });
+}
+
+export function useCreateCandidateEvent() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: { title: string; description?: string; event_type_code?: string; start_datetime: string; end_datetime?: string; place?: string; capacity?: number | null; is_active?: boolean }) => {
+      const { data } = await api.post<CandidateEvent>("/admin/join/events", payload);
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "join", "events"] });
+      queryClient.invalidateQueries({ queryKey: ["public", "events"] });
+    },
+  });
+}
+
+export function useUpdateCandidateEvent() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, ...payload }: { id: number; title?: string; description?: string; start_datetime?: string; end_datetime?: string; place?: string; is_active?: boolean }) => {
+      const { data } = await api.patch<CandidateEvent>(`/admin/join/events/${id}`, payload);
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "join", "events"] });
+      queryClient.invalidateQueries({ queryKey: ["public", "events"] });
+    },
+  });
+}
+
+export function useAdminAuditFiltered(params: { user_id?: number; action_code?: string; entity_name?: string; offset?: number }, enabled: boolean) {
+  return useQuery({
+    queryKey: ["admin", "audit", "filtered", params],
+    queryFn: async () => {
+      const q = new URLSearchParams({ limit: "100" });
+      if (params.user_id) q.set("user_id", String(params.user_id));
+      if (params.action_code) q.set("action_code", params.action_code);
+      if (params.entity_name) q.set("entity_name", params.entity_name);
+      if (params.offset) q.set("offset", String(params.offset));
+      const { data } = await api.get<AuditLog[]>(`/admin/audit?${q}`);
+      return data;
+    },
+    enabled,
+  });
+}
+
+export function useAdminSettings(enabled: boolean) {
+  return useQuery({
+    queryKey: ["admin", "settings"],
+    queryFn: async () => {
+      const { data } = await api.get<Array<{ id: number; key: string; value: string | null; description: string | null; updated_at: string }>>("/admin/settings");
+      return data;
+    },
+    enabled,
+  });
+}
+
+export function useUpdateSettings() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (values: Record<string, string | null>) => {
+      const { data } = await api.patch("/admin/settings", { values });
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "settings"] });
+    },
+  });
+}
+
+export function useExportUsersCSV() {
+  return useMutation({
+    mutationFn: async (params: { squad_id?: number | null; search?: string }) => {
+      const q = new URLSearchParams();
+      if (params.squad_id) q.set("squad_id", String(params.squad_id));
+      if (params.search) q.set("search", params.search);
+      const response = await api.get(`/admin/users/export.csv?${q}`, { responseType: "blob" });
+      const url = URL.createObjectURL(new Blob([response.data as BlobPart], { type: "text/csv;charset=utf-8;" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "roster.csv";
+      link.click();
+      URL.revokeObjectURL(url);
+    },
+  });
+}
+
+export function useExportUsersXLSX() {
+  return useMutation({
+    mutationFn: async (params: { squad_id?: number | null; search?: string }) => {
+      const q = new URLSearchParams();
+      if (params.squad_id) q.set("squad_id", String(params.squad_id));
+      if (params.search) q.set("search", params.search);
+      const response = await api.get(`/admin/users/export.xlsx?${q}`, { responseType: "blob" });
+      const url = URL.createObjectURL(new Blob([response.data as BlobPart]));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "roster.xlsx";
+      link.click();
+      URL.revokeObjectURL(url);
     },
   });
 }

@@ -1,16 +1,78 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+import csv
+import io
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...database import get_db_session
-from ...dependencies.auth import require_role
-from ...models import User
-from ...roles import RoleLevel
-from ...schemas.core import UserRead
+from ...dependencies.auth import CurrentUser, require_role
+from ...models import Squad, User
+from ...roles import RoleLevel, ROLE_LEVELS
+from ...schemas.core import UserRead, UserUpdate
+from ...utils.audit import model_snapshot, record_audit
 
 router = APIRouter(prefix="/admin/users", tags=["admin:users"])
+
+ROSTER_ROLE_CODES = (
+    "PARTICIPANT",
+    "DEPUTY_SQUAD_COMMANDER",
+    "SQUAD_COMMANDER",
+    "DEPUTY_PLATOON_COMMANDER",
+    "PLATOON_COMMANDER",
+    "ADMIN",
+    "SUPER_ADMIN",
+    "USER_PENDING",
+    "CANDIDATE",
+)
+
+ROLE_LABELS_RU = {
+    "PUBLIC_USER": "Новый пользователь",
+    "CANDIDATE": "Кандидат",
+    "USER_PENDING": "Ожидает привязки",
+    "PARTICIPANT": "Участник",
+    "DEPUTY_SQUAD_COMMANDER": "Зам. командира отделения",
+    "SQUAD_COMMANDER": "Командир отделения",
+    "DEPUTY_PLATOON_COMMANDER": "Зам. командира взвода",
+    "PLATOON_COMMANDER": "Командир взвода",
+    "ADMIN": "Администратор",
+    "SUPER_ADMIN": "Супер-администратор",
+}
+
+EXPORT_COLUMNS = ["ФИО", "Отделение", "Роль", "Статус", "Telegram", "Телефон", "Дата рождения", "Дата привязки"]
+
+
+def _build_users_query(
+    current_user: CurrentUser,
+    squad_id: int | None,
+    role_code: str | None,
+    status_code: str | None,
+    search: str | None,
+    exclude_public: bool,
+):
+    statement = select(User).order_by(User.squad_id.nullslast(), User.full_name)
+    if current_user.role_level < RoleLevel.DEPUTY_PLATOON_COMMANDER:
+        if current_user.squad_id is None:
+            return None
+        statement = statement.where(User.squad_id == current_user.squad_id)
+    elif squad_id is not None:
+        statement = statement.where(User.squad_id == squad_id)
+    if exclude_public:
+        statement = statement.where(User.role_code != "PUBLIC_USER")
+    if role_code is not None:
+        statement = statement.where(User.role_code == role_code)
+    if status_code is not None:
+        statement = statement.where(User.status_code == status_code)
+    else:
+        statement = statement.where(User.status_code != "ARCHIVED")
+    if search:
+        term = f"%{search.strip()}%"
+        statement = statement.where(User.full_name.ilike(term) | User.username.ilike(term))
+    return statement
 
 
 @router.get("", response_model=list[UserRead])
@@ -18,14 +80,165 @@ async def admin_users(
     squad_id: int | None = None,
     role_code: str | None = None,
     status_code: str | None = None,
+    search: str | None = None,
+    exclude_public: bool = True,
+    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_SQUAD_COMMANDER)),
     session: AsyncSession = Depends(get_db_session),
-    _=Depends(require_role(RoleLevel.DEPUTY_PLATOON_COMMANDER)),
 ) -> list[User]:
-    statement = select(User).order_by(User.squad_id.nullslast(), User.full_name)
-    if squad_id is not None:
-        statement = statement.where(User.squad_id == squad_id)
-    if role_code is not None:
-        statement = statement.where(User.role_code == role_code)
-    if status_code is not None:
-        statement = statement.where(User.status_code == status_code)
+    statement = _build_users_query(current_user, squad_id, role_code, status_code, search, exclude_public)
+    if statement is None:
+        return []
     return list((await session.scalars(statement)).all())
+
+
+def _user_to_row(user: User, squad_map: dict[int, str]) -> list[str]:
+    squad = squad_map.get(user.squad_id or -1, "—") if user.squad_id else "—"
+    return [
+        user.full_name,
+        squad,
+        ROLE_LABELS_RU.get(user.role_code, user.role_code),
+        user.status_code,
+        f"@{user.username}" if user.username else "—",
+        user.phone or "—",
+        user.birth_date.strftime("%d.%m.%Y") if user.birth_date else "—",
+        user.linked_at.strftime("%d.%m.%Y") if user.linked_at else "—",
+    ]
+
+
+@router.get("/export.csv")
+async def export_users_csv(
+    squad_id: int | None = None,
+    role_code: str | None = None,
+    status_code: str | None = None,
+    search: str | None = None,
+    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_SQUAD_COMMANDER)),
+    session: AsyncSession = Depends(get_db_session),
+) -> StreamingResponse:
+    statement = _build_users_query(current_user, squad_id, role_code, status_code, search, exclude_public=True)
+    users = [] if statement is None else list((await session.scalars(statement)).all())
+    squad_map = {s.id: s.name for s in (await session.scalars(select(Squad))).all()}
+    await record_audit(session, user_id=current_user.user_id, action_code="users.export", entity_name="users", new_value={"format": "csv", "count": len(users)})
+    await session.commit()
+    output = io.StringIO()
+    output.write("﻿")  # BOM для кириллицы в Excel
+    writer = csv.writer(output, delimiter=";")
+    writer.writerow(EXPORT_COLUMNS)
+    for user in users:
+        writer.writerow(_user_to_row(user, squad_map))
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="roster.csv"'},
+    )
+
+
+@router.get("/export.xlsx")
+async def export_users_xlsx(
+    squad_id: int | None = None,
+    role_code: str | None = None,
+    status_code: str | None = None,
+    search: str | None = None,
+    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_SQUAD_COMMANDER)),
+    session: AsyncSession = Depends(get_db_session),
+) -> StreamingResponse:
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+    except ImportError as exc:
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="openpyxl not installed.") from exc
+    statement = _build_users_query(current_user, squad_id, role_code, status_code, search, exclude_public=True)
+    users = [] if statement is None else list((await session.scalars(statement)).all())
+    squad_map = {s.id: s.name for s in (await session.scalars(select(Squad))).all()}
+    await record_audit(session, user_id=current_user.user_id, action_code="users.export", entity_name="users", new_value={"format": "xlsx", "count": len(users)})
+    await session.commit()
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Состав"
+    header_fill = PatternFill(fill_type="solid", fgColor="1a2f5a")
+    header_font = Font(bold=True, color="FFFFFF")
+    for col, title in enumerate(EXPORT_COLUMNS, 1):
+        cell = ws.cell(row=1, column=col, value=title)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+    for row_idx, user in enumerate(users, 2):
+        for col_idx, value in enumerate(_user_to_row(user, squad_map), 1):
+            ws.cell(row=row_idx, column=col_idx, value=value)
+    for col in ws.columns:
+        max_len = max(len(str(cell.value or "")) for cell in col)
+        ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 40)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.read()]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="roster.xlsx"'},
+    )
+
+
+@router.patch("/{user_id}", response_model=UserRead)
+async def admin_update_user(
+    user_id: int,
+    payload: UserUpdate,
+    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_PLATOON_COMMANDER)),
+    session: AsyncSession = Depends(get_db_session),
+) -> User:
+    user = await session.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    updates = payload.model_dump(exclude_unset=True)
+    if "role_code" in updates and updates["role_code"] is not None:
+        if updates["role_code"] not in ROLE_LEVELS:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown role_code.")
+        target_level = ROLE_LEVELS.get(updates["role_code"], RoleLevel.PUBLIC_USER)
+        if target_level >= current_user.role_level and current_user.role_level < RoleLevel.ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot assign a role equal to or higher than your own.",
+            )
+    old = model_snapshot(user, list(updates))
+    for key, value in updates.items():
+        setattr(user, key, value)
+    user.updated_at = datetime.now(timezone.utc)
+    await record_audit(
+        session,
+        user_id=current_user.user_id,
+        action_code="user.admin_update",
+        entity_name="users",
+        entity_id=user.id,
+        old_value=old,
+        new_value=updates,
+    )
+    await session.commit()
+    await session.refresh(user)
+    return user
+
+
+@router.patch("/{user_id}/deactivate", response_model=UserRead)
+async def deactivate_user(
+    user_id: int,
+    current_user: CurrentUser = Depends(require_role(RoleLevel.ADMIN)),
+    session: AsyncSession = Depends(get_db_session),
+) -> User:
+    user = await session.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    if user.id == current_user.user_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot deactivate yourself.")
+    old_status = user.status_code
+    user.status_code = "ARCHIVED"
+    user.updated_at = datetime.now(timezone.utc)
+    await record_audit(
+        session,
+        user_id=current_user.user_id,
+        action_code="user.deactivate",
+        entity_name="users",
+        entity_id=user.id,
+        old_value={"status_code": old_status},
+        new_value={"status_code": "ARCHIVED"},
+    )
+    await session.commit()
+    await session.refresh(user)
+    return user

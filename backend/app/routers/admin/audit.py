@@ -15,10 +15,21 @@ router = APIRouter(prefix="/admin/audit", tags=["admin:audit"])
 @router.get("", response_model=list[dict])
 async def audit_log(
     limit: int = 100,
+    offset: int = 0,
+    user_id: int | None = None,
+    action_code: str | None = None,
+    entity_name: str | None = None,
     session: AsyncSession = Depends(get_db_session),
     _=Depends(require_role(RoleLevel.ADMIN)),
 ) -> list[dict]:
-    statement = select(AuditLog).order_by(AuditLog.created_at.desc()).limit(min(limit, 500))
+    statement = select(AuditLog).order_by(AuditLog.created_at.desc())
+    if user_id is not None:
+        statement = statement.where(AuditLog.user_id == user_id)
+    if action_code:
+        statement = statement.where(AuditLog.action_code.ilike(f"%{action_code}%"))
+    if entity_name:
+        statement = statement.where(AuditLog.entity_name == entity_name)
+    statement = statement.offset(offset).limit(min(limit, 500))
     rows = list((await session.scalars(statement)).all())
     return [
         {

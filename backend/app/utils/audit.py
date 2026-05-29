@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, datetime, time
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,4 +35,14 @@ async def record_audit(
 
 
 def model_snapshot(obj, fields: list[str]) -> dict[str, Any]:
-    return {field: getattr(obj, field) for field in fields}
+    return {field: audit_json_value(getattr(obj, field)) for field in fields}
+
+
+def audit_json_value(value: Any) -> Any:
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {key: audit_json_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [audit_json_value(item) for item in value]
+    return value

@@ -85,12 +85,13 @@ async def applications_report(
 
 @router.get("/export")
 async def export_report(
+    squad_id: int | None = None,
     current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_PLATOON_COMMANDER)),
     session: AsyncSession = Depends(get_db_session),
 ) -> StreamingResponse:
-    attendance = await attendance_report(None, current_user, session)
-    grades = await grades_report(None, current_user, session)
-    normatives = await normatives_report(None, current_user, session)
+    attendance = await attendance_report(squad_id, current_user, session)
+    grades = await grades_report(squad_id, current_user, session)
+    normatives = await normatives_report(squad_id, current_user, session)
     applications = await applications_report(current_user, session)
     output = io.StringIO()
     writer = csv.writer(output, delimiter=";")

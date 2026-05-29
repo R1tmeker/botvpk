@@ -89,7 +89,7 @@ async def auth_telegram(
         },
         settings,
     )
-    return AuthResponse(access_token=token, profile=profile)
+    return AuthResponse(access_token=token, profile=profile, app_timezone=settings.timezone)
 
 
 @router.get("/me", response_model=UserProfile)

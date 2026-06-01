@@ -965,6 +965,7 @@ async def normative_file_submit(callback: CallbackQuery, state: FSMContext) -> N
         existing.comment = f"[TG file_id: {file_id}]"
         existing.submitted_at = now
         existing.updated_at = now
+        await session.flush()
         await record_audit(
             session,
             user_id=user.id,
@@ -984,13 +985,21 @@ async def normative_file_submit(callback: CallbackQuery, state: FSMContext) -> N
     await callback.answer("Сдача отправлена!")
     # Notify commanders
     async with AsyncSessionLocal() as session2:
+        if user.squad_id:
+            # Notify squad commanders + platoon/admin
+            commander_roles = ("SQUAD_COMMANDER", "DEPUTY_SQUAD_COMMANDER", "DEPUTY_PLATOON_COMMANDER", "PLATOON_COMMANDER", "ADMIN", "SUPER_ADMIN")
+            squad_condition = (User.squad_id == user.squad_id) | User.role_code.in_(("DEPUTY_PLATOON_COMMANDER", "PLATOON_COMMANDER", "ADMIN", "SUPER_ADMIN"))
+        else:
+            # User has no squad — notify only platoon/admin roles
+            commander_roles = ("DEPUTY_PLATOON_COMMANDER", "PLATOON_COMMANDER", "ADMIN", "SUPER_ADMIN")
+            squad_condition = True
         commanders = list(
             (
                 await session2.scalars(
                     select(User).where(
                         User.status_code == "ACTIVE",
-                        User.role_code.in_(("SQUAD_COMMANDER", "DEPUTY_SQUAD_COMMANDER", "DEPUTY_PLATOON_COMMANDER", "PLATOON_COMMANDER", "ADMIN", "SUPER_ADMIN")),
-                        (User.squad_id == user.squad_id) if user.squad_id else True,
+                        User.role_code.in_(commander_roles),
+                        squad_condition,
                     )
                 )
             ).all()

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -11,13 +11,9 @@ from ..dependencies.auth import CurrentUser, require_role
 from ..models import Appeal, AppealMessage, Notification, User
 from ..roles import PLATOON_ROLES, RoleLevel
 from ..schemas.core import AppealCreate, AppealMessageCreate, AppealMessageRead, AppealRead, AppealUpdate
-from ..utils.audit import model_snapshot, record_audit
+from ..utils.audit import model_snapshot, record_audit, utcnow
 
 router = APIRouter(prefix="/appeals", tags=["appeals"])
-
-
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def require_profile(current_user: CurrentUser) -> int:

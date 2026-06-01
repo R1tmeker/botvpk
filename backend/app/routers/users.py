@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -56,7 +56,7 @@ async def create_user(
 ) -> User:
     if payload.role_code not in ROLE_LEVELS:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown role_code.")
-    user = User(**payload.model_dump(), updated_at=datetime.utcnow())
+    user = User(**payload.model_dump(), updated_at=datetime.now(timezone.utc))
     session.add(user)
     await session.flush()
     await record_audit(
@@ -98,7 +98,7 @@ async def update_user(
     old = model_snapshot(user, list(updates))
     for key, value in updates.items():
         setattr(user, key, value)
-    user.updated_at = datetime.utcnow()
+    user.updated_at = datetime.now(timezone.utc)
     await record_audit(
         session,
         user_id=current_user.user_id,

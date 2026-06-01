@@ -20,13 +20,9 @@ from ..schemas.core import (
     MessageResponse,
     ReportSummary,
 )
-from ..utils.audit import model_snapshot, record_audit
+from ..utils.audit import model_snapshot, record_audit, utcnow
 
 router = APIRouter(prefix="/attendance", tags=["attendance"])
-
-
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def require_profile(current_user: CurrentUser) -> int:
@@ -55,10 +51,11 @@ async def ensure_can_manage_attendance(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot manage attendance.")
     if event.squad_id is not None and event.squad_id != current_user.squad_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot manage this event.")
+    unique_user_ids = list(dict.fromkeys(user_ids))
     target_squads = (
-        await session.execute(select(User.id, User.squad_id).where(User.id.in_(user_ids)))
+        await session.execute(select(User.id, User.squad_id).where(User.id.in_(unique_user_ids)))
     ).all()
-    if len(target_squads) != len(set(user_ids)):
+    if len(target_squads) != len(unique_user_ids):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="One or more users not found.")
     if any(squad_id != current_user.squad_id for _, squad_id in target_squads):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot mark users from another squad.")

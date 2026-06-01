@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timezone
 from typing import Any
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 from sqlalchemy.ext.asyncio import AsyncSession
 

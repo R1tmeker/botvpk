@@ -24,8 +24,19 @@ from .models import (
     Squad,
     User,
 )
+from .utils.audit import utcnow
 
 logger = logging.getLogger(__name__)
+
+_bot_instance: Bot | None = None
+
+
+def _get_bot(settings: Settings) -> Bot:
+    global _bot_instance
+    if _bot_instance is None:
+        _bot_instance = Bot(settings.bot_token)
+    return _bot_instance
+
 
 CONFIRMED_ROLE_CODES = (
     "PARTICIPANT",
@@ -58,7 +69,7 @@ def create_scheduler(settings: Settings) -> AsyncIOScheduler:
     # Every 15m: personalized event reminder 2h before start
     scheduler.add_job(send_event_reminders_2h, "interval", minutes=15, max_instances=1)
     # Daily at 07:00: morning briefing to all participants
-    scheduler.add_job(send_morning_briefing, "cron", hour=7, minute=0, max_instances=1)
+    scheduler.add_job(send_morning_briefing, "cron", hour=7, minute=0, max_instances=1, args=[settings])
     # Hourly: SLA check for unanswered appeals
     scheduler.add_job(check_appeal_sla, "interval", hours=1, max_instances=1)
     # Daily at 20:00: low attendance & grade warnings to commanders
@@ -71,10 +82,6 @@ def create_scheduler(settings: Settings) -> AsyncIOScheduler:
 
 
 # ─────────────────────── helpers ────────────────────────────
-
-
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 async def _get_user_event_response(session: AsyncSession, user_id: int, event_id: int) -> EventResponse | None:
@@ -146,19 +153,16 @@ async def send_pending_tg_notifications(settings: Settings) -> None:
         ).all()
         if not rows:
             return
-        bot = Bot(settings.bot_token)
-        try:
-            for notification, telegram_id in rows:
-                try:
-                    text = notification.title if not notification.body else f"{notification.title}\n\n{notification.body}"
-                    keyboard = _build_notification_keyboard(notification, settings)
-                    await bot.send_message(telegram_id, text, reply_markup=keyboard)
-                    notification.tg_sent_at = utcnow()
-                except Exception:  # noqa: BLE001
-                    logger.exception("Failed to send notification id=%s", notification.id)
-            await session.commit()
-        finally:
-            await bot.session.close()
+        bot = _get_bot(settings)
+        for notification, telegram_id in rows:
+            try:
+                text = notification.title if not notification.body else f"{notification.title}\n\n{notification.body}"
+                keyboard = _build_notification_keyboard(notification, settings)
+                await bot.send_message(telegram_id, text, reply_markup=keyboard)
+                notification.tg_sent_at = utcnow()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to send notification id=%s", notification.id)
+        await session.commit()
 
 
 # ─────────────────────── NOT_COMING → ABSENT ────────────────
@@ -322,11 +326,16 @@ async def send_event_reminders_2h() -> None:
 # ─────────────────────── morning briefing ───────────────────
 
 
-async def send_morning_briefing() -> None:
+async def send_morning_briefing(settings: Settings) -> None:
     """Daily at 07:00: send today's event summary to each participant."""
+    import pytz
+    tz = pytz.timezone(settings.timezone)
+    now_local = datetime.now(tz)
+    today_local_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_local_end = today_local_start + timedelta(days=1)
+    today_start = today_local_start.astimezone(timezone.utc).replace(tzinfo=None)
+    today_end = today_local_end.astimezone(timezone.utc).replace(tzinfo=None)
     now = utcnow()
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_end = today_start + timedelta(days=1)
 
     async with AsyncSessionLocal() as session:
         events = list(
@@ -356,48 +365,64 @@ async def send_morning_briefing() -> None:
             ).all()
         )
 
+        # Pre-load all responses for today's events in one query — avoids N×M DB hits
+        event_ids = [e.id for e in events]
+        all_responses = list(
+            (
+                await session.scalars(
+                    select(EventResponse).where(EventResponse.event_id.in_(event_ids))
+                )
+            ).all()
+        )
+        responses_map: dict[tuple[int, int], EventResponse] = {
+            (r.user_id, r.event_id): r for r in all_responses
+        }
+
+        # Pre-load already-sent morning briefing notifications today
+        already_sent_ids = set(
+            (
+                await session.scalars(
+                    select(Notification.user_id).where(
+                        Notification.type_code == "SYSTEM",
+                        Notification.entity_name == "morning_briefing",
+                        Notification.created_at >= today_start,
+                    )
+                )
+            ).all()
+        )
+
         for user in users:
             user_events = [e for e in events if e.squad_id is None or e.squad_id == user.squad_id]
             if not user_events:
                 continue
 
-            # Already sent today?
-            sent_today = await session.scalar(
-                select(Notification.id).where(
-                    Notification.user_id == user.id,
-                    Notification.type_code == "SYSTEM",
-                    Notification.entity_name == "morning_briefing",
-                    Notification.created_at >= today_start,
-                )
-            )
-            if sent_today:
+            if user.id in already_sent_ids:
                 continue
 
             lines: list[str] = ["☀️ Доброе утро!"]
             for event in user_events:
                 start_str = event.start_datetime.strftime("%H:%M")
                 place_str = f" · {event.place}" if event.place else ""
-                resp = await _get_user_event_response(session, user.id, event.id)
+                resp = responses_map.get((user.id, event.id))
                 emoji = {"COMING": "✅", "NOT_COMING": "❌", "MAYBE": "⏳"}.get(resp.response_code if resp else "", "❓")
                 lines.append(f"{emoji} {event.title} в {start_str}{place_str}")
 
-            # Commander extra: response summary
+            # Commander extra: response summary (using pre-loaded responses)
             if user.role_code in COMMANDER_ROLE_CODES:
                 for event in user_events:
-                    squad_filter = (User.squad_id == event.squad_id) if event.squad_id else True
-                    squad_users = list(
-                        (
-                            await session.scalars(
-                                select(User).where(User.status_code == "ACTIVE", User.role_code.in_(CONFIRMED_ROLE_CODES), squad_filter)
-                            )
-                        ).all()
-                    )
+                    event_responses = [r for r in all_responses if r.event_id == event.id]
+                    responded_user_ids = {r.user_id for r in event_responses}
+                    squad_users = [
+                        u for u in users
+                        if u.role_code in CONFIRMED_ROLE_CODES
+                        and (event.squad_id is None or u.squad_id == event.squad_id)
+                    ]
                     total = len(squad_users)
                     if total == 0:
                         continue
                     coming = not_coming = maybe = no_answer = 0
                     for su in squad_users:
-                        r = await _get_user_event_response(session, su.id, event.id)
+                        r = responses_map.get((su.id, event.id))
                         if r is None:
                             no_answer += 1
                         elif r.response_code == "COMING":
@@ -447,7 +472,6 @@ async def check_appeal_sla() -> None:
 
             # First reminder at SLA threshold
             if age_h >= sla_h:
-                remind_key = f"appeal_sla_{appeal.id}_remind"
                 exists = await session.scalar(
                     select(Notification.id).where(
                         Notification.entity_name == "appeal_sla_remind",
@@ -797,48 +821,45 @@ async def send_birthday_greetings(settings: Settings) -> None:
             }
 
         day_start_utc = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        bot = Bot(settings.bot_token)
-        try:
-            for user in birthday_users:
-                # Idempotency: skip if already greeted today
-                already_sent = await session.scalar(
-                    select(Notification.id).where(
-                        Notification.user_id == user.id,
-                        Notification.type_code == "BIRTHDAY",
-                        Notification.entity_name == "birthday_greeting",
-                        Notification.created_at >= day_start_utc,
-                    )
+        bot = _get_bot(settings)
+        for user in birthday_users:
+            # Idempotency: skip if already greeted today
+            already_sent = await session.scalar(
+                select(Notification.id).where(
+                    Notification.user_id == user.id,
+                    Notification.type_code == "BIRTHDAY",
+                    Notification.entity_name == "birthday_greeting",
+                    Notification.created_at >= day_start_utc,
                 )
-                if already_sent:
-                    continue
+            )
+            if already_sent:
+                continue
 
-                age = today.year - user.birth_date.year if user.birth_date else 0
-                first_name = user.full_name.split()[0] if user.full_name else user.full_name
-                text = template.format_map(
-                    SafeBirthdayTemplate(
-                        name=user.full_name,
-                        first_name=first_name,
-                        age=str(age),
-                        squad=squad_map.get(user.squad_id or -1, ""),
-                    )
-                ).strip()
-
-                try:
-                    await bot.send_message(user.telegram_id, text)
-                except Exception:
-                    logger.exception("Failed to send birthday DM to user_id=%s tg_id=%s", user.id, user.telegram_id)
-
-                session.add(
-                    Notification(
-                        user_id=user.id,
-                        type_code="BIRTHDAY",
-                        title="С днём рождения!",
-                        body=text,
-                        entity_name="birthday_greeting",
-                        entity_id=user.id,
-                        send_to_tg=False,
-                    )
+            age = today.year - user.birth_date.year if user.birth_date else 0
+            first_name = user.full_name.split()[0] if user.full_name else user.full_name
+            text = template.format_map(
+                SafeBirthdayTemplate(
+                    name=user.full_name,
+                    first_name=first_name,
+                    age=str(age),
+                    squad=squad_map.get(user.squad_id or -1, ""),
                 )
-            await session.commit()
-        finally:
-            await bot.session.close()
+            ).strip()
+
+            try:
+                await bot.send_message(user.telegram_id, text)
+            except Exception:
+                logger.exception("Failed to send birthday DM to user_id=%s tg_id=%s", user.id, user.telegram_id)
+
+            session.add(
+                Notification(
+                    user_id=user.id,
+                    type_code="BIRTHDAY",
+                    title="С днём рождения!",
+                    body=text,
+                    entity_name="birthday_greeting",
+                    entity_id=user.id,
+                    send_to_tg=False,
+                )
+            )
+        await session.commit()

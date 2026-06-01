@@ -63,11 +63,7 @@ function render() {
 }
 
 roleButton.addEventListener("click", () => {
-  if (roleLocked) {
-    return;
-  }
-  roleIndex = (roleIndex + 1) % roles.length;
-  render();
+  // Role is locked to the value provided via URL ?role= parameter
 });
 
 tg?.ready();

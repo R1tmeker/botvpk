@@ -22,13 +22,9 @@ from ..schemas.core import (
     ScheduleTemplateRead,
     ScheduleTemplateUpdate,
 )
-from ..utils.audit import model_snapshot, record_audit
+from ..utils.audit import model_snapshot, record_audit, utcnow
 
 router = APIRouter(prefix="/schedule", tags=["schedule"])
-
-
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def can_view_event(current_user: CurrentUser, event: ScheduleEvent) -> bool:
@@ -116,8 +112,8 @@ async def today_schedule(
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ScheduleEventRead]:
     today = date.today()
-    start = datetime.combine(today, time.min)
-    end = datetime.combine(today, time.max)
+    start = datetime.combine(today, time.min, tzinfo=timezone.utc)
+    end = datetime.combine(today, time.max, tzinfo=timezone.utc)
     return await list_schedule(start, end, None, current_user, session)
 
 
@@ -477,7 +473,7 @@ async def event_responses(
     response_rows = list(
         (
             await session.scalars(
-                select(EventResponse).where(EventResponse.event_id == event_id)
+                select(EventResponse).where(EventResponse.event_id == event_id).limit(2000)
             )
         ).all()
     )
@@ -499,7 +495,6 @@ async def event_responses(
 
 
 @router.get("/events/{event_id}", response_model=ScheduleEventRead)
-@router.get("/{event_id}", response_model=ScheduleEventRead)
 async def event_detail(
     event_id: int,
     current_user: CurrentUser = Depends(require_role(RoleLevel.PARTICIPANT)),

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -11,13 +11,9 @@ from ..dependencies.auth import CurrentUser, require_role
 from ..models import Announcement, Notification, User
 from ..roles import RoleLevel
 from ..schemas.core import AnnouncementCreate, AnnouncementRead, AnnouncementUpdate, MessageResponse
-from ..utils.audit import model_snapshot, record_audit
+from ..utils.audit import model_snapshot, record_audit, utcnow
 
 router = APIRouter(prefix="/announcements", tags=["announcements"])
-
-
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def require_profile(current_user: CurrentUser) -> int:
@@ -153,6 +149,7 @@ async def update_announcement(
     old = model_snapshot(item, list(updates))
     for key, value in updates.items():
         setattr(item, key, value)
+    item.updated_at = utcnow()
     await record_audit(
         session,
         user_id=user_id,

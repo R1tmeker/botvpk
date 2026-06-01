@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -11,13 +11,9 @@ from ..dependencies.auth import CurrentUser, require_role
 from ..models import Notification
 from ..roles import RoleLevel
 from ..schemas.core import MessageResponse, NotificationRead
-from ..utils.audit import record_audit
+from ..utils.audit import record_audit, utcnow
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
-
-
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def require_profile(current_user: CurrentUser) -> int:
@@ -29,6 +25,8 @@ def require_profile(current_user: CurrentUser) -> int:
 @router.get("", response_model=list[NotificationRead])
 async def notifications(
     unread_only: bool = False,
+    limit: int = 50,
+    offset: int = 0,
     current_user: CurrentUser = Depends(require_role(RoleLevel.PARTICIPANT)),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[Notification]:
@@ -39,6 +37,7 @@ async def notifications(
     )
     if unread_only:
         statement = statement.where(Notification.is_read.is_(False))
+    statement = statement.limit(min(limit, 200)).offset(offset)
     return list((await session.scalars(statement)).all())
 
 

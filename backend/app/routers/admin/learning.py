@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,13 +17,9 @@ from ...schemas.core import (
     LearningMaterialRead,
     LearningMaterialUpdate,
 )
-from ...utils.audit import model_snapshot, record_audit
+from ...utils.audit import model_snapshot, record_audit, utcnow
 
 router = APIRouter(prefix="/admin/learning", tags=["admin:learning"])
-
-
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 @router.post("/materials", response_model=LearningMaterialRead, status_code=status.HTTP_201_CREATED)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -18,13 +18,9 @@ from ..schemas.core import (
     JoinApplicationUpdate,
     MessageResponse,
 )
-from ..utils.audit import model_snapshot, record_audit
+from ..utils.audit import model_snapshot, record_audit, utcnow
 
 router = APIRouter(prefix="/join", tags=["join"])
-
-
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 @router.post("/applications", response_model=JoinApplicationRead, status_code=status.HTTP_201_CREATED)

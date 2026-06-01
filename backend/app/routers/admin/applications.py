@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -17,13 +17,9 @@ from ...schemas.core import (
     CandidateEventRead,
     JoinApplicationRead,
 )
-from ...utils.audit import model_snapshot, record_audit
+from ...utils.audit import model_snapshot, record_audit, utcnow
 
 router = APIRouter(prefix="/admin/join", tags=["admin:join"])
-
-
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 @router.get("/applications", response_model=list[JoinApplicationRead])
@@ -192,7 +188,26 @@ async def reject_application(
     current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_PLATOON_COMMANDER)),
     session: AsyncSession = Depends(get_db_session),
 ) -> JoinApplication:
-    application = await update_application(application_id, payload.model_copy(update={"status_code": "REJECTED"}), current_user, session)
+    application = await session.get(JoinApplication, application_id)
+    if not application:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found.")
+    updates = payload.model_copy(update={"status_code": "REJECTED"}).model_dump(exclude_unset=False)
+    old_status = application.status_code
+    for key, value in updates.items():
+        setattr(application, key, value)
+    application.status_code = "REJECTED"
+    application.reviewed_by_user_id = current_user.user_id
+    application.reviewed_at = utcnow()
+    application.updated_at = utcnow()
+    session.add(
+        ApplicationStatusHistory(
+            application_id=application.id,
+            old_status=old_status,
+            new_status="REJECTED",
+            changed_by_id=current_user.user_id,
+            comment=application.admin_comment,
+        )
+    )
     user = await session.scalar(select(User).where(User.telegram_id == application.telegram_id))
     if user:
         session.add(
@@ -206,7 +221,17 @@ async def reject_application(
                 send_to_tg=True,
             )
         )
-        await session.commit()
+    await record_audit(
+        session,
+        user_id=current_user.user_id,
+        action_code="join.application.reject",
+        entity_name="join_applications",
+        entity_id=application.id,
+        old_value={"status_code": old_status},
+        new_value={"status_code": "REJECTED"},
+    )
+    await session.commit()
+    await session.refresh(application)
     return application
 
 

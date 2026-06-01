@@ -1,5 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  BarChart3,
+  Bell,
+  BookOpen,
+  CalendarDays,
+  ClipboardCheck,
+  ClipboardList,
+  Download,
+  Dumbbell,
+  Flag,
+  Home,
+  Megaphone,
+  MessageSquareWarning,
+  Settings,
+  Target,
+  User,
+  Users,
+  type LucideIcon,
+} from "lucide-react";
+import {
   useAbsenceReasons,
   useActivityFeed,
   useAdminApplications,
@@ -230,6 +249,7 @@ type AnnouncementPayload = {
   body: string;
   target_type: string;
   target_squad_id?: number | null;
+  target_role_code?: string | null;
   file_id?: number | null;
   status_code: string;
   send_to_tg: boolean;
@@ -298,28 +318,34 @@ const dashboardBlocks: Array<{ code: DashboardBlockCode; title: string; required
   { code: "promo", title: "Инфоблок", required: false },
 ];
 
-const iconByCode: Record<string, string> = {
-  dashboard: "home.png",
-  home: "home.png",
-  schedule: "schedule.png",
-  attendance: "attendance.png",
-  mark_attendance: "mark-attendance.png",
-  normatives: "norms.png",
-  norms: "norms.png",
-  learning: "report.png",
-  notifications: "notifications.png",
-  announcements: "announcements.png",
-  appeals: "report.png",
-  reports: "reports.png",
-  admin: "admin.png",
-  profile: "profile.png",
-  people: "full-roster.png",
-  squads: "full-roster.png",
-  join: "home.png",
-  full_roster: "full-roster.png",
-  my_squad: "my-squad.png",
-  appeal: "report.png",
+const iconByCode: Record<string, LucideIcon> = {
+  dashboard: Home,
+  home: Home,
+  schedule: CalendarDays,
+  attendance: ClipboardCheck,
+  mark_attendance: ClipboardList,
+  normatives: Target,
+  norms: Dumbbell,
+  learning: BookOpen,
+  notifications: Bell,
+  announcements: Megaphone,
+  appeals: MessageSquareWarning,
+  reports: BarChart3,
+  admin: Settings,
+  profile: User,
+  people: Users,
+  squads: Users,
+  join: Flag,
+  full_roster: Users,
+  my_squad: Users,
+  appeal: MessageSquareWarning,
+  download: Download,
 };
+
+function AppIcon({ code, className }: { code: string | null | undefined; className?: string }) {
+  const Icon = iconByCode[code ?? ""] ?? Settings;
+  return <Icon className={className ?? styles.appIcon} aria-hidden="true" strokeWidth={2} />;
+}
 
 function roleMenu(profile: UserProfile): MenuCard[] {
   const level = roleLevels[profile.role_code];
@@ -330,7 +356,7 @@ function roleMenu(profile: UserProfile): MenuCard[] {
     menuCard("normatives", "Нормативы", "задания и отчёты", "norms"),
     menuCard("learning", "Материалы", "курсы и памятки", "learning"),
     menuCard("notifications", "Уведомления", "личные сообщения", "notifications"),
-    menuCard("appeals", "Проблема", "обращение командованию", "appeals"),
+    menuCard("appeals", "Обращение", "вопрос или сообщение", "appeals"),
   ];
   if (level >= 4) {
     cards.push(menuCard("announcements", "Объявления", "отправка в отделение", "announcements"));
@@ -405,9 +431,16 @@ function formatDate(value: string | null) {
 
 function toDateTimeLocal(value: string | null) {
   if (!value) return "";
-  const date = new Date(value);
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
-  return local.toISOString().slice(0, 16);
+  const d = new Date(value);
+  // Format in the server's configured timezone so datetime-local inputs show correct local times
+  const parts = new Intl.DateTimeFormat("sv-SE", {
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit",
+    timeZone: _appTimezone,
+    hour12: false,
+  }).formatToParts(d);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "00";
+  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
 }
 
 function formatDateFull(value: string | null) {
@@ -416,6 +449,13 @@ function formatDateFull(value: string | null) {
     day: "2-digit", month: "long", year: "numeric",
     timeZone: _appTimezone,
   }).format(new Date(value));
+}
+
+function formatUnreadCount(count: number) {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  const word = mod10 === 1 && mod100 !== 11 ? "новое" : "новых";
+  return `${count} ${word}`;
 }
 
 type NavItem = {
@@ -427,9 +467,9 @@ type NavItem = {
 
 const navItems: NavItem[] = [
   { view: "dashboard", iconCode: "home", label: "Главная", minLevel: 0 },
-  { view: "schedule", iconCode: "schedule", label: "Расписание", minLevel: 0 },
+  { view: "schedule", iconCode: "schedule", label: "План", minLevel: 0 },
   { view: "attendance", iconCode: "attendance", label: "Явка", minLevel: 3 },
-  { view: "normatives", iconCode: "norms", label: "Нормативы", minLevel: 1 },
+  { view: "normatives", iconCode: "norms", label: "Нормы", minLevel: 0 },
   { view: "profile", iconCode: "profile", label: "Профиль", minLevel: 0 },
 ];
 
@@ -439,7 +479,7 @@ const viewMinLevels: Record<ViewKey, number> = {
   dashboard: 0,
   schedule: 0,
   attendance: 3,
-  normatives: 1,
+  normatives: 0,
   learning: 0,
   notifications: 3,
   announcements: 4,
@@ -452,11 +492,6 @@ const viewMinLevels: Record<ViewKey, number> = {
 
 function canAccessView(view: ViewKey, level: number) {
   return level >= viewMinLevels[view];
-}
-
-function iconPath(code: string | null | undefined) {
-  const fileName = iconByCode[code ?? ""] ?? "admin.png";
-  return `/assets/icons/${fileName}`;
 }
 
 function apiPath(path: string) {
@@ -622,7 +657,7 @@ export function App({ webApp }: Props) {
   const scheduleWeekType = useScheduleWeekType(internalMode);
   const attendance = useMyAttendance(internalMode);
   const attendanceStats = useMyAttendanceStats(internalMode);
-  const normatives = useNormatives(hasToken && level >= 1, level >= 6);
+  const normatives = useNormatives(hasToken, level >= 6);
   const mySubmissions = useMyNormativeSubmissions(hasToken && level >= 1);
   const pendingSubmissions = usePendingNormativeSubmissions(hasToken && level >= 4);
   const notifications = useNotifications(internalMode);
@@ -678,6 +713,9 @@ export function App({ webApp }: Props) {
           _appTimezone = data.app_timezone;
         }
       },
+      onError: () => {
+        toast("Ошибка авторизации. Попробуйте перезапустить приложение.", "error");
+      },
     });
   }, []);
 
@@ -690,11 +728,19 @@ export function App({ webApp }: Props) {
       .filter((card) => canAccessView(normalizeView(card.code), level))
       .filter((card) => !navCodes.has(normalizeView(card.code)));
   }, [menu.data, profile, level]);
+  const helpCard = cards.find((card) => normalizeView(card.code) === "appeals");
+  const gridCards = cards.filter((card) => normalizeView(card.code) !== "appeals");
 
   const visibleSchedule = schedule.data ?? [];
   const visibleNormatives = normatives.data ?? [];
   const visibleAttendance = attendance.data ?? [];
   const unreadCount = notifications.data?.filter((item) => !item.is_read).length ?? 0;
+  const appealNoticeCount = notifications.data?.filter((item) => {
+    if (item.is_read) return false;
+    const entity = (item.entity_name ?? "").toLowerCase();
+    const type = item.type_code.toLowerCase();
+    return entity.includes("appeal") || type.includes("appeal");
+  }).length ?? 0;
   const visibleCandidateEvents = joinEvents.data?.length ? joinEvents.data : publicEvents.data ?? [];
 
   const openView = (view: string) => {
@@ -788,7 +834,7 @@ export function App({ webApp }: Props) {
       />
 
       <section className={styles.menuGrid} aria-label="Разделы">
-        {cards.map((card) => (
+        {gridCards.map((card) => (
           <button
             key={`${card.code}-${card.title}`}
             className={styles.menuCard}
@@ -796,12 +842,31 @@ export function App({ webApp }: Props) {
             type="button"
             onClick={() => openView(card.code)}
           >
-            <img src={iconPath(card.icon_code ?? card.code)} alt="" />
+            <AppIcon code={card.icon_code ?? card.code} />
             <span>{card.title}</span>
             <small>{card.description}</small>
           </button>
         ))}
       </section>
+      {helpCard && (
+        <button
+          className={styles.helpStrip}
+          type="button"
+          onClick={() => openView(helpCard.code)}
+          data-alert={appealNoticeCount > 0}
+        >
+          <span className={styles.helpStripIcon}>
+            <AppIcon code="appeals" />
+          </span>
+          <span className={styles.helpStripText}>
+            <strong>Нужна помощь?</strong>
+            <small>Связь с командованием</small>
+          </span>
+          <span className={styles.helpStripBadge}>
+            {appealNoticeCount > 0 ? "Есть ответ" : "Написать"}
+          </span>
+        </button>
+      )}
 
       <section className={styles.workspace}>
         {auth.isPending && (
@@ -878,6 +943,7 @@ export function App({ webApp }: Props) {
             <CandidateEventsView
               events={visibleCandidateEvents}
               readonly={profile.role_code !== "CANDIDATE"}
+              onApplyClick={() => openView("dashboard")}
               onRespond={(eventId, responseCode) =>
                 respondCandidateEvent.mutate(
                   { eventId, responseCode },
@@ -914,11 +980,12 @@ export function App({ webApp }: Props) {
           />
         )}
 
-        {!auth.isPending && activeView === "normatives" && level >= 1 && (
+        {!auth.isPending && activeView === "normatives" && (
           <NormativesView
             items={visibleNormatives}
             submissions={mySubmissions.data ?? []}
             pending={pendingSubmissions.data ?? []}
+            canSubmit={level >= 1}
             canReview={level >= 4}
             onSubmit={(normativeId, comment, fileIds) =>
               submitNormative.mutate(
@@ -965,6 +1032,9 @@ export function App({ webApp }: Props) {
         {!auth.isPending && activeView === "announcements" && level >= 4 && (
           <AnnouncementsView
             items={announcements.data ?? []}
+            level={level}
+            squads={squadsList.data ?? adminSquads.data ?? []}
+            profileSquadId={profile.squad_id}
             onCreate={(payload) =>
               createAnnouncement.mutate(payload, {
                 onSuccess: (item: { id: number }) => sendAnnouncement.mutate(item.id),
@@ -1016,19 +1086,7 @@ export function App({ webApp }: Props) {
             allUsers={allUsers.data ?? []}
             squads={squadsList.data ?? adminSquads.data ?? []}
             onProfileUpdate={(p) => setProfile(p)}
-            onAvatarUpload={(file) =>
-              uploadAvatar.mutate(file, {
-                onSuccess: (updatedProfile) => {
-                  setProfile(updatedProfile);
-                  hapticSuccess();
-                  toast("Аватар обновлён", "success");
-                },
-                onError: () => {
-                  hapticError();
-                  toast("Не удалось загрузить аватар", "error");
-                },
-              })
-            }
+            onAvatarUpload={(file) => uploadAvatar.mutateAsync(file)}
             isAvatarUploading={uploadAvatar.isPending}
           />
         )}
@@ -1076,7 +1134,7 @@ export function App({ webApp }: Props) {
               className={`${styles.navIcon} ${view === "notifications" && unreadCount > 0 ? styles.navBadge : ""}`}
               data-count={view === "notifications" && unreadCount > 0 ? unreadCount : undefined}
             >
-              <img src={iconPath(iconCode)} alt="" />
+              <AppIcon code={iconCode} />
             </span>
             <span>{label}</span>
           </button>
@@ -1182,10 +1240,11 @@ function ResponseButtons({
           type="button"
           className={styles.btnMaybeOutline}
           onClick={() => {
-            if (currentResponse === "NOT_COMING" && requiresResponse) {
+            const newCode = currentResponse === "COMING" ? "NOT_COMING" : "COMING";
+            if (newCode === "NOT_COMING" && requiresResponse) {
               setPickingReason(true);
             } else {
-              onRespond(eventId, currentResponse === "COMING" ? "NOT_COMING" : "COMING");
+              onRespond(eventId, newCode);
             }
           }}
         >
@@ -1508,68 +1567,118 @@ function PublicScreen({
   });
   const [phoneDisplay, setPhoneDisplay] = useState("+7");
   const [showPrivacy, setShowPrivacy] = useState(false);
+  const [screen, setScreen] = useState<"overview" | "application">("overview");
   const canSubmit = form.full_name.trim().length >= 2 && form.consent_given;
+  const materials = (content?.materials ?? []).map((item) => item.title).slice(0, 4);
+
+  if (screen === "application") {
+    return (
+      <div className={styles.panel}>
+        <div className={styles.panelHeader}>
+          <h2>Анкета вступления</h2>
+          <button type="button" className={styles.editProfileBtn} onClick={() => setScreen("overview")}>
+            Назад
+          </button>
+        </div>
+        <div className={styles.formBlock}>
+          <label className={styles.fieldLabel}>
+            <span>ФИО *</span>
+            <input placeholder="Иванов Иван Иванович" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} />
+          </label>
+          <label className={styles.fieldLabel}>
+            <span>Дата рождения</span>
+            <input type="date" value={form.birth_date} onChange={(e) => setForm({ ...form, birth_date: e.target.value })} />
+          </label>
+          <label className={styles.fieldLabel}>
+            <span>Телефон</span>
+            <input
+              type="tel"
+              placeholder="+7 999 000 11 22"
+              value={phoneDisplay}
+              inputMode="numeric"
+              onChange={(e) => {
+                const raw = e.target.value;
+                if (raw === "" || raw === "+") {
+                  setPhoneDisplay("+7");
+                  setForm({ ...form, phone: "" });
+                  return;
+                }
+                const masked = applyPhoneMask(raw);
+                setPhoneDisplay(masked);
+                setForm({ ...form, phone: phoneInputToRaw(masked) });
+              }}
+              onFocus={(e) => {
+                if (e.target.value === "+7") {
+                  const len = e.target.value.length;
+                  setTimeout(() => e.target.setSelectionRange(len, len), 0);
+                }
+              }}
+            />
+          </label>
+          <label className={styles.fieldLabel}>
+            <span>Город или район</span>
+            <input placeholder="Новосибирск" value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} />
+          </label>
+          <label className={styles.fieldLabel}>
+            <span>Учебная группа</span>
+            <input placeholder="Например, 1ИСП-21" value={form.education_place} onChange={(e) => setForm({ ...form, education_place: e.target.value })} />
+          </label>
+          <label className={styles.fieldLabel}>
+            <span>Опыт или подготовка</span>
+            <textarea placeholder="Расскажите коротко о подготовке" rows={2} value={form.experience_text} onChange={(e) => setForm({ ...form, experience_text: e.target.value })} />
+          </label>
+          <label className={styles.fieldLabel}>
+            <span>Почему хотите вступить *</span>
+            <textarea placeholder="Мотивация кандидата" rows={3} value={form.motivation_text} onChange={(e) => setForm({ ...form, motivation_text: e.target.value })} />
+          </label>
+          <label className={styles.fieldLabel}>
+            <span>Откуда узнали о ВПК</span>
+            <input placeholder="Друзья, школа, соцсети" value={form.source_text} onChange={(e) => setForm({ ...form, source_text: e.target.value })} />
+          </label>
+          <label className={styles.fieldLabel}>
+            <span>Комментарий</span>
+            <textarea placeholder="Дополнительная информация" rows={2} value={form.comment} onChange={(e) => setForm({ ...form, comment: e.target.value })} />
+          </label>
+          <label className={styles.checkboxLine}>
+            <input type="checkbox" checked={form.consent_given} onChange={(e) => setForm({ ...form, consent_given: e.target.checked })} />
+            <span>
+              Согласен на{" "}
+              <button
+              type="button"
+              className={styles.linkButton}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setShowPrivacy(true);
+              }}
+            >
+                обработку персональных данных
+              </button>
+            </span>
+          </label>
+          <button type="button" disabled={!canSubmit || isSubmitting} onClick={() => onSubmit(form)}>
+            {isSubmitting ? "Отправляем..." : "Подать заявку"}
+          </button>
+        </div>
+        {showPrivacy && <PrivacyModal onClose={() => setShowPrivacy(false)} />}
+      </div>
+    );
+  }
 
   return (
     <div className={styles.panel}>
       <WelcomeBanner blocks={content?.promo_blocks ?? []} />
-      <CandidateEventsView events={events} readonly onRespond={() => undefined} compact />
-      <MiniList title="Материалы для вступления" items={(content?.materials ?? []).map((item) => item.title).slice(0, 4)} />
-      <div className={styles.formBlock}>
-        <input placeholder="ФИО *" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} />
-        <label className={styles.fieldLabel}>
-          <span>Дата рождения</span>
-          <input type="date" value={form.birth_date} onChange={(e) => setForm({ ...form, birth_date: e.target.value })} />
-        </label>
-        <input
-          type="tel"
-          placeholder="+7 999 000 11 22"
-          value={phoneDisplay}
-          inputMode="numeric"
-          onChange={(e) => {
-            const raw = e.target.value;
-            // Allow clearing completely
-            if (raw === "" || raw === "+") {
-              setPhoneDisplay("+7");
-              setForm({ ...form, phone: "" });
-              return;
-            }
-            const masked = applyPhoneMask(raw);
-            setPhoneDisplay(masked);
-            setForm({ ...form, phone: phoneInputToRaw(masked) });
-          }}
-          onFocus={(e) => {
-            if (e.target.value === "+7") {
-              // Move cursor to end
-              const len = e.target.value.length;
-              setTimeout(() => e.target.setSelectionRange(len, len), 0);
-            }
-          }}
-        />
-        <input placeholder="Город или район" value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} />
-        <input placeholder="Группа (например, 1ИСП-21)" value={form.education_place} onChange={(e) => setForm({ ...form, education_place: e.target.value })} />
-        <textarea placeholder="Опыт или подготовка" rows={2} value={form.experience_text} onChange={(e) => setForm({ ...form, experience_text: e.target.value })} />
-        <textarea placeholder="Почему хотите вступить *" rows={3} value={form.motivation_text} onChange={(e) => setForm({ ...form, motivation_text: e.target.value })} />
-        <input placeholder="Откуда узнали о ВПК" value={form.source_text} onChange={(e) => setForm({ ...form, source_text: e.target.value })} />
-        <textarea placeholder="Комментарий" rows={2} value={form.comment} onChange={(e) => setForm({ ...form, comment: e.target.value })} />
-        <label className={styles.checkboxLine}>
-          <input type="checkbox" checked={form.consent_given} onChange={(e) => setForm({ ...form, consent_given: e.target.checked })} />
-          <span>
-            Согласен на{" "}
-            <button
-              type="button"
-              className={styles.linkButton}
-              onClick={() => setShowPrivacy(true)}
-            >
-              обработку персональных данных
-            </button>
-          </span>
-        </label>
-        <button type="button" disabled={!canSubmit || isSubmitting} onClick={() => onSubmit(form)}>
-          {isSubmitting ? "Отправляем..." : "Подать заявку"}
+      <CandidateEventsView events={events} readonly onRespond={() => undefined} compact onApplyClick={() => setScreen("application")} />
+      {materials.length > 0 && <MiniList title="Материалы для вступления" items={materials} />}
+      <div className={styles.joinCta}>
+        <div>
+          <strong>Анкета вступления</strong>
+          <span>Заполните данные кандидата отдельно от мероприятий.</span>
+        </div>
+        <button type="button" onClick={() => setScreen("application")}>
+          Заполнить
         </button>
       </div>
-      {showPrivacy && <PrivacyModal onClose={() => setShowPrivacy(false)} />}
     </div>
   );
 }
@@ -1653,7 +1762,7 @@ function CandidateDashboard({
         </div>
       )}
       <CandidateEventsView events={events} onRespond={onRespond} />
-      <MiniList title="Подготовка" items={materials.map((item) => item.title).slice(0, 4)} />
+      {materials.length > 0 && <MiniList title="Подготовка" items={materials.map((item) => item.title).slice(0, 4)} />}
       {notifications.filter(n => !n.is_read).length > 0 && (
         <MiniList title="Новые уведомления" items={notifications.filter(n => !n.is_read).map((item) => item.title).slice(0, 3)} />
       )}
@@ -1667,12 +1776,28 @@ function CandidateEventsView({
   readonly = false,
   compact = false,
   onRespond,
+  onApplyClick,
 }: {
   events: CandidateEvent[];
   readonly?: boolean;
   compact?: boolean;
   onRespond: (eventId: number, responseCode: string) => void;
+  onApplyClick?: () => void;
 }) {
+  const [selectedEvent, setSelectedEvent] = useState<CandidateEvent | null>(null);
+
+  if (selectedEvent) {
+    return (
+      <CandidateEventDetail
+        event={selectedEvent}
+        readonly={readonly}
+        onBack={() => setSelectedEvent(null)}
+        onRespond={onRespond}
+        onApplyClick={onApplyClick}
+      />
+    );
+  }
+
   return (
     <div className={compact ? styles.compactSection : styles.subPanel}>
       <div className={styles.panelHeader}>
@@ -1680,20 +1805,81 @@ function CandidateEventsView({
         <span>{events.length} доступно</span>
       </div>
       <div className={styles.list}>
-        {events.length === 0 && <Empty text="Даты появятся после публикации" />}
+        {events.length === 0 && <Empty text="Пока нет опубликованных дат. Анкету можно отправить отдельно, приглашение появится позже." />}
         {events.map((event) => (
-          <article className={styles.row} key={event.id}>
-            <img src={iconPath("schedule")} alt="" />
+          <article
+            className={`${styles.row} ${styles.eventRow}`}
+            key={event.id}
+            onClick={() => setSelectedEvent(event)}
+          >
+            <AppIcon code="schedule" />
             <div>
               <strong>{event.title}</strong>
               <span>{formatDate(event.start_datetime)} · {event.place ?? "место уточняется"}</span>
+              {event.description && <small>{event.description}</small>}
             </div>
             {!readonly && (
-              <ResponseButtons eventId={event.id} onRespond={onRespond} />
+              <div className={styles.eventRowActions} onClick={(e) => e.stopPropagation()}>
+                <ResponseButtons eventId={event.id} onRespond={onRespond} />
+              </div>
             )}
           </article>
         ))}
       </div>
+    </div>
+  );
+}
+
+function CandidateEventDetail({
+  event,
+  readonly,
+  onBack,
+  onRespond,
+  onApplyClick,
+}: {
+  event: CandidateEvent;
+  readonly: boolean;
+  onBack: () => void;
+  onRespond: (eventId: number, responseCode: string) => void;
+  onApplyClick?: () => void;
+}) {
+  return (
+    <div className={styles.eventDetail}>
+      <button type="button" className={styles.eventBackButton} onClick={onBack}>
+        Назад к мероприятиям
+      </button>
+      <div className={styles.eventHero}>
+        <span>{event.event_type_code}</span>
+        <h2>{event.title}</h2>
+        <p>{formatDate(event.start_datetime)}</p>
+      </div>
+      <div className={styles.eventMetaGrid}>
+        <div>
+          <span>Место</span>
+          <strong>{event.place || "место уточняется"}</strong>
+        </div>
+        <div>
+          <span>Окончание</span>
+          <strong>{event.end_datetime ? formatDate(event.end_datetime) : "по ситуации"}</strong>
+        </div>
+        {event.capacity !== null && (
+          <div>
+            <span>Лимит</span>
+            <strong>{event.capacity} мест</strong>
+          </div>
+        )}
+      </div>
+      <div className={styles.eventDescription}>
+        <span>Описание</span>
+        <p>{event.description?.trim() || "Описание пока не добавлено. Уточните детали у организатора перед посещением."}</p>
+      </div>
+      {readonly ? (
+        <button type="button" className={styles.iconAction} onClick={onApplyClick}>
+          Заполнить анкету для записи
+        </button>
+      ) : (
+        <ResponseButtons eventId={event.id} onRespond={onRespond} />
+      )}
     </div>
   );
 }
@@ -1823,7 +2009,7 @@ function ScheduleView({
         {filtered.length === 0 && <Empty text="В этой вкладке пока пусто" />}
         {filtered.map((event) => (
           <article className={styles.row} key={event.id}>
-            <img src={iconPath("schedule")} alt="" />
+            <AppIcon code="schedule" />
             <div>
               <strong>
                 {event.title}
@@ -1887,6 +2073,7 @@ function AttendanceView({
     return true;
   });
   const existingAttendance = new Map((eventAttendance.data ?? []).map((item) => [item.user_id, item.status_code]));
+  const eventTitle = (eventId: number) => eventMap.get(eventId) ?? "Событие вне текущего расписания";
 
   const statusLabels: Record<string, string> = {
     PRESENT: "Присутствовал", ABSENT: "Отсутствовал", LATE: "Опоздал",
@@ -1988,9 +2175,9 @@ function AttendanceView({
           {records.length === 0 && <Empty text="Отметок пока нет" />}
           {records.map((record) => (
             <article className={styles.row} key={record.id}>
-              <img src={iconPath("attendance")} alt="" />
+              <AppIcon code="attendance" />
               <div>
-                <strong>{eventMap.get(record.event_id) ?? `Занятие #${record.event_id}`}</strong>
+                <strong>{eventTitle(record.event_id)}</strong>
                 <span style={{ color: statusColors[record.status_code] ?? "#65708a" }}>
                   {statusLabels[record.status_code] ?? record.status_code} · {formatDate(record.marked_at)}
                 </span>
@@ -2129,6 +2316,7 @@ function NormativesView({
   items,
   submissions,
   pending,
+  canSubmit,
   canReview,
   onSubmit,
   onReview,
@@ -2137,6 +2325,7 @@ function NormativesView({
   items: Normative[];
   submissions: NormativeSubmission[];
   pending: NormativeSubmission[];
+  canSubmit: boolean;
   canReview: boolean;
   onSubmit: (normativeId: number, comment?: string, fileIds?: number[]) => void;
   onReview: (submissionId: number, statusCode: string, reviewerComment?: string) => void;
@@ -2152,15 +2341,15 @@ function NormativesView({
   const [comments, setComments] = useState<Record<number, string>>({});
   const tabs: Array<["active" | "mine" | "pending" | "accepted" | "archive", string]> = [
     ["active", "Активные"],
-    ["mine", "Мои сдачи"],
+    ...(canSubmit ? ([["mine", "Мои сдачи"]] as Array<["mine", string]>) : []),
     ...(canReview ? ([["pending", "На проверке"]] as Array<["pending", string]>) : []),
-    ["accepted", "Принятые"],
-    ["archive", "Архив"],
+    ...(canSubmit ? ([["accepted", "Принятые"]] as Array<["accepted", string]>) : []),
+    ...(canReview ? ([["archive", "Архив"]] as Array<["archive", string]>) : []),
   ];
 
   useEffect(() => {
-    if (tab === "pending" && !canReview) setTab("active");
-  }, [tab, canReview]);
+    if (!tabs.some(([value]) => value === tab)) setTab("active");
+  }, [tab, tabs.length]);
 
   const handleFileChange = async (normativeId: number, file: File) => {
     try {
@@ -2219,7 +2408,7 @@ function NormativesView({
             );
             return (
               <article className={styles.row} key={item.id}>
-                <img src={iconPath("norms")} alt="" />
+                <AppIcon code="norms" />
                 <div>
                   <strong>{item.title}</strong>
                   <span>{item.description ?? "описание будет добавлено"} · до {formatDate(item.deadline_at)}</span>
@@ -2255,7 +2444,7 @@ function NormativesView({
                     </svg>
                     Отправлено на проверку командиру
                   </div>
-                ) : (
+                ) : canSubmit ? (
                   <div className={styles.fileUploadArea}>
                     {attached.map((file) => (
                       <div className={styles.fileAttached} key={file.id}>
@@ -2289,6 +2478,8 @@ function NormativesView({
                       {isBusy || upload.isPending ? "Отправляем..." : "Отправить на проверку"}
                     </button>
                   </div>
+                ) : (
+                  <div className={styles.normReadOnly}>Требование доступно для просмотра. Сдача откроется после отправки анкеты.</div>
                 )}
               </article>
             );
@@ -2313,7 +2504,7 @@ function NormativesView({
           ? <Empty text="Архив нормативов пуст" />
           : archiveItems.map((item) => (
             <article className={styles.row} key={item.id}>
-              <img src={iconPath("norms")} alt="" />
+              <AppIcon code="norms" />
               <div>
                 <strong>{item.title}</strong>
                 <span>{item.description ?? "закрытый норматив"} · до {formatDate(item.deadline_at)}</span>
@@ -2357,7 +2548,7 @@ function NotificationsView({
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
         <h2>Уведомления</h2>
-        <span>{unread.length} новых</span>
+        <span>{formatUnreadCount(unread.length)}</span>
       </div>
       {unread.length > 1 && (
         <div className={styles.commandStrip}>
@@ -2368,7 +2559,7 @@ function NotificationsView({
         {items.length === 0 && <Empty text="Уведомлений пока нет" />}
         {items.map((item) => (
           <article className={styles.row} key={item.id} data-muted={item.is_read}>
-            <img src={iconPath("notifications")} alt="" />
+            <AppIcon code="notifications" />
             <div>
               <strong>{item.title}</strong>
               <span>{item.body ?? item.type_code} · {formatDate(item.created_at)}</span>
@@ -2386,59 +2577,138 @@ function NotificationsView({
 /* ─────────── AnnouncementsView ─────────── */
 function AnnouncementsView({
   items,
+  level,
+  squads,
+  profileSquadId,
   onCreate,
   isSubmitting,
 }: {
   items: Announcement[];
+  level: number;
+  squads: Squad[];
+  profileSquadId: number | null;
   onCreate: (payload: AnnouncementPayload) => void;
   isSubmitting: boolean;
 }) {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  const [targetType, setTargetType] = useState<"ALL" | "SQUAD">(() => level >= 6 ? "ALL" : "SQUAD");
+  const [targetSquadId, setTargetSquadId] = useState("");
+  const [sendToApp, setSendToApp] = useState(true);
+  const [sendToTg, setSendToTg] = useState(true);
   const [attachment, setAttachment] = useState<{ id: number; name: string } | null>(null);
   const upload = useUploadFile();
   const openFile = useOpenFile();
-  const canSubmit = title.trim().length > 0 && body.trim().length > 0;
+  const ownSquadLabel = squads.find((squad) => squad.id === profileSquadId)?.name ?? (profileSquadId ? `Отделение #${profileSquadId}` : "отделение не назначено");
+  const selectedTargetSquadId = targetType === "SQUAD"
+    ? (targetSquadId ? Number(targetSquadId) : level < 6 ? profileSquadId : null)
+    : null;
+  const targetReady = targetType !== "SQUAD" || selectedTargetSquadId !== null;
+  const channelsReady = sendToApp || sendToTg;
+  const canSubmit = title.trim().length > 0 && body.trim().length > 0 && targetReady && channelsReady;
+
+  useEffect(() => {
+    if (level < 6 && targetType !== "SQUAD") {
+      setTargetType("SQUAD");
+      setTargetSquadId("");
+    }
+  }, [level, targetType]);
+
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
         <h2>Объявления</h2>
         <span>{items.length} записей</span>
       </div>
-      <div className={styles.formBlock}>
-        <input placeholder="Заголовок" value={title} onChange={(e) => setTitle(e.target.value)} />
-        <textarea placeholder="Текст объявления" rows={3} value={body} onChange={(e) => setBody(e.target.value)} />
-        {attachment && (
-          <div className={styles.fileAttached}>
-            <span>{attachment.name}</span>
-            <button type="button" onClick={() => setAttachment(null)}>Убрать</button>
+      <div className={`${styles.formBlock} ${styles.announcementComposer}`}>
+        <label className={styles.fieldLabel}>
+          <span>Заголовок</span>
+          <input placeholder="Коротко о главном" value={title} onChange={(e) => setTitle(e.target.value)} />
+        </label>
+        <div className={styles.announcementTopGrid}>
+          <label className={styles.fieldLabel}>
+            <span>Получатели</span>
+            <select
+              value={targetType}
+              disabled={level < 6}
+              onChange={(event) => {
+                setTargetType(event.target.value as "ALL" | "SQUAD");
+                setTargetSquadId("");
+              }}
+            >
+              {level >= 6 && <option value="ALL">Всем участникам</option>}
+              <option value="SQUAD">{level >= 6 ? "Отделению" : "Своё отделение"}</option>
+            </select>
+          </label>
+          {targetType === "SQUAD" && (
+            <label className={styles.fieldLabel}>
+              <span>Отделение</span>
+              {level >= 6 ? (
+                <select value={targetSquadId} onChange={(event) => setTargetSquadId(event.target.value)}>
+                  <option value="">Выберите отделение</option>
+                  {squads.map((squad) => (
+                    <option key={squad.id} value={squad.id}>{squad.name}</option>
+                  ))}
+                </select>
+              ) : (
+                <input value={ownSquadLabel} disabled readOnly />
+              )}
+            </label>
+          )}
+          <div className={styles.announcementAttachment}>
+            <span>Вложение</span>
+            {attachment && (
+              <div className={styles.fileAttached}>
+                <span>{attachment.name}</span>
+                <button type="button" onClick={() => setAttachment(null)}>Убрать</button>
+              </div>
+            )}
+            <FilePicker
+              accept={FILE_PREVIEW_ACCEPT}
+              label={upload.isPending ? "Загружаем..." : attachment ? "Заменить файл" : "Прикрепить файл"}
+              className={`${styles.fileButton} ${styles.secondaryFileButton}`}
+              onFile={async (file) => {
+                try {
+                  const result = await upload.mutateAsync(file);
+                  setAttachment({ id: result.id, name: result.original_name || file.name });
+                } catch {
+                  toast("Не удалось загрузить вложение", "error");
+                }
+              }}
+            />
           </div>
-        )}
-        <FilePicker
-          accept={FILE_PREVIEW_ACCEPT}
-          label={upload.isPending ? "Загружаем..." : attachment ? "Заменить вложение" : "Прикрепить файл или видео"}
-          className={styles.fileButton}
-          onFile={async (file) => {
-            try {
-              const result = await upload.mutateAsync(file);
-              setAttachment({ id: result.id, name: result.original_name || file.name });
-            } catch {
-              toast("Не удалось загрузить вложение", "error");
-            }
-          }}
-        />
+        </div>
+        <label className={styles.fieldLabel}>
+          <span>Текст</span>
+          <textarea placeholder="Текст объявления" rows={2} value={body} onChange={(e) => setBody(e.target.value)} />
+        </label>
+        <div className={styles.announcementChannels} role="group" aria-label="Каналы отправки">
+          <button type="button" data-active={sendToApp} onClick={() => setSendToApp((value) => !value)}>Приложение</button>
+          <button type="button" data-active={sendToTg} onClick={() => setSendToTg((value) => !value)}>Telegram</button>
+        </div>
         <button
+          className={styles.primaryButton}
           type="button"
           disabled={!canSubmit || isSubmitting || upload.isPending}
-          onClick={() => onCreate({ title, body, target_type: "SQUAD", file_id: attachment?.id ?? null, status_code: "DRAFT", send_to_tg: true, send_to_app: true })}
+          onClick={() => onCreate({
+            title,
+            body,
+            target_type: targetType,
+            target_squad_id: selectedTargetSquadId,
+            file_id: attachment?.id ?? null,
+            status_code: "DRAFT",
+            send_to_tg: sendToTg,
+            send_to_app: sendToApp,
+          })}
         >
           {isSubmitting ? "Отправляем..." : "Отправить объявление"}
         </button>
       </div>
       <div className={styles.list}>
+        {items.length === 0 && <Empty text="Объявлений пока нет" />}
         {items.map((item) => (
           <article className={styles.row} key={item.id}>
-            <img src={iconPath("announcements")} alt="" />
+            <AppIcon code="announcements" />
             <div>
               <strong>{item.title}</strong>
               <span>{item.status_code} · {item.body?.slice(0, 60)}</span>
@@ -2561,7 +2831,7 @@ function AppealsView({
             {items.length === 0 && <Empty text="Обращений пока нет" />}
             {items.map((item) => (
               <article className={styles.row} key={item.id} style={{ cursor: "pointer" }} onClick={() => setOpenAppealId(item.id)}>
-                <img src={iconPath("appeals")} alt="" />
+                <AppIcon code="appeals" />
                 <div>
                   <strong>{item.subject}</strong>
                   <span>{appealStatusLabel(item.status_code)} · {item.category_code} · {formatDate(item.created_at)}</span>
@@ -2704,6 +2974,17 @@ function ReportsView({
     NEEDS_REDO: "Пересдача",
     OVERDUE: "Просрочено",
   };
+  const reportRows = items.map((item, index) => {
+    const rec = item as Record<string, unknown>;
+    const key = String(rec.status_code ?? rec.grade_value ?? rec.label ?? `#${index + 1}`);
+    return {
+      key,
+      label: statusLabelMap[key] ?? key,
+      value: extractCount(item),
+    };
+  });
+  const totalCount = reportRows.reduce((sum, item) => sum + item.value, 0);
+  const leader = [...reportRows].sort((left, right) => right.value - left.value)[0];
 
   return (
     <div className={styles.panel}>
@@ -2740,16 +3021,29 @@ function ReportsView({
             <Empty text="Данных пока нет" />
           ) : (
             <>
+              <div className={styles.reportOverview}>
+                <div className={styles.reportStat}>
+                  <span>Всего</span>
+                  <strong>{totalCount}</strong>
+                </div>
+                <div className={styles.reportStat}>
+                  <span>Лидер</span>
+                  <strong>{leader?.label ?? "—"}</strong>
+                </div>
+                <div className={styles.reportStat}>
+                  <span>Категорий</span>
+                  <strong>{reportRows.length}</strong>
+                </div>
+              </div>
               {/* Bar chart */}
               <div className={styles.chartsSection}>
                 <div className={styles.chartSectionTitle}>{activeReport?.title ?? "Данные"}</div>
                 <BarChart
-                  data={items.map((item) => {
-                    const rec = item as Record<string, unknown>;
-                    const key = String(rec.status_code ?? rec.grade_value ?? rec.label ?? "?");
+                  data={reportRows.map((item) => {
+                    const key = item.key;
                     return {
-                      label: (statusLabelMap[key] ?? key).slice(0, 5),
-                      value: extractCount(item),
+                      label: item.label.slice(0, 5),
+                      value: item.value,
                       color: key === "PRESENT" || key === "ACCEPTED" || key === "5" ? "#27ae60"
                         : key === "ABSENT" || key === "REJECTED" || key === "2" || key === "1" ? "#e74c3c"
                         : key === "LATE" || key === "NEEDS_REDO" || key === "3" ? "#f39c12"
@@ -2761,14 +3055,13 @@ function ReportsView({
               </div>
               {/* Summary numbers */}
               <div className={styles.statsGrid2}>
-                {items.slice(0, 4).map((item, index) => {
-                  const rec = item as Record<string, unknown>;
-                  const key = String(rec.status_code ?? rec.grade_value ?? rec.label ?? `#${index + 1}`);
+                {reportRows.slice(0, 4).map((item, index) => {
+                  const key = item.key;
                   return (
                     <StatNumber
                       key={index}
-                      value={extractCount(item)}
-                      label={statusLabelMap[key] ?? key}
+                      value={item.value}
+                      label={item.label}
                       color={key === "PRESENT" || key === "ACCEPTED" || key === "5" ? "#27ae60"
                         : key === "ABSENT" || key === "REJECTED" ? "#e74c3c"
                         : "#1a2f5a"}
@@ -2783,10 +3076,7 @@ function ReportsView({
               <div className={styles.chartSectionTitle}>Распределение оценок</div>
               <GradeDistribution
                 grades={Object.fromEntries(
-                  items.map((item) => {
-                    const rec = item as Record<string, unknown>;
-                    return [String(rec.grade_value ?? "?"), extractCount(item)];
-                  })
+                  reportRows.map((item) => [item.key, item.value])
                 )}
               />
             </div>
@@ -2856,7 +3146,7 @@ function LearningView({ items, courses, canTrack }: { items: LearningMaterial[];
               }
             }}
           >
-            <img src={iconPath("learning")} alt="" />
+            <AppIcon code="learning" />
             <div>
               <strong>{item.title}</strong>
               <span>{typeLabels[item.type_code] ?? item.type_code} · {item.description ?? "материал подготовки"}{item.duration_minutes ? ` · ${item.duration_minutes} мин` : ""}</span>
@@ -2881,7 +3171,7 @@ function LearningView({ items, courses, canTrack }: { items: LearningMaterial[];
               setTab(item.audience_code === "CANDIDATE" ? "candidates" : "main");
             }}
           >
-            <img src={iconPath("learning")} alt="" />
+            <AppIcon code="learning" />
             <div>
               <strong>{item.title}</strong>
               <span>{item.audience_code} · {item.description ?? "мини-курс"} · {items.filter((material) => material.course_id === item.id).length} материалов</span>
@@ -3115,8 +3405,8 @@ function RosterTable({
                   </a>
                 ) : (
                   <span
-                    style={{ cursor: "copy", textDecoration: "underline dotted" }}
-                    title="Нажмите чтобы скопировать"
+                    className={styles.telegramFallback}
+                    title={user.telegram_id ? "Username не указан. Нажмите, чтобы скопировать Telegram ID" : "Telegram не привязан"}
                     onClick={(e) => {
                       e.stopPropagation();
                       if (user.telegram_id) {
@@ -3124,7 +3414,7 @@ function RosterTable({
                       }
                     }}
                   >
-                    {user.telegram_id || "—"}
+                    {user.telegram_id ? `ID ${user.telegram_id}` : "нет Telegram"}
                   </span>
                 )}
               </td>
@@ -3189,7 +3479,7 @@ function ProfileView({
   streak: StreakData;
   allUsers: UserRecord[];
   squads: Squad[];
-  onAvatarUpload: (file: File) => void;
+  onAvatarUpload: (file: File) => Promise<UserProfile>;
   isAvatarUploading: boolean;
   onProfileUpdate: (p: UserProfile) => void;
 }) {
@@ -3197,6 +3487,8 @@ function ProfileView({
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState({ full_name: "", phone: "", city: "", education_place: "", birth_date: "" });
   const [editPhone, setEditPhone] = useState("+7");
+  const [localAvatarPreview, setLocalAvatarPreview] = useState<string | null>(null);
+  const [avatarFailed, setAvatarFailed] = useState(false);
   const updateMe = useUpdateMe();
 
   const prof = profile as unknown as Record<string, string>;
@@ -3235,7 +3527,33 @@ function ProfileView({
   const total = items.reduce((acc, i) => acc + extractCount(i), 0);
   const percent = total ? Math.round((presentCount / total) * 100) : 0;
   const accepted = submissions.filter((s) => s.status_code === "ACCEPTED").length;
-  const avatar = avatarPath(profile.avatar_file_id);
+  const avatar = localAvatarPreview || (!avatarFailed ? avatarPath(profile.avatar_file_id) : null);
+
+  useEffect(() => {
+    setAvatarFailed(false);
+  }, [profile.avatar_file_id]);
+
+  useEffect(() => () => {
+    if (localAvatarPreview) URL.revokeObjectURL(localAvatarPreview);
+  }, [localAvatarPreview]);
+
+  const handleAvatarFile = async (file: File) => {
+    const previewUrl = URL.createObjectURL(file);
+    setLocalAvatarPreview((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return previewUrl;
+    });
+    setAvatarFailed(false);
+    try {
+      const updated = await onAvatarUpload(file);
+      onProfileUpdate(updated);
+      toast("Аватар обновлён", "success");
+    } catch {
+      setLocalAvatarPreview(null);
+      setAvatarFailed(true);
+      toast("Не удалось загрузить аватар", "error");
+    }
+  };
 
   return (
     <div className={styles.panel}>
@@ -3248,7 +3566,7 @@ function ProfileView({
       <div className={styles.profileCard}>
         <div className={styles.profileAvatarUpload} onClick={() => !isAvatarUploading && avatarInputRef.current?.click()}>
           <span className={styles.profileAvatar}>
-            {avatar ? <img src={avatar} alt="" /> : profile.full_name.charAt(0).toUpperCase()}
+            {avatar ? <img src={avatar} alt="" onError={() => { setAvatarFailed(true); setLocalAvatarPreview(null); }} /> : profile.full_name.charAt(0).toUpperCase()}
           </span>
           <span className={styles.avatarUploadButton}>
             {isAvatarUploading ? "Загрузка..." : avatar ? "Сменить фото" : "Загрузить фото"}
@@ -3261,7 +3579,7 @@ function ProfileView({
             disabled={isAvatarUploading}
             onChange={(e) => {
               const file = e.target.files?.[0];
-              if (file) onAvatarUpload(file);
+              if (file) void handleAvatarFile(file);
               e.target.value = "";
             }}
           />
@@ -3269,32 +3587,44 @@ function ProfileView({
 
         {editing ? (
           <div className={styles.formBlock}>
-            <input
-              placeholder="ФИО *"
-              value={editForm.full_name}
-              onChange={(e) => setEditForm({ ...editForm, full_name: e.target.value })}
-            />
-            <input
-              type="tel"
-              inputMode="numeric"
-              placeholder="+7 999 000 11 22"
-              value={editPhone}
-              onChange={(e) => {
-                const masked = applyPhoneMask(e.target.value);
-                setEditPhone(masked);
-                setEditForm({ ...editForm, phone: phoneInputToRaw(masked) });
-              }}
-            />
-            <input
-              placeholder="Город или район"
-              value={editForm.city}
-              onChange={(e) => setEditForm({ ...editForm, city: e.target.value })}
-            />
-            <input
-              placeholder="Группа (например, 1ИСП-21)"
-              value={editForm.education_place}
-              onChange={(e) => setEditForm({ ...editForm, education_place: e.target.value })}
-            />
+            <label className={styles.fieldLabel}>
+              <span>ФИО</span>
+              <input
+                placeholder="Иванов Иван Иванович"
+                value={editForm.full_name}
+                onChange={(e) => setEditForm({ ...editForm, full_name: e.target.value })}
+              />
+            </label>
+            <label className={styles.fieldLabel}>
+              <span>Телефон</span>
+              <input
+                type="tel"
+                inputMode="numeric"
+                placeholder="+7 999 000 11 22"
+                value={editPhone}
+                onChange={(e) => {
+                  const masked = applyPhoneMask(e.target.value);
+                  setEditPhone(masked);
+                  setEditForm({ ...editForm, phone: phoneInputToRaw(masked) });
+                }}
+              />
+            </label>
+            <label className={styles.fieldLabel}>
+              <span>Город или район</span>
+              <input
+                placeholder="Новосибирск"
+                value={editForm.city}
+                onChange={(e) => setEditForm({ ...editForm, city: e.target.value })}
+              />
+            </label>
+            <label className={styles.fieldLabel}>
+              <span>Группа</span>
+              <input
+                placeholder="Например, 1ИСП-21"
+                value={editForm.education_place}
+                onChange={(e) => setEditForm({ ...editForm, education_place: e.target.value })}
+              />
+            </label>
             <label className={styles.fieldLabel}>
               <span>Дата рождения</span>
               <input
@@ -3522,13 +3852,14 @@ function AdminView({
     : users;
   void appStatusFilter; // kept for potential future use
 
-  const adminGroups: Array<{ title: string; tabs: Array<[AdminTab, string, number]> }> = [
+  const contentAdminGroups: Array<{ title: string; tabs: Array<[AdminTab, string, number]> }> = [
     { title: "Состав", tabs: [["users", "Люди", 4], ["applications", "Заявки", 6], ["squads", "Отделения", 6]] },
     { title: "Занятия", tabs: [["schedule", "Расписание", 6], ["events", "События канд.", 6]] },
-    { title: "Подготовка", tabs: [["normatives", "Нормативы", 6], ["learning", "Материалы", 6], ["appeals", "Обращения", 6]] },
+    { title: "Подготовка", tabs: [["normatives", "Нормативы", 6], ["learning", "Материалы", 6], ["appeals", "Связь", 6]] },
     { title: "Интерфейс", tabs: [["promo", "Промо", 6], ["menu", "Меню", 6]] },
-    { title: "Система", tabs: [["logs", "Логи", 8], ["settings", "Настройки", 9]] },
   ];
+  const systemAdminGroup = { title: "Система", tabs: [["logs", "Логи", 8], ["settings", "Настройки", 9]] as Array<[AdminTab, string, number]> };
+  const adminGroups = level >= 8 ? [systemAdminGroup, ...contentAdminGroups] : contentAdminGroups;
   const adminTabs = adminGroups.flatMap((group) => group.tabs);
   const visibleTabs = adminTabs.filter(([, , minLevel]) => level >= minLevel);
   const visibleAdminGroups = adminGroups
@@ -3613,11 +3944,13 @@ function AdminView({
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
         <h2>Админка</h2>
-        <span>{level >= 8 ? "полный доступ" : level >= 6 ? "командирский доступ" : "доступ командира отделения"}</span>
+        <span className={styles.adminAccessPill} data-tone={level >= 8 ? "admin" : level >= 6 ? "commander" : "squad"}>
+          {level >= 8 ? "ADMIN · системные разделы" : level >= 6 ? "командирский доступ" : "доступ отделения"}
+        </span>
       </div>
       <div className={styles.adminTabGroups}>
         {visibleAdminGroups.map((group) => (
-          <section key={group.title}>
+          <section key={group.title} data-system={group.title === "Система" ? "true" : "false"}>
             <strong>{group.title}</strong>
             <div>
               {group.tabs.map(([value, label]) => (
@@ -3625,6 +3958,7 @@ function AdminView({
                   key={value}
                   type="button"
                   data-active={tab === value}
+                  data-privileged={value === "logs" || value === "settings" ? "true" : "false"}
                   onClick={() => { setTab(value); setEditingPromo(null); }}
                 >
                   {label}
@@ -3707,91 +4041,103 @@ function AdminView({
           {/* ── Users ── */}
           {tab === "users" && (
             <>
-              <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+              <div className={styles.adminToolbar}>
                 <input
-                  style={{ flex: 1 }}
-                  placeholder="Поиск по имени или @username"
+                  placeholder="Имя или @username"
                   value={userSearch}
                   onChange={(e) => setUserSearch(e.target.value)}
                 />
-                <button
-                  type="button"
-                  className={styles.iconAction}
-                  disabled={exportCSV.isPending}
-                  onClick={() => exportCSV.mutate({ search: userSearch || undefined })}
-                  title="Выгрузить CSV"
-                >
-                  {exportCSV.isPending ? "..." : "↓ CSV"}
-                </button>
-                <button
-                  type="button"
-                  className={styles.iconAction}
-                  disabled={exportXLSX.isPending}
-                  onClick={() => exportXLSX.mutate({ search: userSearch || undefined })}
-                  title="Выгрузить Excel"
-                >
-                  {exportXLSX.isPending ? "..." : "↓ Excel"}
-                </button>
+                <details className={styles.exportDropdown}>
+                  <summary title="Скачать список">
+                    <AppIcon code="download" />
+                    <span>Скачать</span>
+                  </summary>
+                  <div>
+                    <button
+                      type="button"
+                      disabled={exportCSV.isPending}
+                      onClick={() => exportCSV.mutate({ search: userSearch || undefined })}
+                    >
+                      {exportCSV.isPending ? "Готовим..." : "CSV"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={exportXLSX.isPending}
+                      onClick={() => exportXLSX.mutate({ search: userSearch || undefined })}
+                    >
+                      {exportXLSX.isPending ? "Готовим..." : "Excel"}
+                    </button>
+                  </div>
+                </details>
               </div>
               {filteredUsers.length === 0 ? <Empty text="Пользователей нет" /> : filteredUsers.map((user) => (
-                <div className={styles.memberRow} key={user.id ?? user.telegram_id}>
+                <div className={`${styles.memberRow} ${styles.adminUserRow}`} key={user.id ?? user.telegram_id}>
                   <div>
                     <strong>{user.full_name}</strong>
                     <span>{squadMap.get(user.squad_id ?? -1) ?? "без отделения"}{user.username ? ` · @${user.username}` : ""} · {user.status_code}</span>
                   </div>
-                  <div className={styles.memberControls}>
-                    <select
-                      value={user.role_code}
-                      disabled={user.id === null || updateUser.isPending}
-                      onChange={(event) => {
-                        if (user.id === null) return;
-                        const nextRole = event.target.value;
-                        if (["SQUAD_COMMANDER", "DEPUTY_SQUAD_COMMANDER"].includes(nextRole)) {
-                          if (!user.squad_id) {
-                            toast("Сначала выберите отделение", "warning");
-                            event.target.value = user.role_code;
-                            return;
-                          }
-                          const squad = squads.find((s) => s.id === user.squad_id);
-                          const existingId = nextRole === "SQUAD_COMMANDER" ? squad?.commander_user_id : squad?.deputy_user_id;
-                          if (existingId && existingId !== user.id) {
-                            const label = nextRole === "SQUAD_COMMANDER" ? "командира" : "заместителя";
-                            if (!window.confirm(`В отделении уже есть ${label}. Заменить назначение?`)) {
+                  <div className={styles.adminControls}>
+                    <label className={styles.adminControlRow}>
+                      <span>Роль</span>
+                      <select
+                        value={user.role_code}
+                        disabled={user.id === null || updateUser.isPending}
+                        onChange={(event) => {
+                          if (user.id === null) return;
+                          const nextRole = event.target.value;
+                          if (["SQUAD_COMMANDER", "DEPUTY_SQUAD_COMMANDER"].includes(nextRole)) {
+                            if (!user.squad_id) {
+                              toast("Сначала выберите отделение", "warning");
                               event.target.value = user.role_code;
                               return;
                             }
+                            const squad = squads.find((s) => s.id === user.squad_id);
+                            const existingId = nextRole === "SQUAD_COMMANDER" ? squad?.commander_user_id : squad?.deputy_user_id;
+                            if (existingId && existingId !== user.id) {
+                              const label = nextRole === "SQUAD_COMMANDER" ? "командира" : "заместителя";
+                              if (!window.confirm(`В отделении уже есть ${label}. Заменить назначение?`)) {
+                                event.target.value = user.role_code;
+                                return;
+                              }
+                            }
                           }
-                        }
-                        updateUser.mutate({ userId: user.id, role_code: nextRole });
-                      }}
-                    >
-                      {roleOptions.map((role) => (
-                        <option key={role} value={role}>{roleLabels[role]}</option>
-                      ))}
-                    </select>
-                    <select
-                      value={user.squad_id ?? ""}
-                      disabled={user.id === null || updateUser.isPending}
-                      onChange={(event) => user.id !== null && updateUser.mutate({ userId: user.id, squad_id: event.target.value ? Number(event.target.value) : null })}
-                    >
-                      <option value="">Без отделения</option>
-                      {squads.map((squad) => (
-                        <option key={squad.id} value={squad.id}>{squad.name}</option>
-                      ))}
-                    </select>
-                    <select
-                      value={user.status_code}
-                      disabled={user.id === null || updateUser.isPending}
-                      onChange={(event) => user.id !== null && updateUser.mutate({ userId: user.id, status_code: event.target.value })}
-                    >
-                      {statusOptions.map((s) => (
-                        <option key={s} value={s}>{s}</option>
-                      ))}
-                    </select>
+                          updateUser.mutate({ userId: user.id, role_code: nextRole });
+                        }}
+                      >
+                        {roleOptions.map((role) => (
+                          <option key={role} value={role}>{roleLabels[role]}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className={styles.adminControlRow}>
+                      <span>Отделение</span>
+                      <select
+                        value={user.squad_id ?? ""}
+                        disabled={user.id === null || updateUser.isPending}
+                        onChange={(event) => user.id !== null && updateUser.mutate({ userId: user.id, squad_id: event.target.value ? Number(event.target.value) : null })}
+                      >
+                        <option value="">Без отделения</option>
+                        {squads.map((squad) => (
+                          <option key={squad.id} value={squad.id}>{squad.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className={styles.adminControlRow}>
+                      <span>Статус</span>
+                      <select
+                        value={user.status_code}
+                        disabled={user.id === null || updateUser.isPending}
+                        onChange={(event) => user.id !== null && updateUser.mutate({ userId: user.id, status_code: event.target.value })}
+                      >
+                        {statusOptions.map((s) => (
+                          <option key={s} value={s}>{s}</option>
+                        ))}
+                      </select>
+                    </label>
                     {level >= 8 && user.id !== null && user.status_code !== "ARCHIVED" && (
                       <button
                         type="button"
-                        className={styles.btnNotComing}
+                        className={styles.adminDangerButton}
                         disabled={deactivateUser.isPending}
                         onClick={() => {
                           if (!window.confirm(`Деактивировать ${user.full_name}?`)) return;
@@ -3882,7 +4228,7 @@ function AdminView({
                 {scheduleTemplates.data?.length === 0 && <Empty text="Шаблонов пока нет" />}
                 {scheduleTemplates.data?.map((template: ScheduleTemplate) => (
                   <div className={styles.row} key={template.id}>
-                    <img src={iconPath("schedule")} alt="" />
+                    <AppIcon code="schedule" />
                     <div>
                       <strong>
                         {template.title}
@@ -3949,7 +4295,7 @@ function AdminView({
               {adminSchedule.data?.length === 0 && <Empty text="Событий нет" />}
               {adminSchedule.data?.map((ev) => (
                 <div className={styles.row} key={ev.id}>
-                  <img src={iconPath("schedule")} alt="" />
+                  <AppIcon code="schedule" />
                   <div>
                     <strong>
                       {ev.title}
@@ -4056,7 +4402,7 @@ function AdminView({
 
             const renderApp = (item: JoinApplication, stage: "new" | "invited" | "closed") => (
               <article className={styles.row} key={item.id}>
-                <img src={iconPath("my_squad")} alt="" />
+                <AppIcon code="my_squad" />
                 <div>
                   <strong>{item.full_name}</strong>
                   <span>
@@ -4165,7 +4511,7 @@ function AdminView({
             (adminAppeals.data ?? []).length === 0 ? <Empty text="Обращений нет" /> :
             (adminAppeals.data ?? []).map((item) => (
               <article className={styles.row} key={item.id}>
-                <img src={iconPath("appeal")} alt="" />
+                <AppIcon code="appeal" />
                 <div>
                   <strong>{item.subject}</strong>
                   <span>
@@ -4311,7 +4657,7 @@ function AdminView({
               {(adminJoinEvents.data ?? []).length === 0 && !adminJoinEvents.isLoading && <Empty text="Событий нет" />}
               {(adminJoinEvents.data ?? []).map((ev) => (
                 <div className={styles.row} key={ev.id}>
-                  <img src={iconPath("schedule")} alt="" />
+                  <AppIcon code="schedule" />
                   <div>
                     <strong>{ev.title}</strong>
                     <span>{formatDate(ev.start_datetime)}{ev.place ? ` · ${ev.place}` : ""} · {ev.is_active ? "активно" : "неактивно"}</span>
@@ -4382,7 +4728,7 @@ function AdminView({
               {(adminNorms.data ?? []).length === 0 && !adminNorms.isLoading && <Empty text="Нормативов нет" />}
               {(adminNorms.data ?? []).map((norm) => (
                 <div className={styles.row} key={norm.id}>
-                  <img src={iconPath("norms")} alt="" />
+                  <AppIcon code="norms" />
                   <div>
                     <strong>{norm.title}</strong>
                     <span>{norm.target_audience}{norm.squad_id ? ` · ${squadMap.get(norm.squad_id) ?? "#" + norm.squad_id}` : ""} · {norm.is_active ? "активен" : "архив"}</span>
@@ -4536,7 +4882,7 @@ function AdminView({
               {adminCourses.isLoading && <Empty text="Загрузка курсов..." />}
               {(adminCourses.data ?? []).filter((course) => learningScope === "candidates" ? course.audience_code === "CANDIDATE" : course.audience_code !== "CANDIDATE").map((course) => (
                 <div className={styles.row} key={course.id}>
-                  <img src={iconPath("learning")} alt="" />
+                  <AppIcon code="learning" />
                   <div>
                     <strong>{course.title}</strong>
                     <span>Курс · {course.audience_code} · {course.is_active ? "активен" : "скрыт"}</span>
@@ -4556,7 +4902,7 @@ function AdminView({
               {adminMaterials.isLoading && <Empty text="Загрузка материалов..." />}
               {(adminMaterials.data ?? []).filter((mat) => learningScope === "candidates" ? mat.audience_code === "CANDIDATE" : mat.audience_code !== "CANDIDATE").map((mat) => (
                 <div className={styles.row} key={mat.id}>
-                  <img src={iconPath("learning")} alt="" />
+                  <AppIcon code="learning" />
                   <div>
                     <strong>{mat.title}</strong>
                     <span>{mat.type_code} · {mat.audience_code} · {mat.is_active ? "активен" : "скрыт"}</span>
@@ -4598,7 +4944,7 @@ function AdminView({
           {/* ── Menu ── */}
           {tab === "menu" && (menu.length === 0 ? <Empty text="Карточек меню нет" /> : menu.map((item) => (
             <article className={styles.row} key={item.id ?? item.code}>
-              <img src={iconPath(item.icon_code ?? item.code)} alt="" />
+              <AppIcon code={item.icon_code ?? item.code} />
               <div>
                 <strong>{item.title}</strong>
                 <span>{item.is_required ? "обязательная" : "обычная"} · {item.is_active ? "активна" : "скрыта"} · порядок: {item.sort_order}</span>
@@ -4654,7 +5000,7 @@ function AdminView({
               {auditFiltered.isLoading && <Empty text="Загрузка..." />}
               {(auditFiltered.data ?? audit).length === 0 ? <Empty text="Аудит-лог пуст" /> : (auditFiltered.data ?? audit).map((item) => (
                 <article className={styles.row} key={item.id}>
-                  <img src={iconPath("admin")} alt="" />
+                  <AppIcon code="admin" />
                   <div>
                     <strong>{item.action_code}</strong>
                     <span>
@@ -4975,7 +5321,7 @@ function SubmissionRow({
   };
   return (
     <article className={styles.row}>
-      <img src={iconPath("norms")} alt="" />
+      <AppIcon code="norms" />
       <div>
         <strong>{(item as unknown as Record<string, unknown>).user_full_name ? String((item as unknown as Record<string, unknown>).user_full_name) : `Сдача #${item.id}`}</strong>
         <span style={{ color: statusColors[item.status_code] ?? "#65708a" }}>

@@ -54,6 +54,14 @@ class UserUpdate(BaseModel):
     phone: str | None = None
 
 
+class UserSelfUpdate(BaseModel):
+    full_name: str | None = Field(default=None, min_length=2, max_length=255)
+    phone: str | None = None
+    city: str | None = None
+    education_place: str | None = None
+    birth_date: date | None = None
+
+
 class SquadRead(ORMModel):
     id: int
     name: str

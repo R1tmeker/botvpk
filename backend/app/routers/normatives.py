@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete, select
@@ -19,13 +19,9 @@ from ..schemas.core import (
     NormativeSubmitRequest,
     NormativeUpdate,
 )
-from ..utils.audit import model_snapshot, record_audit
+from ..utils.audit import model_snapshot, record_audit, utcnow
 
 router = APIRouter(prefix="/normatives", tags=["normatives"])
-
-
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def require_profile(current_user: CurrentUser) -> int:
@@ -42,6 +38,8 @@ def normative_visible(normative: Normative, current_user: CurrentUser) -> bool:
     if normative.squad_id is not None and normative.squad_id != current_user.squad_id:
         return False
     if normative.target_audience in {"ALL", current_user.role_code}:
+        return True
+    if current_user.role_level < RoleLevel.CANDIDATE and normative.target_audience == "CANDIDATE":
         return True
     if normative.target_audience == "SQUAD" and normative.squad_id == current_user.squad_id:
         return True
@@ -82,7 +80,7 @@ async def attach_submission_files(session: AsyncSession, submissions: list[Norma
 @router.get("", response_model=list[NormativeRead])
 async def list_normatives(
     active_only: bool = True,
-    current_user: CurrentUser = Depends(require_role(RoleLevel.CANDIDATE)),
+    current_user: CurrentUser = Depends(require_role(RoleLevel.PUBLIC_USER)),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[Normative]:
     statement = select(Normative).order_by(Normative.deadline_at.nullslast(), Normative.created_at.desc())
@@ -192,7 +190,7 @@ async def review_submission(
 @router.get("/{normative_id}", response_model=NormativeRead)
 async def normative_detail(
     normative_id: int,
-    current_user: CurrentUser = Depends(require_role(RoleLevel.CANDIDATE)),
+    current_user: CurrentUser = Depends(require_role(RoleLevel.PUBLIC_USER)),
     session: AsyncSession = Depends(get_db_session),
 ) -> Normative:
     normative = await get_normative_or_404(session, normative_id)
@@ -244,10 +242,13 @@ async def submit_normative(
     )
     submitter = await session.get(User, user_id)
     submitter_name = submitter.full_name if submitter else f"Пользователь #{user_id}"
-    all_active = (await session.scalars(
-        select(User).where(User.status_code == "ACTIVE")
-    )).all()
-    commanders = [u for u in all_active if ROLE_LEVELS.get(u.role_code, 0) >= RoleLevel.DEPUTY_SQUAD_COMMANDER]
+    commander_role_codes = [rc for rc, lvl in ROLE_LEVELS.items() if lvl >= RoleLevel.DEPUTY_SQUAD_COMMANDER]
+    commanders = list((await session.scalars(
+        select(User).where(
+            User.status_code == "ACTIVE",
+            User.role_code.in_(commander_role_codes),
+        )
+    )).all())
     for commander in commanders:
         session.add(
             Notification(

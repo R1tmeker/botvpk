@@ -168,6 +168,8 @@ export type Notification = {
   title: string;
   body: string | null;
   type_code: string;
+  entity_name?: string | null;
+  entity_id?: number | null;
   is_read: boolean;
   is_pinned: boolean;
   created_at: string;
@@ -194,8 +196,15 @@ export type Announcement = {
   title: string;
   body: string;
   importance_code: string;
+  target_type: string;
+  target_squad_id: number | null;
+  target_role_code: string | null;
   file_id: number | null;
+  send_to_tg: boolean;
+  send_to_app: boolean;
+  require_read_confirm: boolean;
   status_code: string;
+  sent_at: string | null;
   created_at: string;
 };
 

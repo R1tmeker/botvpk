@@ -125,7 +125,11 @@ export function useSchedule(enabled: boolean) {
   return useQuery({
     queryKey: ["schedule"],
     queryFn: async () => {
-      const { data } = await api.get<ScheduleEvent[]>("/schedule");
+      const fromDt = new Date();
+      fromDt.setHours(0, 0, 0, 0);
+      const { data } = await api.get<ScheduleEvent[]>("/schedule", {
+        params: { from_dt: fromDt.toISOString() },
+      });
       return data;
     },
     enabled,
@@ -486,6 +490,7 @@ export function useCreateAnnouncement() {
       body: string;
       target_type: string;
       target_squad_id?: number | null;
+      target_role_code?: string | null;
       file_id?: number | null;
       status_code: string;
       send_to_tg: boolean;

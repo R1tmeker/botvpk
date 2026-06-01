@@ -15,6 +15,7 @@ from ..models import File as StoredFile
 from ..models import JoinApplication, MenuCard, User
 from ..roles import RoleCode, RoleLevel, role_level
 from ..schemas.auth import AuthResponse, MenuCardResponse, TelegramAuthRequest, UserProfile
+from ..schemas.core import UserSelfUpdate
 from ..utils.audit import record_audit
 from ..utils.jwt import create_access_token
 from ..utils.telegram_auth import TelegramInitDataError, validate_init_data
@@ -107,16 +108,15 @@ async def get_me(current_user: CurrentUser = Depends(get_current_user)) -> UserP
 
 @router.patch("/me", response_model=UserProfile)
 async def update_me(
-    payload: dict,
+    payload: UserSelfUpdate,
     current_user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> UserProfile:
     if current_user.user is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User profile is required.")
-    allowed = {"full_name", "phone", "city", "education_place", "birth_date"}
-    for field, value in payload.items():
-        if field in allowed and value is not None:
-            setattr(current_user.user, field, value or None)
+    updates = payload.model_dump(exclude_unset=True)
+    for field, value in updates.items():
+        setattr(current_user.user, field, value or None)
     current_user.user.updated_at = datetime.now(timezone.utc)
     await session.commit()
     await session.refresh(current_user.user)
@@ -142,7 +142,7 @@ async def upload_my_avatar(
     upload_dir = settings.uploads_dir / "avatars" / str(now.year) / f"{now.month:02d}"
     upload_dir.mkdir(parents=True, exist_ok=True)
     suffix = Path(upload.filename or "").suffix.lower()[:20] or ".jpg"
-    target = upload_dir / f"{uuid4().hex}{suffix}"
+    target = (upload_dir / f"{uuid4().hex}{suffix}").resolve()
     target.write_bytes(content)
 
     stored = StoredFile(

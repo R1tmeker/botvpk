@@ -18,6 +18,7 @@ from ..models import Announcement, Appeal, LearningMaterial, Normative, Normativ
 from ..models import File as StoredFile
 from ..models import User
 from ..roles import RoleLevel
+from .normatives import normative_visible as _normative_visible
 from ..schemas.core import FileRead
 from ..utils.audit import record_audit
 
@@ -45,6 +46,7 @@ def is_allowed_mime(mime_type: str | None) -> bool:
 async def download_avatar(
     file_id: int,
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ):
     stored = await session.get(StoredFile, file_id)
     if stored is None or not stored.file_path or not (stored.mime_type or "").startswith("image/"):
@@ -53,9 +55,20 @@ async def download_avatar(
     if owner_id is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Avatar not found.")
     path = Path(stored.file_path)
+    if not path.is_absolute() and not path.exists():
+        uploads_root = settings.uploads_dir.resolve()
+        candidates = [path.resolve(), uploads_root / path]
+        if path.parts and path.parts[0] == settings.uploads_dir.name:
+            candidates.append(uploads_root / Path(*path.parts[1:]))
+        path = next((candidate for candidate in candidates if candidate.exists()), path)
     if not path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Avatar content not found.")
-    return FileResponse(path, media_type=stored.mime_type, filename=stored.original_name or path.name)
+    return FileResponse(
+        path,
+        media_type=stored.mime_type,
+        filename=stored.original_name or path.name,
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
 
 
 @router.post("/upload", response_model=FileRead, status_code=status.HTTP_201_CREATED)
@@ -108,21 +121,6 @@ def _learning_audience_visible(audience_code: str, current_user: CurrentUser) ->
         return current_user.role_level >= RoleLevel.DEPUTY_SQUAD_COMMANDER
     return False
 
-
-def _normative_visible(normative: Normative, current_user: CurrentUser) -> bool:
-    if current_user.role_level >= RoleLevel.DEPUTY_PLATOON_COMMANDER:
-        return True
-    if not normative.is_active:
-        return False
-    if normative.squad_id is not None and normative.squad_id != current_user.squad_id:
-        return False
-    if normative.target_audience in {"ALL", current_user.role_code}:
-        return True
-    if normative.target_audience == "SQUAD" and normative.squad_id == current_user.squad_id:
-        return True
-    if normative.target_audience == "COMMANDERS":
-        return current_user.role_level >= RoleLevel.DEPUTY_SQUAD_COMMANDER
-    return normative.target_audience == "PARTICIPANTS" and current_user.role_level >= RoleLevel.PARTICIPANT
 
 
 def _announcement_visible(item: Announcement, current_user: CurrentUser) -> bool:

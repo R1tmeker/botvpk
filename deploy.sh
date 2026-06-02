@@ -310,6 +310,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=/usr/bin/cloudflared tunnel --url http://localhost:80 --no-autoupdate
+ExecStartPost=/bin/bash -lc 'if [[ -x /opt/botvpk/scripts/notify-miniapp-url.sh ]]; then APP_DIR=/opt/botvpk /opt/botvpk/scripts/notify-miniapp-url.sh || true; fi'
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
@@ -339,6 +340,9 @@ if [[ -n "$FINAL_URL" ]]; then
     sed -i "s|MINI_APP_URL=.*|MINI_APP_URL=${FINAL_URL}|" "$APP_DIR/.env"
     # Перезапускаем backend чтобы подхватил новый URL
     docker compose restart backend bot 2>/dev/null || true
+    if [[ -x "$APP_DIR/scripts/notify-miniapp-url.sh" ]]; then
+        APP_DIR="$APP_DIR" "$APP_DIR/scripts/notify-miniapp-url.sh" "$FINAL_URL" || warn "Не удалось отправить Mini App URL в Telegram."
+    fi
     log "Туннель запущен: $FINAL_URL"
 fi
 

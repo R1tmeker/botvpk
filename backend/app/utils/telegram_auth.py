@@ -5,6 +5,7 @@ import time
 from dataclasses import dataclass
 from urllib.parse import parse_qsl
 
+from pydantic import ValidationError
 from aiogram.utils.web_app import safe_parse_webapp_init_data
 
 
@@ -35,7 +36,7 @@ class TelegramInitData:
 def validate_init_data(init_data: str, bot_token: str, max_age_seconds: int = 86400) -> TelegramInitData:
     try:
         data = safe_parse_webapp_init_data(token=bot_token, init_data=init_data)
-    except ValueError as exc:
+    except (ValueError, ValidationError, AttributeError, TypeError) as exc:
         raise TelegramInitDataError(str(exc)) from exc
 
     if max_age_seconds > 0 and time.time() - data.auth_date.timestamp() > max_age_seconds:

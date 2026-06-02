@@ -39,4 +39,9 @@ else
   echo "[miniapp] MINI_APP_URL not found in $ENV_FILE"
 fi
 
+if [[ -x "$APP_DIR/scripts/notify-miniapp-url.sh" ]]; then
+  echo "[miniapp] Refreshing Telegram menu and fresh Mini App button..."
+  "$APP_DIR/scripts/notify-miniapp-url.sh" --force || echo "Warning: failed to refresh Telegram Mini App URL" >&2
+fi
+
 echo "[miniapp] Done. Close and reopen Telegram Mini App after this."

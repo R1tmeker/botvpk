@@ -1,18 +1,15 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
-
-import logging
 
 from fastapi import APIRouter, Depends, File as UploadParam, HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings, get_settings
-
-logger = logging.getLogger(__name__)
 from ..database import get_db_session
 from ..dependencies.auth import CurrentUser, get_current_user
 from ..models import File as StoredFile
@@ -23,6 +20,8 @@ from ..schemas.core import UserSelfUpdate
 from ..utils.audit import record_audit
 from ..utils.jwt import create_access_token
 from ..utils.telegram_auth import TelegramInitDataError, validate_init_data
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["auth"])
 
@@ -42,7 +41,11 @@ async def auth_telegram(
             max_age_seconds=settings.telegram_init_data_max_age_seconds,
         )
     except TelegramInitDataError as exc:
-        print(f"[AUTH FAIL] {exc} | token={settings.bot_token[:10]}... | init_data_len={len(payload.init_data)}", flush=True)
+        logger.warning(
+            "Telegram auth failed: reason=%s init_data_len=%s",
+            exc,
+            len(payload.init_data),
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
     user = await session.scalar(select(User).where(User.telegram_id == init_data.user.telegram_id))

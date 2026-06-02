@@ -65,9 +65,12 @@ def validate_init_data(init_data: str, bot_token: str, max_age_seconds: int = 86
         computed_hash = hmac.new(secret_key, data_check_string.encode("utf-8"), hashlib.sha256).hexdigest()
 
         if not hmac.compare_digest(computed_hash, received_hash):
-            print(f"[HASH DEBUG] computed={computed_hash[:16]} received={received_hash[:16]} token_len={len(bot_token)}", flush=True)
-            print(f"[HASH DEBUG] keys={sorted(params.keys())} dcs_len={len(data_check_string)}", flush=True)
-            print(f"[HASH DEBUG] raw_init_data_start={init_data[:120]!r}", flush=True)
+            logger.warning(
+                "Telegram initData hash mismatch: keys=%s init_data_len=%s data_check_len=%s",
+                sorted(params.keys()),
+                len(init_data),
+                len(data_check_string),
+            )
             raise TelegramInitDataError("Hash mismatch — initData is invalid or wrong BOT_TOKEN.")
 
         # Validate auth_date age

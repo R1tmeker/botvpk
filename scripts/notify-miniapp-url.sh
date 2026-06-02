@@ -135,17 +135,22 @@ if command -v docker >/dev/null 2>&1 && [[ -f "$COMPOSE_FILE" ]]; then
     || echo "Warning: failed to restart bot container" >&2
 fi
 
-# Notify admin
+# Notify admin with a fresh WebApp button. Old Telegram reply keyboards keep the
+# URL that was embedded when the message was sent, so this button avoids stale URLs.
 MESSAGE="Mini App URL обновлён автоматически.
 
 ${CURRENT_URL}
 
-.env и кнопка бота обновлены."
+.env и кнопка бота обновлены.
+
+Если старая кнопка открывает прошлый дизайн, нажми кнопку ниже или отправь /start."
 
 curl -fsS -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
   -d "chat_id=${ADMIN_ID}" \
   -d "disable_web_page_preview=true" \
-  --data-urlencode "text=${MESSAGE}" >/dev/null
+  --data-urlencode "text=${MESSAGE}" \
+  --data-urlencode "reply_markup={\"inline_keyboard\":[[{\"text\":\"Открыть Mini App\",\"web_app\":{\"url\":\"${CURRENT_URL}\"}}]]}" \
+  >/dev/null
 
 printf '%s' "$CURRENT_URL" > "$STATE_FILE"
 echo "Done. Mini App URL: $CURRENT_URL"

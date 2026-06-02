@@ -251,7 +251,16 @@ async def tunnel_url(message: Message) -> None:
         lines.append(f"\nВ .env сейчас другой URL:\n{env_url}")
     elif env_url:
         lines.append("\nСовпадает с MINI_APP_URL в .env")
-    await message.answer("\n".join(lines), parse_mode=None)
+    reply_markup = (
+        InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="Открыть Mini App", web_app=WebAppInfo(url=url))]
+            ]
+        )
+        if url
+        else mini_app_keyboard()
+    )
+    await message.answer("\n".join(lines), reply_markup=reply_markup, parse_mode=None)
 
 
 @router.message(Command("join"))

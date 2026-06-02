@@ -439,10 +439,17 @@ export function useRespondCandidateEvent() {
 }
 
 export function useReadNotification() {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (notificationId: number) => {
-      const { data } = await api.patch(`/notifications/${notificationId}/read`);
+      const { data } = await api.patch<Notification>(`/notifications/${notificationId}/read`);
       return data;
+    },
+    onSuccess: (updated) => {
+      queryClient.setQueryData<Notification[]>(["notifications"], (items) =>
+        items?.map((item) => item.id === updated.id ? updated : item) ?? items,
+      );
+      queryClient.invalidateQueries({ queryKey: ["notifications"] });
     },
   });
 }

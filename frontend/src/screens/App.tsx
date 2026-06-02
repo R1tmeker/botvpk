@@ -267,6 +267,8 @@ const fallbackProfile: UserProfile = {
   status_code: "ACTIVE",
   birth_date: null,
   phone: null,
+  city: null,
+  education_place: null,
 };
 
 const roleLabels: Record<RoleCode, string> = {
@@ -742,6 +744,7 @@ export function App({ webApp }: Props) {
     return entity.includes("appeal") || type.includes("appeal");
   }).length ?? 0;
   const visibleCandidateEvents = joinEvents.data?.length ? joinEvents.data : publicEvents.data ?? [];
+  const showDashboardChrome = activeView === "dashboard";
 
   const openView = (view: string) => {
     const next = normalizeView(view);
@@ -825,50 +828,54 @@ export function App({ webApp }: Props) {
         </button>
       </header>
 
-      <StatusCarousel
-        profile={profile}
-        level={level}
-        unreadCount={unreadCount}
-        promo={promo.data ?? []}
-        navigate={openView}
-      />
+      {showDashboardChrome && (
+        <>
+          <StatusCarousel
+            profile={profile}
+            level={level}
+            unreadCount={unreadCount}
+            promo={promo.data ?? []}
+            navigate={openView}
+          />
 
-      <section className={styles.menuGrid} aria-label="Разделы">
-        {gridCards.map((card) => (
-          <button
-            key={`${card.code}-${card.title}`}
-            className={styles.menuCard}
-            data-code={card.code}
-            type="button"
-            onClick={() => openView(card.code)}
-          >
-            <AppIcon code={card.icon_code ?? card.code} />
-            <span>{card.title}</span>
-            <small>{card.description}</small>
-          </button>
-        ))}
-      </section>
-      {helpCard && (
-        <button
-          className={styles.helpStrip}
-          type="button"
-          onClick={() => openView(helpCard.code)}
-          data-alert={appealNoticeCount > 0}
-        >
-          <span className={styles.helpStripIcon}>
-            <AppIcon code="appeals" />
-          </span>
-          <span className={styles.helpStripText}>
-            <strong>Нужна помощь?</strong>
-            <small>Связь с командованием</small>
-          </span>
-          <span className={styles.helpStripBadge}>
-            {appealNoticeCount > 0 ? "Есть ответ" : "Написать"}
-          </span>
-        </button>
+          <section className={styles.menuGrid} aria-label="Разделы">
+            {gridCards.map((card) => (
+              <button
+                key={`${card.code}-${card.title}`}
+                className={styles.menuCard}
+                data-code={card.code}
+                type="button"
+                onClick={() => openView(card.code)}
+              >
+                <AppIcon code={card.icon_code ?? card.code} />
+                <span>{card.title}</span>
+                <small>{card.description}</small>
+              </button>
+            ))}
+          </section>
+          {helpCard && (
+            <button
+              className={styles.helpStrip}
+              type="button"
+              onClick={() => openView(helpCard.code)}
+              data-alert={appealNoticeCount > 0}
+            >
+              <span className={styles.helpStripIcon}>
+                <AppIcon code="appeals" />
+              </span>
+              <span className={styles.helpStripText}>
+                <strong>Нужна помощь?</strong>
+                <small>Связь с командованием</small>
+              </span>
+              <span className={styles.helpStripBadge}>
+                {appealNoticeCount > 0 ? "Есть ответ" : "Написать"}
+              </span>
+            </button>
+          )}
+        </>
       )}
 
-      <section className={styles.workspace}>
+      <section className={styles.workspace} data-compact={!showDashboardChrome}>
         {auth.isPending && (
           <div className={styles.panel}>
             <SkeletonCard />
@@ -927,7 +934,7 @@ export function App({ webApp }: Props) {
                   {
                     onSuccess: () => {
                       hapticSuccess();
-                      const labels: Record<string, string> = { COMING: "Ответ «Приду» сохранён ✅", NOT_COMING: "Ответ «Не приду» сохранён", MAYBE: "Ответ «Уточню» сохранён ⏳" };
+                      const labels: Record<string, string> = { COMING: "Ответ «Приду» сохранён", NOT_COMING: "Ответ «Не приду» сохранён", MAYBE: "Ответ «Уточню» сохранён" };
                       toast(labels[responseCode] ?? "Ответ сохранён", "success");
                     },
                     onError: () => { hapticError(); toast("Не удалось сохранить ответ", "error"); },
@@ -943,6 +950,7 @@ export function App({ webApp }: Props) {
             <CandidateEventsView
               events={visibleCandidateEvents}
               readonly={profile.role_code !== "CANDIDATE"}
+              framed
               onApplyClick={() => openView("dashboard")}
               onRespond={(eventId, responseCode) =>
                 respondCandidateEvent.mutate(
@@ -1002,7 +1010,7 @@ export function App({ webApp }: Props) {
                 {
                   onSuccess: () => {
                     hapticSuccess();
-                    const msgs: Record<string, string> = { ACCEPTED: "Сдача принята ✅", REJECTED: "Сдача отклонена", NEEDS_REDO: "Отправлено на доработку" };
+                    const msgs: Record<string, string> = { ACCEPTED: "Сдача принята", REJECTED: "Сдача отклонена", NEEDS_REDO: "Отправлено на доработку" };
                     toast(msgs[statusCode] ?? "Статус обновлён", statusCode === "ACCEPTED" ? "success" : "info");
                   },
                 },
@@ -1050,7 +1058,7 @@ export function App({ webApp }: Props) {
             currentUserId={profile.id}
             onCreate={(payload) =>
               createAppeal.mutate(payload, {
-                onSuccess: () => { hapticSuccess(); toast("Обращение отправлено ✅", "success"); },
+                onSuccess: () => { hapticSuccess(); toast("Обращение отправлено", "success"); },
                 onError: () => { hapticError(); toast("Не удалось отправить обращение", "error"); },
               })
             }
@@ -1691,7 +1699,7 @@ const STATUS_FLOW_LABELS: Record<string, { label: string; color: string }> = {
   INVITED_MEETING:     { label: "Приглашён на встречу", color: "#9b59b6" },
   INVITED_NORMATIVES:  { label: "Приглашён на нормативы", color: "#e67e22" },
   AWAITING_DECISION:   { label: "Ожидает решения", color: "#3498db" },
-  ACCEPTED:            { label: "Принят в состав ✅", color: "#27ae60" },
+  ACCEPTED:            { label: "Принят в состав", color: "#27ae60" },
   REJECTED:            { label: "Отклонён", color: "#e74c3c" },
   ARCHIVED:            { label: "Архив", color: "#95a5a6" },
 };
@@ -1775,31 +1783,36 @@ function CandidateEventsView({
   events,
   readonly = false,
   compact = false,
+  framed = false,
   onRespond,
   onApplyClick,
 }: {
   events: CandidateEvent[];
   readonly?: boolean;
   compact?: boolean;
+  framed?: boolean;
   onRespond: (eventId: number, responseCode: string) => void;
   onApplyClick?: () => void;
 }) {
   const [selectedEvent, setSelectedEvent] = useState<CandidateEvent | null>(null);
+  const rootClassName = framed ? styles.panel : compact ? styles.compactSection : styles.subPanel;
 
   if (selectedEvent) {
     return (
-      <CandidateEventDetail
-        event={selectedEvent}
-        readonly={readonly}
-        onBack={() => setSelectedEvent(null)}
-        onRespond={onRespond}
-        onApplyClick={onApplyClick}
-      />
+      <div className={rootClassName}>
+        <CandidateEventDetail
+          event={selectedEvent}
+          readonly={readonly}
+          onBack={() => setSelectedEvent(null)}
+          onRespond={onRespond}
+          onApplyClick={onApplyClick}
+        />
+      </div>
     );
   }
 
   return (
-    <div className={compact ? styles.compactSection : styles.subPanel}>
+    <div className={rootClassName}>
       <div className={styles.panelHeader}>
         <h2>{readonly ? "Открытые мероприятия" : "Мероприятия кандидата"}</h2>
         <span>{events.length} доступно</span>
@@ -2565,7 +2578,7 @@ function NotificationsView({
               <span>{item.body ?? item.type_code} · {formatDate(item.created_at)}</span>
             </div>
             {!item.is_read && (
-              <button className={styles.iconAction} type="button" onClick={() => onRead(item.id)}>✓ Прочитано</button>
+              <button className={styles.iconAction} type="button" onClick={() => onRead(item.id)}>Прочитано</button>
             )}
           </article>
         ))}
@@ -3011,7 +3024,7 @@ function ReportsView({
               disabled={exportReport.isPending}
               onClick={() => { exportReport.mutate(); toast("Файл формируется...", "info"); }}
             >
-              {exportReport.isPending ? "Формируем..." : "⬇ Скачать CSV"}
+              {exportReport.isPending ? "Формируем..." : "Скачать CSV"}
             </button>
           </div>
         </div>
@@ -3186,14 +3199,13 @@ function LearningView({ items, courses, canTrack }: { items: LearningMaterial[];
 /* ─────────── MemberModal ─────────── */
 function MemberModal({ user, squads, onClose }: { user: UserRecord; squads: Squad[]; onClose: () => void }) {
   const squadName = squads.find((s) => s.id === user.squad_id)?.name ?? "Не назначено";
-  const prof = user as unknown as Record<string, string>;
   const rows: Array<{ label: string; value: string; copyable?: boolean; link?: string }> = [
     { label: "ФИО", value: user.full_name },
     { label: "Роль", value: roleLabels[user.role_code as RoleCode] ?? user.role_code },
     { label: "Отделение", value: squadName },
     { label: "Телефон", value: formatPhoneDisplay(user.phone), copyable: true },
-    { label: "Группа", value: prof.education_place || "—" },
-    { label: "Город", value: prof.city || "—" },
+    { label: "Группа", value: user.education_place || "—" },
+    { label: "Город", value: user.city || "—" },
     { label: "Дата рождения", value: user.birth_date ? formatDateFull(user.birth_date) : "—" },
     { label: "Telegram ID", value: String(user.telegram_id || "—"), copyable: true },
     ...(user.username ? [{ label: "Telegram", value: `@${user.username}`, link: `https://t.me/${user.username}` }] : []),
@@ -3491,15 +3503,13 @@ function ProfileView({
   const [avatarFailed, setAvatarFailed] = useState(false);
   const updateMe = useUpdateMe();
 
-  const prof = profile as unknown as Record<string, string>;
-
   const startEdit = () => {
     setEditForm({
       full_name: profile.full_name ?? "",
       phone: profile.phone ?? "",
-      city: prof.city ?? "",
-      education_place: prof.education_place ?? "",
-      birth_date: prof.birth_date ?? (profile.birth_date ?? ""),
+      city: profile.city ?? "",
+      education_place: profile.education_place ?? "",
+      birth_date: profile.birth_date ?? "",
     });
     setEditPhone(profile.phone ? formatPhoneDisplay(profile.phone) : "+7");
     setEditing(true);
@@ -3657,15 +3667,15 @@ function ProfileView({
             </div>
             <div className={styles.profileRow}>
               <dt>Группа</dt>
-              <dd>{prof.education_place || "—"}</dd>
+              <dd>{profile.education_place || "—"}</dd>
             </div>
             <div className={styles.profileRow}>
               <dt>Город</dt>
-              <dd>{prof.city || "—"}</dd>
+              <dd>{profile.city || "—"}</dd>
             </div>
             <div className={styles.profileRow}>
               <dt>Дата рождения</dt>
-              <dd>{profile.birth_date ? formatDateFull(profile.birth_date) : (prof.birth_date ? formatDateFull(prof.birth_date) : "—")}</dd>
+              <dd>{profile.birth_date ? formatDateFull(profile.birth_date) : "—"}</dd>
             </div>
             <div
               className={styles.profileRow}
@@ -3993,12 +4003,12 @@ function AdminView({
                 };
                 if (editingPromo === "new") {
                   createPromo.mutate(payload, {
-                    onSuccess: () => { toast("Промо-блок создан ✅", "success"); setEditingPromo(null); },
+                    onSuccess: () => { toast("Промо-блок создан", "success"); setEditingPromo(null); },
                     onError: () => toast("Ошибка создания", "error"),
                   });
                 } else {
                   updatePromo.mutate({ id: editingPromo!.id, ...payload }, {
-                    onSuccess: () => { toast("Промо-блок сохранён ✅", "success"); setEditingPromo(null); },
+                    onSuccess: () => { toast("Промо-блок сохранён", "success"); setEditingPromo(null); },
                     onError: () => toast("Ошибка сохранения", "error"),
                   });
                 }
@@ -5119,7 +5129,7 @@ function AdminView({
                           changed[k] = v || null;
                         }
                         updateSettings.mutate(changed, {
-                          onSuccess: () => { toast("Настройки сохранены ✅", "success"); setSettingsDraft({}); },
+                          onSuccess: () => { toast("Настройки сохранены", "success"); setSettingsDraft({}); },
                           onError: () => toast("Ошибка сохранения", "error"),
                         });
                       }}
@@ -5185,7 +5195,10 @@ function DashboardCustomizer({
 
   return (
     <details className={styles.customizer}>
-      <summary>Настроить главную</summary>
+      <summary>
+        <AppIcon code="admin" />
+        <span>Настроить главную</span>
+      </summary>
       <div className={styles.dragList}>
         {draft.map((item, index) => (
           <div key={item.block_code}>

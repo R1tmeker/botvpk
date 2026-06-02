@@ -20,6 +20,8 @@ class UserProfile(BaseModel):
     status_code: str = "ACTIVE"
     birth_date: date | None = None
     phone: str | None = None
+    city: str | None = None
+    education_place: str | None = None
 
 
 class AuthResponse(BaseModel):

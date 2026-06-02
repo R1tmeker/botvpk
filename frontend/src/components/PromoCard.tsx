@@ -109,9 +109,9 @@ export function AdminPromoCard({
       </div>
       {block.body && <p className={styles.adminCardText}>{block.body.slice(0, 80)}{block.body.length > 80 ? "…" : ""}</p>}
       <div className={styles.adminCardMeta}>
-        <span>👥 {AUDIENCE_LABELS[block.audience_code] ?? block.audience_code}</span>
-        {block.button_text && <span>🔗 {block.button_text}</span>}
-        {block.active_from && <span>📅 с {block.active_from.slice(0, 10)}</span>}
+        <span>Аудитория: {AUDIENCE_LABELS[block.audience_code] ?? block.audience_code}</span>
+        {block.button_text && <span>Кнопка: {block.button_text}</span>}
+        {block.active_from && <span>с {block.active_from.slice(0, 10)}</span>}
         {block.active_to && <span>до {block.active_to.slice(0, 10)}</span>}
       </div>
       <div className={styles.adminCardActions}>

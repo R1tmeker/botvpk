@@ -21,6 +21,8 @@ export type UserProfile = {
   status_code: string;
   birth_date: string | null;
   phone: string | null;
+  city: string | null;
+  education_place: string | null;
 };
 
 export type UserRecord = UserProfile & {

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AlertTriangle, CheckCircle2, Info, XCircle, type LucideIcon } from "lucide-react";
 import styles from "./Toast.module.scss";
 
 export type ToastType = "success" | "error" | "info" | "warning";
@@ -18,11 +19,11 @@ export function toast(message: string, type: ToastType = "success", duration = 3
   globalShow?.(message, type, duration);
 }
 
-const ICONS: Record<ToastType, string> = {
-  success: "✅",
-  error: "❌",
-  info: "ℹ️",
-  warning: "⚠️",
+const ICONS: Record<ToastType, LucideIcon> = {
+  success: CheckCircle2,
+  error: XCircle,
+  info: Info,
+  warning: AlertTriangle,
 };
 
 const COLORS: Record<ToastType, string> = {
@@ -55,6 +56,7 @@ export function ToastContainer() {
 
 function ToastItem({ toast: t, onDismiss }: { toast: Toast; onDismiss: () => void }) {
   const [visible, setVisible] = useState(false);
+  const Icon = ICONS[t.type];
 
   useEffect(() => {
     const show = setTimeout(() => setVisible(true), 10);
@@ -68,7 +70,7 @@ function ToastItem({ toast: t, onDismiss }: { toast: Toast; onDismiss: () => voi
       style={{ borderLeftColor: COLORS[t.type] }}
       onClick={onDismiss}
     >
-      <span className={styles.icon}>{ICONS[t.type]}</span>
+      <Icon className={styles.icon} aria-hidden="true" strokeWidth={2.4} style={{ color: COLORS[t.type] }} />
       <span className={styles.message}>{t.message}</span>
     </div>
   );

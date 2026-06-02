@@ -203,6 +203,8 @@ def _profile_from_user(user: User) -> UserProfile:
         status_code=user.status_code,
         birth_date=user.birth_date,
         phone=user.phone,
+        city=user.city,
+        education_place=user.education_place,
     )
 
 

@@ -4,6 +4,7 @@ import asyncio
 import csv
 import io
 import logging
+import re
 from datetime import date, datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher, F, Router
@@ -36,6 +37,19 @@ from .utils.audit import record_audit
 
 logger = logging.getLogger(__name__)
 router = Router(name="vpk-zvezda-db-bot")
+
+_CF_URL_RE = re.compile(r'https://[a-z0-9-]+\.trycloudflare\.com')
+_CF_LOG_PATH = "/tmp/cf_tunnel.log"
+
+
+def _detect_tunnel_url() -> str | None:
+    try:
+        with open(_CF_LOG_PATH) as f:
+            content = f.read()
+        matches = _CF_URL_RE.findall(content)
+        return matches[-1] if matches else None
+    except OSError:
+        return None
 
 
 class AbsenceReasonStates(StatesGroup):
@@ -93,6 +107,8 @@ def main_keyboard(role: RoleLevel) -> ReplyKeyboardMarkup:
         rows.append([KeyboardButton(text="Заявки")])
     if settings.mini_app_url:
         rows.append([KeyboardButton(text="Открыть приложение", web_app=WebAppInfo(url=settings.mini_app_url))])
+    if role >= RoleLevel.SUPER_ADMIN:
+        rows.append([KeyboardButton(text="Ссылка туннеля")])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=False)
 
 
@@ -215,6 +231,26 @@ async def profile(message: Message) -> None:
         f"Отделение: {user.squad_id or 'не назначено'}",
         f"Статус: {user.status_code}",
     ]
+    await message.answer("\n".join(lines), parse_mode=None)
+
+
+@router.message(F.text == "Ссылка туннеля")
+async def tunnel_url(message: Message) -> None:
+    user = await find_user(message.from_user.id)
+    if user_role(user) < RoleLevel.SUPER_ADMIN:
+        return
+    url = _detect_tunnel_url()
+    settings = get_settings()
+    lines: list[str] = []
+    if url:
+        lines.append(f"Текущий URL туннеля:\n{url}")
+    else:
+        lines.append("URL туннеля не найден в логах cf-tunnel.")
+    env_url = settings.mini_app_url
+    if env_url and env_url != url:
+        lines.append(f"\nВ .env сейчас другой URL:\n{env_url}")
+    elif env_url:
+        lines.append("\nСовпадает с MINI_APP_URL в .env")
     await message.answer("\n".join(lines), parse_mode=None)
 
 

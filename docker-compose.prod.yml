@@ -37,6 +37,7 @@ services:
         condition: service_started
     volumes:
       - uploads_data:/app/uploads
+      - /tmp/cf_tunnel.log:/tmp/cf_tunnel.log:ro
     command: python -m app.bot
     restart: unless-stopped
 

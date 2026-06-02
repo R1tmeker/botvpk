@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart3,
+  AlertTriangle,
   Bell,
   BookOpen,
   CalendarDays,
@@ -14,6 +15,7 @@ import {
   Home,
   Megaphone,
   MessageSquareWarning,
+  RefreshCw,
   Settings,
   Target,
   User,
@@ -403,6 +405,14 @@ function apiErrorDetail(error: unknown): string | null {
 type Props = {
   webApp: {
     initData: string;
+    initDataUnsafe?: {
+      user?: {
+        id?: number;
+        first_name?: string;
+        last_name?: string;
+        username?: string;
+      };
+    };
     HapticFeedback?: {
       impactOccurred: (style: "light" | "medium" | "heavy" | "rigid" | "soft") => void;
       notificationOccurred?: (type: "error" | "success" | "warning") => void;
@@ -411,6 +421,62 @@ type Props = {
     MainButton?: { show: () => void; hide: () => void; setText: (t: string) => void; onClick: (fn: () => void) => void; offClick: (fn: () => void) => void; showProgress: (b: boolean) => void };
   };
 };
+
+type AuthStatus = "checking" | "ready" | "missing_init_data" | "failed";
+
+function AuthGate({
+  status,
+  error,
+  initDataLength,
+  telegramUserId,
+  onRetry,
+}: {
+  status: AuthStatus;
+  error: string | null;
+  initDataLength: number;
+  telegramUserId: number | null;
+  onRetry: () => void;
+}) {
+  const title = status === "missing_init_data" ? "Telegram ID не передан" : "Авторизация не прошла";
+  const text = status === "missing_init_data"
+    ? "Откройте приложение через кнопку в боте. Обычная ссылка не передаёт Telegram ID."
+    : "Backend отклонил Telegram-подпись. Обычно причина в другом боте или неверном BOT_TOKEN на сервере.";
+  const actionLabel = status === "missing_init_data" ? "Проверить снова" : "Повторить авторизацию";
+
+  return (
+    <section className={`${styles.panel} ${styles.authGate}`}>
+      <span className={styles.authGateIcon}>
+        <AlertTriangle />
+      </span>
+      <div>
+        <h2>{title}</h2>
+        <p>{text}</p>
+      </div>
+      <dl className={styles.authGateMeta}>
+        <div>
+          <dt>Telegram</dt>
+          <dd>{telegramUserId ?? "не передан"}</dd>
+        </div>
+        <div>
+          <dt>initData</dt>
+          <dd>{initDataLength > 0 ? `${initDataLength} символов` : "пусто"}</dd>
+        </div>
+        {error && (
+          <div>
+            <dt>Backend</dt>
+            <dd>{error}</dd>
+          </div>
+        )}
+      </dl>
+      <div className={styles.authGateActions}>
+        <button type="button" onClick={onRetry}>
+          <RefreshCw />
+          {actionLabel}
+        </button>
+      </div>
+    </section>
+  );
+}
 
 type ViewKey =
   | "dashboard"
@@ -838,11 +904,17 @@ function StatusCarousel({
 export function App({ webApp }: Props) {
   const auth = useTelegramAuth();
   const [profile, setProfile] = useState<UserProfile>(fallbackProfile);
+  const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authAttempt, setAuthAttempt] = useState(0);
   const [activeView, setActiveView] = useState<ViewKey>("dashboard");
   const [prevView, setPrevView] = useState<ViewKey | null>(null);
   const [milestoneStreak, setMilestoneStreak] = useState<number | null>(null);
   const prevStreakRef = useRef<number>(0);
-  const hasToken = Boolean(auth.data?.access_token);
+  const hasToken = authStatus === "ready" && Boolean(auth.data?.access_token);
+  const telegramUserId = webApp.initDataUnsafe?.user?.id ?? null;
+  const initDataLength = webApp.initData?.length ?? 0;
+  const isAuthenticating = authStatus === "checking" || auth.isPending;
 
   // Force light theme always
   useEffect(() => {
@@ -910,21 +982,31 @@ export function App({ webApp }: Props) {
   const uploadAvatar = useUploadAvatar();
 
   useEffect(() => {
-    const initData = webApp.initData;
-    if (!initData) return;
+    const initData = webApp.initData?.trim() ?? "";
+    if (!initData) {
+      setAuthStatus("missing_init_data");
+      setAuthError(null);
+      return;
+    }
+    setAuthStatus("checking");
+    setAuthError(null);
     auth.mutate(initData, {
       onSuccess: (data) => {
         setProfile(data.profile);
+        setAuthStatus("ready");
+        setAuthError(null);
         if (data.app_timezone) {
           _appTimezone = data.app_timezone;
         }
       },
       onError: (error) => {
         const detail = apiErrorDetail(error);
+        setAuthStatus("failed");
+        setAuthError(detail ?? "Не удалось проверить Telegram initData");
         toast(detail ? `Ошибка авторизации: ${detail}` : "Ошибка авторизации. Попробуйте перезапустить приложение.", "error");
       },
     });
-  }, []);
+  }, [authAttempt]);
 
   const navCodes = new Set(["dashboard", "schedule", "attendance", "normatives", "profile", "admin"]);
 
@@ -949,7 +1031,7 @@ export function App({ webApp }: Props) {
     return entity.includes("appeal") || type.includes("appeal");
   }).length ?? 0;
   const visibleCandidateEvents = joinEvents.data?.length ? joinEvents.data : publicEvents.data ?? [];
-  const showDashboardChrome = activeView === "dashboard";
+  const showDashboardChrome = hasToken && activeView === "dashboard";
 
   useEffect(() => {
     document.body.dataset.appChrome = showDashboardChrome ? "dashboard" : "plain";
@@ -1013,10 +1095,10 @@ export function App({ webApp }: Props) {
     return () => webApp.BackButton?.offClick(handler);
   }, [prevView]);
 
-  const visibleNav = [
+  const visibleNav = hasToken ? [
     ...navItems.filter((item) => level >= item.minLevel),
     ...(level >= adminNavItem.minLevel ? [adminNavItem] : []),
-  ];
+  ] : [];
 
   return (
     <>
@@ -1035,7 +1117,7 @@ export function App({ webApp }: Props) {
           <img src="/assets/zvezda-emblem.jpg" alt="ВПК Звезда" />
           <div>
             <strong>ВПК Звезда</strong>
-            <span>{roleLabels[profile.role_code]}</span>
+            <span>{hasToken ? roleLabels[profile.role_code] : "Авторизация"}</span>
           </div>
         </button>
       </header>
@@ -1088,14 +1170,23 @@ export function App({ webApp }: Props) {
       )}
 
       <section className={styles.workspace} data-compact={!showDashboardChrome}>
-        {auth.isPending && (
+        {isAuthenticating && (
           <div className={styles.panel}>
             <SkeletonCard />
             <SkeletonCard />
             <SkeletonCard />
           </div>
         )}
-        {!auth.isPending && activeView === "dashboard" && (
+        {!isAuthenticating && !hasToken && (
+          <AuthGate
+            status={authStatus}
+            error={authError}
+            initDataLength={initDataLength}
+            telegramUserId={telegramUserId}
+            onRetry={() => setAuthAttempt((value) => value + 1)}
+          />
+        )}
+        {!isAuthenticating && hasToken && activeView === "dashboard" && (
           profile.role_code === "CANDIDATE" ? (
             <CandidateDashboard
               application={joinMe.data ?? null}
@@ -1157,7 +1248,7 @@ export function App({ webApp }: Props) {
           )
         )}
 
-        {!auth.isPending && activeView === "schedule" && (
+        {!isAuthenticating && hasToken && activeView === "schedule" && (
           level < 3 ? (
             <CandidateEventsView
               events={visibleCandidateEvents}
@@ -1187,7 +1278,7 @@ export function App({ webApp }: Props) {
           )
         )}
 
-        {!auth.isPending && activeView === "attendance" && level >= 3 && (
+        {!isAuthenticating && hasToken && activeView === "attendance" && level >= 3 && (
           <AttendanceView
             records={visibleAttendance}
             canManage={level >= 4}
@@ -1200,7 +1291,7 @@ export function App({ webApp }: Props) {
           />
         )}
 
-        {!auth.isPending && activeView === "normatives" && (
+        {!isAuthenticating && hasToken && activeView === "normatives" && (
           <NormativesView
             items={visibleNormatives}
             submissions={mySubmissions.data ?? []}
@@ -1232,7 +1323,7 @@ export function App({ webApp }: Props) {
           />
         )}
 
-        {!auth.isPending && activeView === "learning" && (
+        {!isAuthenticating && hasToken && activeView === "learning" && (
           <LearningView
             items={learning.data ?? []}
             courses={learningCourses.data ?? []}
@@ -1240,7 +1331,7 @@ export function App({ webApp }: Props) {
           />
         )}
 
-        {!auth.isPending && activeView === "notifications" && level >= 3 && (
+        {!isAuthenticating && hasToken && activeView === "notifications" && level >= 3 && (
           <NotificationsView
             items={notifications.data ?? []}
             onRead={(id) => readNotification.mutate(id)}
@@ -1249,7 +1340,7 @@ export function App({ webApp }: Props) {
           />
         )}
 
-        {!auth.isPending && activeView === "announcements" && level >= 4 && (
+        {!isAuthenticating && hasToken && activeView === "announcements" && level >= 4 && (
           <AnnouncementsView
             items={announcements.data ?? []}
             level={level}
@@ -1264,7 +1355,7 @@ export function App({ webApp }: Props) {
           />
         )}
 
-        {!auth.isPending && activeView === "appeals" && level >= 3 && (
+        {!isAuthenticating && hasToken && activeView === "appeals" && level >= 3 && (
           <AppealsView
             items={appeals.data ?? []}
             currentUserId={profile.id}
@@ -1278,7 +1369,7 @@ export function App({ webApp }: Props) {
           />
         )}
 
-        {!auth.isPending && activeView === "reports" && level >= 5 && (
+        {!isAuthenticating && hasToken && activeView === "reports" && level >= 5 && (
           <ReportsView
             level={level}
             attendance={attendanceReport.data}
@@ -1287,7 +1378,7 @@ export function App({ webApp }: Props) {
           />
         )}
 
-        {!auth.isPending && activeView === "people" && level >= 3 && (
+        {!isAuthenticating && hasToken && activeView === "people" && level >= 3 && (
           <PeopleView
             level={level}
             profile={profile}
@@ -1297,7 +1388,7 @@ export function App({ webApp }: Props) {
           />
         )}
 
-        {!auth.isPending && activeView === "profile" && (
+        {!isAuthenticating && hasToken && activeView === "profile" && (
           <ProfileView
             profile={profile}
             attendanceStats={attendanceStats.data}
@@ -1311,7 +1402,7 @@ export function App({ webApp }: Props) {
           />
         )}
 
-        {!auth.isPending && activeView === "admin" && level >= 6 && (
+        {!isAuthenticating && hasToken && activeView === "admin" && level >= 6 && (
           <AdminView
             level={level}
             users={adminUsers.data ?? []}
@@ -1337,29 +1428,31 @@ export function App({ webApp }: Props) {
         )}
       </section>
 
-      <nav
-        className={styles.nav}
-        data-admin={visibleNav.length > 5}
-        aria-label="Основная навигация"
-        style={{ gridTemplateColumns: `repeat(${visibleNav.length}, minmax(0, 1fr))` }}
-      >
-        {visibleNav.map(({ view, iconCode, label }) => (
-          <button
-            key={view}
-            type="button"
-            data-active={activeView === view}
-            onClick={() => openView(view)}
-          >
-            <span
-              className={`${styles.navIcon} ${view === "notifications" && unreadCount > 0 ? styles.navBadge : ""}`}
-              data-count={view === "notifications" && unreadCount > 0 ? unreadCount : undefined}
+      {hasToken && (
+        <nav
+          className={styles.nav}
+          data-admin={visibleNav.length > 5}
+          aria-label="Основная навигация"
+          style={{ gridTemplateColumns: `repeat(${visibleNav.length}, minmax(0, 1fr))` }}
+        >
+          {visibleNav.map(({ view, iconCode, label }) => (
+            <button
+              key={view}
+              type="button"
+              data-active={activeView === view}
+              onClick={() => openView(view)}
             >
-              <AppIcon code={iconCode} />
-            </span>
-            <span>{label}</span>
-          </button>
-        ))}
-      </nav>
+              <span
+                className={`${styles.navIcon} ${view === "notifications" && unreadCount > 0 ? styles.navBadge : ""}`}
+                data-count={view === "notifications" && unreadCount > 0 ? unreadCount : undefined}
+              >
+                <AppIcon code={iconCode} />
+              </span>
+              <span>{label}</span>
+            </button>
+          ))}
+        </nav>
+      )}
     </main>
     </>
   );

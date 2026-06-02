@@ -127,6 +127,9 @@ curl -fsS -X POST "https://api.telegram.org/bot${BOT_TOKEN}/setChatMenuButton" \
 
 # Restart bot container so it picks up new MINI_APP_URL from .env
 if command -v docker >/dev/null 2>&1 && [[ -f "$COMPOSE_FILE" ]]; then
+  docker compose -f "$COMPOSE_FILE" up -d frontend nginx 2>/dev/null \
+    && echo "Frontend and nginx containers ensured" \
+    || echo "Warning: failed to ensure frontend/nginx containers" >&2
   docker compose -f "$COMPOSE_FILE" restart bot 2>/dev/null \
     && echo "Bot container restarted" \
     || echo "Warning: failed to restart bot container" >&2

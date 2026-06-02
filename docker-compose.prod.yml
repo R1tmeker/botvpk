@@ -45,6 +45,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile.prod
+      args:
+        BUILD_ID: ${BUILD_ID:-local}
     restart: unless-stopped
 
   nginx:

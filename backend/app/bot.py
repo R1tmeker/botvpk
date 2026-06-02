@@ -195,7 +195,7 @@ async def start(message: Message, bot: Bot) -> None:
         "ВПК «Звезда»",
         "",
         f"Пользователь: {name}",
-        f"Роль: {role_label}",
+        f"Должность: {role_label}",
     ]
     if user is None:
         lines += ["", "Если вы в составе — попросите командира привязать ваш Telegram ID."]
@@ -211,7 +211,7 @@ async def profile(message: Message) -> None:
         return
     lines = [
         user.full_name,
-        f"Роль: {ROLE_LABELS.get(user.role_code, user.role_code)}",
+        f"Должность: {ROLE_LABELS.get(user.role_code, user.role_code)}",
         f"Отделение: {user.squad_id or 'не назначено'}",
         f"Статус: {user.status_code}",
     ]

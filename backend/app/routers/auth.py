@@ -45,7 +45,7 @@ async def auth_telegram(
         select(JoinApplication)
         .where(
             JoinApplication.telegram_id == init_data.user.telegram_id,
-            JoinApplication.status_code.not_in(["ACCEPTED", "REJECTED", "ARCHIVED"]),
+            JoinApplication.status_code.notin_(["ACCEPTED", "REJECTED", "ARCHIVED"]),
         )
         .order_by(JoinApplication.id.desc())
     )

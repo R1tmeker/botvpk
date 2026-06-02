@@ -42,7 +42,7 @@ async def auth_telegram(
             max_age_seconds=settings.telegram_init_data_max_age_seconds,
         )
     except TelegramInitDataError as exc:
-        logger.warning("Telegram auth failed: %s | token_prefix=%s", exc, settings.bot_token[:10])
+        print(f"[AUTH FAIL] {exc} | token={settings.bot_token[:10]}... | init_data_len={len(payload.init_data)}", flush=True)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
     user = await session.scalar(select(User).where(User.telegram_id == init_data.user.telegram_id))

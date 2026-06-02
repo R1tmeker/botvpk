@@ -48,13 +48,12 @@ def validate_init_data(init_data: str, bot_token: str, max_age_seconds: int = 86
 
     try:
         received_hash = params.pop("hash", None)
-        # Remove Ed25519 signature — we validate with HMAC-SHA256 only
-        params.pop("signature", None)
 
         if not received_hash:
             raise TelegramInitDataError("Missing 'hash' in initData.")
 
-        # Build data-check-string: sorted key=value lines joined by \n
+        # Build data-check-string for HMAC validation: all received fields except
+        # hash, including the optional Telegram Ed25519 signature field.
         data_check_string = "\n".join(
             f"{k}={v}" for k, v in sorted(params.items())
         )

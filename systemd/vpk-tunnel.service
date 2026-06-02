@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStartPre=/bin/bash -c 'truncate -s 0 /tmp/cf_tunnel.log'
-ExecStart=/usr/bin/cloudflared tunnel --url http://127.0.0.1:80 --no-autoupdate
+ExecStart=/usr/bin/cloudflared tunnel --url http://127.0.0.1:8081 --no-autoupdate
 StandardOutput=append:/tmp/cf_tunnel.log
 StandardError=append:/tmp/cf_tunnel.log
 Restart=always

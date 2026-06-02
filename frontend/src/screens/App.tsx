@@ -419,6 +419,7 @@ type Props = {
     };
     BackButton?: { show: () => void; hide: () => void; onClick: (fn: () => void) => void; offClick: (fn: () => void) => void };
     MainButton?: { show: () => void; hide: () => void; setText: (t: string) => void; onClick: (fn: () => void) => void; offClick: (fn: () => void) => void; showProgress: (b: boolean) => void };
+    close?: () => void;
   };
 };
 
@@ -429,19 +430,19 @@ function AuthGate({
   error,
   initDataLength,
   telegramUserId,
-  onRetry,
+  onAction,
 }: {
   status: AuthStatus;
   error: string | null;
   initDataLength: number;
   telegramUserId: number | null;
-  onRetry: () => void;
+  onAction: () => void;
 }) {
   const title = status === "missing_init_data" ? "Telegram ID не передан" : "Авторизация не прошла";
   const text = status === "missing_init_data"
     ? "Откройте приложение через кнопку в боте. Обычная ссылка не передаёт Telegram ID."
-    : "Backend отклонил Telegram-подпись. Обычно причина в другом боте или неверном BOT_TOKEN на сервере.";
-  const actionLabel = status === "missing_init_data" ? "Проверить снова" : "Повторить авторизацию";
+    : "Закройте это окно и откройте свежую кнопку Mini App в @VPK_OPROS_ZOV_bot. Повтор внутри старого окна отправляет ту же подпись.";
+  const actionLabel = status === "missing_init_data" ? "Проверить снова" : "Закрыть Mini App";
 
   return (
     <section className={`${styles.panel} ${styles.authGate}`}>
@@ -469,8 +470,8 @@ function AuthGate({
         )}
       </dl>
       <div className={styles.authGateActions}>
-        <button type="button" onClick={onRetry}>
-          <RefreshCw />
+        <button type="button" onClick={onAction}>
+          {status === "missing_init_data" ? <RefreshCw /> : <X />}
           {actionLabel}
         </button>
       </div>
@@ -1183,7 +1184,13 @@ export function App({ webApp }: Props) {
             error={authError}
             initDataLength={initDataLength}
             telegramUserId={telegramUserId}
-            onRetry={() => setAuthAttempt((value) => value + 1)}
+            onAction={() => {
+              if (authStatus === "failed" && webApp.close) {
+                webApp.close();
+                return;
+              }
+              setAuthAttempt((value) => value + 1);
+            }}
           />
         )}
         {!isAuthenticating && hasToken && activeView === "dashboard" && (

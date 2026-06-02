@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     api_cors_origins: str = Field("", alias="API_CORS_ORIGINS")
     mini_app_url: str | None = Field(None, alias="MINI_APP_URL")
     bot_username: str | None = Field(None, alias="BOT_USERNAME")
+    telegram_init_data_max_age_seconds: int = Field(0, alias="TELEGRAM_INIT_DATA_MAX_AGE_SECONDS")
     uploads_dir: Path = Field(Path("uploads"), alias="UPLOADS_DIR")
     max_upload_size_mb: int = Field(20, alias="MAX_UPLOAD_SIZE_MB")
     dryrun: bool = Field(False, alias="DRYRUN")

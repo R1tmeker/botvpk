@@ -63,17 +63,19 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
-  align-items: start;
-  height: 128px;
+  align-items: stretch;
   min-height: 128px;
   margin-top: 6px;
   padding: 16px;
   box-sizing: border-box;
-  border: 1px solid rgba(255, 255, 255, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.34);
   border-radius: 16px;
   color: #fff;
   background: linear-gradient(135deg, rgba(18, 37, 83, 0.96), rgba(34, 51, 94, 0.96)), #162a5b;
-  box-shadow: 0 14px 34px rgba(5, 15, 43, 0.3);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 14px 34px rgba(5, 15, 43, 0.3);
+  overflow: hidden;
 
   p,
   h1,
@@ -92,6 +94,7 @@
   h1 {
     font-size: 25px;
     line-height: 1.05;
+    overflow-wrap: anywhere;
   }
 
   dl {
@@ -370,7 +373,7 @@
 }
 
 .workspace[data-compact="true"] {
-  margin-top: 12px;
+  margin-top: 20px;
 }
 
 .panel {
@@ -1420,8 +1423,8 @@
 .checkboxLine {
   position: relative;
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr);
-  gap: 9px;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 10px;
   align-items: center;
   color: #42506a;
   font-size: 12px;
@@ -1432,6 +1435,7 @@
   input {
     position: relative;
     z-index: 1;
+    display: block;
     width: 22px;
     height: 22px;
     margin: 0;
@@ -1449,20 +1453,26 @@
 
     &:checked::after {
       position: absolute;
-      top: 2px;
-      left: 6px;
+      top: 50%;
+      left: 50%;
       width: 6px;
-      height: 11px;
+      height: 10px;
       border: solid #fff;
       border-width: 0 2px 2px 0;
       content: "";
-      transform: rotate(45deg);
+      transform: translate(-50%, -56%) rotate(45deg);
+      transform-origin: center;
     }
 
     &:focus-visible {
       outline: 2px solid rgba(26, 47, 90, 0.24);
       outline-offset: 2px;
     }
+  }
+
+  > span {
+    min-width: 0;
+    padding-top: 1px;
   }
 }
 
@@ -1991,13 +2001,16 @@
 .empty {
   min-height: 60px;
   display: grid;
-  place-items: center;
+  place-items: center start;
   border: 1px dashed #cbd2e0;
   border-radius: 12px;
   color: #69758e;
   background: #fff;
+  padding: 14px 16px;
   font-size: 13px;
   font-weight: 800;
+  line-height: 1.35;
+  text-align: left;
 }
 
 /* ── Bottom Navigation ───────────────────────── */

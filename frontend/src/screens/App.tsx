@@ -199,6 +199,18 @@ function materialTypeFromMime(mimeType?: string | null) {
   return "FILE";
 }
 
+function apiErrorDetail(error: unknown): string | null {
+  if (typeof error !== "object" || error === null || !("response" in error)) return null;
+  const response = (error as { response?: { data?: unknown } }).response;
+  const data = response?.data;
+  if (typeof data === "string") return data;
+  if (typeof data !== "object" || data === null || !("detail" in data)) return null;
+  const detail = (data as { detail?: unknown }).detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) return detail.map((item) => typeof item === "string" ? item : JSON.stringify(item)).join(", ");
+  return null;
+}
+
 type Props = {
   webApp: {
     initData: string;
@@ -718,8 +730,9 @@ export function App({ webApp }: Props) {
           _appTimezone = data.app_timezone;
         }
       },
-      onError: () => {
-        toast("Ошибка авторизации. Попробуйте перезапустить приложение.", "error");
+      onError: (error) => {
+        const detail = apiErrorDetail(error);
+        toast(detail ? `Ошибка авторизации: ${detail}` : "Ошибка авторизации. Попробуйте перезапустить приложение.", "error");
       },
     });
   }, []);
@@ -748,6 +761,13 @@ export function App({ webApp }: Props) {
   }).length ?? 0;
   const visibleCandidateEvents = joinEvents.data?.length ? joinEvents.data : publicEvents.data ?? [];
   const showDashboardChrome = activeView === "dashboard";
+
+  useEffect(() => {
+    document.body.dataset.appChrome = showDashboardChrome ? "dashboard" : "plain";
+    return () => {
+      delete document.body.dataset.appChrome;
+    };
+  }, [showDashboardChrome]);
 
   const openView = (view: string) => {
     const next = normalizeView(view);

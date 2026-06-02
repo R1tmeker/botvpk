@@ -32,7 +32,11 @@ async def auth_telegram(
     settings: Settings = Depends(get_settings),
 ) -> AuthResponse:
     try:
-        init_data = validate_init_data(payload.init_data, settings.bot_token)
+        init_data = validate_init_data(
+            payload.init_data,
+            settings.bot_token,
+            max_age_seconds=settings.telegram_init_data_max_age_seconds,
+        )
     except TelegramInitDataError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 

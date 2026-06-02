@@ -30,9 +30,17 @@ body {
   transition: background 0.3s;
 }
 
+body[data-app-chrome="plain"] {
+  background: linear-gradient(180deg, var(--navy) 0 88px, var(--page) 88px 100%);
+}
+
 [data-theme="dark"] body {
   background: linear-gradient(180deg, #0d1526 0 270px, #1a1f2e 270px 100%);
   color: #e8edf5;
+}
+
+[data-theme="dark"] body[data-app-chrome="plain"] {
+  background: linear-gradient(180deg, #0d1526 0 88px, #1a1f2e 88px 100%);
 }
 
 body::before {

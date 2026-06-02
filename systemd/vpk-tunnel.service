@@ -11,7 +11,7 @@ StandardOutput=append:/tmp/cf_tunnel.log
 StandardError=append:/tmp/cf_tunnel.log
 Restart=always
 RestartSec=10
-ExecStartPost=-/bin/bash -c 'sleep 5 && /opt/botvpk/scripts/notify-miniapp-url.sh'
+ExecStartPost=-/bin/bash -c 'sleep 15 && /opt/botvpk/scripts/notify-miniapp-url.sh &'
 
 [Install]
 WantedBy=multi-user.target

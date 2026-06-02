@@ -194,7 +194,7 @@ async def start(message: Message, bot: Bot) -> None:
     lines = [
         "ВПК «Звезда»",
         "",
-        f"👤 {name}",
+        f"Пользователь: {name}",
         f"Роль: {role_label}",
     ]
     if user is None:
@@ -377,7 +377,7 @@ async def join_confirm(message: Message, state: FSMContext) -> None:
             session.add(Notification(
                 user_id=commander.id,
                 type_code="NEW_APPLICATION",
-                title="📋 Новая заявка",
+                title="Новая заявка",
                 body=f"{data['full_name']} подал(а) заявку на вступление через бот.",
                 entity_name="join_applications",
                 entity_id=application.id,
@@ -385,7 +385,7 @@ async def join_confirm(message: Message, state: FSMContext) -> None:
             ))
         await session.commit()
     await state.clear()
-    await message.answer("Заявка отправлена. Командиры уведомлены.\nСтатус — в приложении 🚀", reply_markup=mini_app_keyboard())
+    await message.answer("Заявка отправлена. Командиры уведомлены.\nСтатус — в приложении", reply_markup=mini_app_keyboard())
 
 
 @router.message(Command("help"))
@@ -397,7 +397,7 @@ async def help_command(message: Message) -> None:
         "/notifications — мои уведомления\n"
         "/join — заявка на вступление\n"
         "/profile — мой профиль\n\n"
-        "Все функции — в приложении 🚀",
+        "Все функции — в приложении",
         parse_mode=None,
     )
 
@@ -447,7 +447,7 @@ async def broadcast(message: Message, bot: Bot) -> None:
 
 
 @router.message(Command("schedule"))
-@router.message(F.text.casefold().in_({"расписание", "📅 расписание"}))
+@router.message(F.text.casefold().in_({"расписание"}))
 async def schedule(message: Message) -> None:
     user = await find_user(message.from_user.id)
     if user_role(user) < RoleLevel.PARTICIPANT:
@@ -630,7 +630,7 @@ async def normatives(message: Message) -> None:
 
 
 @router.message(Command("notifications"))
-@router.message(F.text.casefold().in_({"уведомления", "🔔 уведомления"}))
+@router.message(F.text.casefold().in_({"уведомления"}))
 async def notifications(message: Message) -> None:
     user = await find_user(message.from_user.id)
     if user_role(user) < RoleLevel.PARTICIPANT:
@@ -653,12 +653,12 @@ async def notifications(message: Message) -> None:
     unread = [r for r in rows if not r.is_read]
     lines = [f"Уведомления ({len(unread)} новых):"]
     for item in rows:
-        prefix = "🔵" if not item.is_read else "•"
+        prefix = "новое:" if not item.is_read else "•"
         lines.append(f"{prefix} {item.title}")
     await message.answer("\n".join(lines), parse_mode=None)
 
 
-@router.message(F.text.casefold().in_({"👥 заявки", "заявки"}))
+@router.message(F.text.casefold().in_({"заявки"}))
 async def cmd_applications(message: Message) -> None:
     user = await find_user(message.from_user.id)
     if user_role(user) < RoleLevel.DEPUTY_SQUAD_COMMANDER:
@@ -698,7 +698,7 @@ async def normative_review_callback(callback: CallbackQuery) -> None:
     if user is None or user_role(user) < RoleLevel.DEPUTY_SQUAD_COMMANDER:
         await callback.answer("Только для командиров.", show_alert=True)
         return
-    STATUS_LABELS = {"ACCEPTED": "✅ Принято", "REJECTED": "❌ Отклонено", "NEEDS_REDO": "🔄 На доработку"}
+    STATUS_LABELS = {"ACCEPTED": "Принято", "REJECTED": "Отклонено", "NEEDS_REDO": "На доработку"}
     status_label = STATUS_LABELS.get(status_code, status_code)
     async with AsyncSessionLocal() as session:
         submission = await session.get(NormativeSubmission, submission_id)
@@ -747,10 +747,10 @@ def batch_events_keyboard(events: list[ScheduleEvent]) -> InlineKeyboardMarkup:
     """Show 'Answer all' shortcut when there are 2+ upcoming unanswered events."""
     rows = [
         [
-            InlineKeyboardButton(text="✅ На все", callback_data="batch:COMING"),
-            InlineKeyboardButton(text="❌ Ни на одно", callback_data="batch:NOT_COMING"),
+            InlineKeyboardButton(text="На все", callback_data="batch:COMING"),
+            InlineKeyboardButton(text="Ни на одно", callback_data="batch:NOT_COMING"),
         ],
-        [InlineKeyboardButton(text="📅 По одному", callback_data="batch:ONE_BY_ONE")],
+        [InlineKeyboardButton(text="По одному", callback_data="batch:ONE_BY_ONE")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -859,7 +859,7 @@ async def _send_schedule_with_batch(message: Message, user: User) -> None:
                 )
                 resp_label = ""
                 if resp:
-                    resp_label = {"COMING": " ✅ Вы идёте", "NOT_COMING": " ❌ Вы не идёте", "MAYBE": " ⏳ Вы уточняете"}.get(resp.response_code, "")
+                    resp_label = {"COMING": " Вы идёте", "NOT_COMING": " Вы не идёте", "MAYBE": " Вы уточняете"}.get(resp.response_code, "")
                 await message.answer(
                     f"{event.title}\n{start_at}{place}{resp_label}",
                     reply_markup=event_keyboard(event.id) if event.requires_response else None,
@@ -879,7 +879,7 @@ def normative_choice_keyboard(normatives: list[Normative]) -> InlineKeyboardMark
         [InlineKeyboardButton(text=n.title[:40], callback_data=f"norm_submit:{n.id}")]
         for n in normatives[:8]
     ]
-    rows.append([InlineKeyboardButton(text="❌ Это не для норматива", callback_data="norm_submit:cancel")])
+    rows.append([InlineKeyboardButton(text="Это не для норматива", callback_data="norm_submit:cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -979,7 +979,7 @@ async def normative_file_submit(callback: CallbackQuery, state: FSMContext) -> N
     await state.clear()
     if callback.message:
         await callback.message.edit_text(
-            f"✅ Файл принят на проверку по нормативу «{normative.title}».\nКомандир получил уведомление.",
+            f"Файл принят на проверку по нормативу «{normative.title}».\nКомандир получил уведомление.",
             parse_mode=None,
         )
     await callback.answer("Сдача отправлена!")
@@ -1009,7 +1009,7 @@ async def normative_file_submit(callback: CallbackQuery, state: FSMContext) -> N
                 Notification(
                     user_id=commander.id,
                     type_code="NORMATIVE",
-                    title=f"📋 Новая сдача: {normative.title}",
+                    title=f"Новая сдача: {normative.title}",
                     body=f"{user.full_name} прислал файл на проверку по нормативу «{normative.title}».",
                     entity_name="normative_submissions",
                     entity_id=existing.id,
@@ -1163,7 +1163,7 @@ async def inline_schedule(query: InlineQuery) -> None:
     for event in events:
         start_str = event.start_datetime.strftime("%d.%m %H:%M")
         place_str = f" · {event.place}" if event.place else ""
-        text = f"📅 {event.title}\n{start_str}{place_str}"
+        text = f"{event.title}\n{start_str}{place_str}"
         results.append(
             InlineQueryResultArticle(
                 id=str(event.id),

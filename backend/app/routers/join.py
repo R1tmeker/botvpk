@@ -81,7 +81,7 @@ async def create_application(
         session.add(Notification(
             user_id=commander.id,
             type_code="NEW_APPLICATION",
-            title="📋 Новая заявка",
+            title="Новая заявка",
             body=f"{payload.full_name} подал(а) заявку на вступление.",
             entity_name="join_applications",
             entity_id=application.id,

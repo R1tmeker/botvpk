@@ -224,7 +224,7 @@ async def create_event(
             session.add(Notification(
                 user_id=participant.id,
                 type_code="SCHEDULE_POLL",
-                title=f"📅 {event.title}",
+                title=event.title,
                 body=f"{start_str}{place_str}\n\nОтветьте, придёте ли на занятие.",
                 entity_name="schedule_events",
                 entity_id=event.id,

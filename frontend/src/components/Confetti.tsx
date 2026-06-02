@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { Flame, Gem, Medal, PartyPopper, Star, Trophy, type LucideIcon } from "lucide-react";
 import styles from "./Confetti.module.scss";
 
 type Particle = {
@@ -89,21 +90,24 @@ export function MilestoneToast({ streak, onDismiss }: { streak: number; onDismis
     return () => clearTimeout(t);
   }, [onDismiss]);
 
-  const messages: Record<number, { emoji: string; text: string }> = {
-    5:  { emoji: "🔥", text: "5 занятий подряд! Так держать!" },
-    10: { emoji: "⭐", text: "10 занятий — ты молодец!" },
-    15: { emoji: "🏆", text: "15 занятий без пропуска! Рекорд!" },
-    20: { emoji: "🎖️", text: "20 подряд — легенда отделения!" },
-    30: { emoji: "💎", text: "30 занятий подряд! Невероятно!" },
+  const messages: Record<number, { Icon: LucideIcon; text: string }> = {
+    5:  { Icon: Flame, text: "5 занятий подряд! Так держать!" },
+    10: { Icon: Star, text: "10 занятий — ты молодец!" },
+    15: { Icon: Trophy, text: "15 занятий без пропуска! Рекорд!" },
+    20: { Icon: Medal, text: "20 подряд — легенда отделения!" },
+    30: { Icon: Gem, text: "30 занятий подряд! Невероятно!" },
   };
 
-  const msg = messages[streak] ?? { emoji: "🎉", text: `${streak} занятий подряд — новый рекорд!` };
+  const msg = messages[streak] ?? { Icon: PartyPopper, text: `${streak} занятий подряд — новый рекорд!` };
+  const Icon = msg.Icon;
 
   return (
     <div className={styles.milestone} onClick={onDismiss}>
       <ConfettiCanvas duration={3500} />
       <div className={styles.milestoneCard}>
-        <span className={styles.milestoneEmoji}>{msg.emoji}</span>
+        <span className={styles.milestoneIcon} aria-hidden="true">
+          <Icon />
+        </span>
         <strong>{msg.text}</strong>
         <span>Серия: {streak} занятий</span>
       </div>

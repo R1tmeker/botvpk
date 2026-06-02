@@ -80,7 +80,7 @@ async def create_appeal(
         session.add(Notification(
             user_id=commander.id,
             type_code="APPEAL",
-            title="📨 Новое обращение",
+            title="Новое обращение",
             body=body,
             entity_name="appeals",
             entity_id=appeal.id,
@@ -185,7 +185,7 @@ async def create_appeal_message(
             session.add(Notification(
                 user_id=commander.id,
                 type_code="APPEAL",
-                title="📨 Новое сообщение в обращении",
+                title="Новое сообщение в обращении",
                 body=notif_body,
                 entity_name="appeals",
                 entity_id=appeal.id,
@@ -196,7 +196,7 @@ async def create_appeal_message(
         session.add(Notification(
             user_id=appeal.author_user_id,
             type_code="APPEAL",
-            title="📨 Новое сообщение в обращении",
+            title="Новое сообщение в обращении",
             body=notif_body,
             entity_name="appeals",
             entity_id=appeal.id,

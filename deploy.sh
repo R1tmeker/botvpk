@@ -43,9 +43,9 @@ echo "Deploy finished: $(date)"
 
 set -e
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
-log()  { echo -e "${GREEN}[✓]${NC} $1"; }
+log()  { echo -e "${GREEN}[OK]${NC} $1"; }
 warn() { echo -e "${YELLOW}[!]${NC} $1"; }
-err()  { echo -e "${RED}[✗]${NC} $1"; exit 1; }
+err()  { echo -e "${RED}[ERR]${NC} $1"; exit 1; }
 
 echo ""
 echo "╔══════════════════════════════════════════╗"
@@ -372,10 +372,10 @@ echo -e "  API:       ${GREEN}http://${SERVER_IP}/api/docs${NC}"
 echo -e "  Mini App:  ${GREEN}${FINAL_TUNNEL:-http://${SERVER_IP}}${NC}"
 echo ""
 if [[ -n "$FINAL_TUNNEL" ]]; then
-    echo -e "${YELLOW}  ⚠️  Укажи этот URL в @BotFather → Bot Settings → Menu Button:${NC}"
+    echo -e "${YELLOW}  [WARN] Укажи этот URL в @BotFather → Bot Settings → Menu Button:${NC}"
     echo -e "  ${GREEN}${FINAL_TUNNEL}${NC}"
     echo ""
-    echo -e "${YELLOW}  ⚠️  URL туннеля меняется при рестарте cf-tunnel.${NC}"
+    echo -e "${YELLOW}  [WARN] URL туннеля меняется при рестарте cf-tunnel.${NC}"
     echo -e "     Для постоянного URL заведи бесплатный домен на duckdns.org${NC}"
 fi
 echo ""

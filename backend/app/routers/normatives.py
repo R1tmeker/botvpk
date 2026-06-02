@@ -160,9 +160,9 @@ async def review_submission(
     normative = await session.get(Normative, submission.normative_id)
     norm_title = normative.title if normative else f"норматив #{submission.normative_id}"
     status_labels = {
-        "ACCEPTED": ("✅ Принято", "Ваша сдача принята!"),
-        "REJECTED": ("❌ Отклонено", "Ваша сдача отклонена."),
-        "NEEDS_REDO": ("🔄 На доработку", "Требуется пересдача."),
+        "ACCEPTED": ("Принято", "Ваша сдача принята!"),
+        "REJECTED": ("Отклонено", "Ваша сдача отклонена."),
+        "NEEDS_REDO": ("На доработку", "Требуется пересдача."),
     }
     status_title, status_body = status_labels.get(payload.status_code, ("Статус обновлён", "Статус сдачи изменён."))
     body_parts = [f"Норматив: «{norm_title}»", status_body]
@@ -254,7 +254,7 @@ async def submit_normative(
             Notification(
                 user_id=commander.id,
                 type_code="NORMATIVE",
-                title=f"📋 Новая сдача: {normative.title}",
+                title=f"Новая сдача: {normative.title}",
                 body=f"{submitter_name} сдал норматив «{normative.title}» на проверку.",
                 entity_name="normative_submissions",
                 entity_id=submission.id,

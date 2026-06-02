@@ -4,6 +4,8 @@ import {
   Bell,
   BookOpen,
   CalendarDays,
+  ChevronDown,
+  ChevronUp,
   ClipboardCheck,
   ClipboardList,
   Download,
@@ -16,6 +18,7 @@ import {
   Target,
   User,
   Users,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -1530,7 +1533,9 @@ function PrivacyModal({ onClose }: { onClose: () => void }) {
       <div className={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
         <div className={styles.modalHeader}>
           <strong>Политика обработки данных</strong>
-          <button type="button" onClick={onClose}>✕</button>
+          <button type="button" onClick={onClose} aria-label="Закрыть">
+            <X aria-hidden="true" />
+          </button>
         </div>
         <div className={styles.modalBody}>
           <p><strong>Какие данные мы собираем</strong></p>
@@ -3215,7 +3220,9 @@ function MemberModal({ user, squads, onClose }: { user: UserRecord; squads: Squa
       <div className={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
         <div className={styles.modalHeader}>
           <strong>{user.full_name}</strong>
-          <button type="button" onClick={onClose}>✕</button>
+          <button type="button" onClick={onClose} aria-label="Закрыть">
+            <X aria-hidden="true" />
+          </button>
         </div>
         <div className={styles.modalBody} style={{ padding: "0 16px 16px" }}>
           <dl style={{ margin: 0 }}>
@@ -4974,16 +4981,18 @@ function AdminView({
                     type="button"
                     disabled={updateMenu.isPending}
                     onClick={() => updateMenu.mutate({ id: item.id!, sort_order: Math.max(0, item.sort_order - 1) })}
+                    aria-label="Поднять"
                   >
-                    ▲
+                    <ChevronUp aria-hidden="true" />
                   </button>
                   <button
                     className={styles.iconAction}
                     type="button"
                     disabled={updateMenu.isPending}
                     onClick={() => updateMenu.mutate({ id: item.id!, sort_order: item.sort_order + 1 })}
+                    aria-label="Опустить"
                   >
-                    ▼
+                    <ChevronDown aria-hidden="true" />
                   </button>
                 </div>
               )}
@@ -5209,8 +5218,9 @@ function DashboardCustomizer({
               disabled={index === 0}
               onClick={() => move(index, -1)}
               title="Вверх"
+              aria-label="Вверх"
             >
-              ▲
+              <ChevronUp aria-hidden="true" />
             </button>
             <button
               type="button"
@@ -5218,8 +5228,9 @@ function DashboardCustomizer({
               disabled={index === draft.length - 1}
               onClick={() => move(index, 1)}
               title="Вниз"
+              aria-label="Вниз"
             >
-              ▼
+              <ChevronDown aria-hidden="true" />
             </button>
             <label>
               <input

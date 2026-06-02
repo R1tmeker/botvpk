@@ -238,7 +238,7 @@ async function setupRoutes(page, roleCode, level) {
     if (path.startsWith("files")) return route.fulfill(mockJson({}));
 
     // Fallback
-    console.log(`  ⚠ UNHANDLED ${method} /${path}`);
+    console.log(`  [WARN] UNHANDLED ${method} /${path}`);
     return route.fulfill(mockJson([]));
   });
 }
@@ -273,7 +273,7 @@ async function waitForAuth(page, roleCode) {
     expected,
     { timeout: 8000 }
   ).catch(() => {
-    console.log(`  ⚠ Auth timeout — role label "${expected}" not found in header`);
+    console.log(`  [WARN] Auth timeout — role label "${expected}" not found in header`);
   });
   await page.waitForTimeout(600);
 }
@@ -281,7 +281,7 @@ async function waitForAuth(page, roleCode) {
 async function shot(page, filename) {
   await page.waitForTimeout(300);
   await page.screenshot({ path: join(OUT, filename), fullPage: false });
-  console.log("  📸", filename);
+  console.log("  [SHOT]", filename);
 }
 
 // Navigate by clicking the nav button (bottom nav)
@@ -290,7 +290,7 @@ async function nav(page, label) {
   const btn = page.locator("nav button").filter({ hasText: label });
   const count = await btn.count();
   if (count === 0) {
-    console.log(`  ⚠ Nav "${label}" not in nav bar`);
+    console.log(`  [WARN] Nav "${label}" not in nav bar`);
     return false;
   }
   await btn.first().click();
@@ -303,7 +303,7 @@ async function click(page, text, context = "button") {
   const btn = page.locator(context).filter({ hasText: text });
   const count = await btn.count();
   if (count === 0) {
-    console.log(`  ⚠ "${text}" button not found`);
+    console.log(`  [WARN] "${text}" button not found`);
     return false;
   }
   await btn.first().click();
@@ -320,7 +320,7 @@ async function clickCard(page, text) {
     btn = page.locator("button").filter({ hasText: text });
   }
   if (await btn.count() === 0) {
-    console.log(`  ⚠ Card "${text}" not found`);
+    console.log(`  [WARN] Card "${text}" not found`);
     return false;
   }
   await btn.first().click();
@@ -449,7 +449,7 @@ async function runRole(browser, role) {
     for (const role of ROLES) {
       await runRole(browser, role);
     }
-    console.log(`\n✅ Done: ${OUT}`);
+    console.log(`\n[DONE] ${OUT}`);
   } catch (e) {
     console.error("FATAL:", e.message);
     process.exit(1);

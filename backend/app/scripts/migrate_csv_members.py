@@ -181,7 +181,7 @@ async def run(csv_path: Path, apply: bool) -> None:
     print(f"без изменений: {unchanged}")
     if new_squads:
         print(f"новые отделения: {', '.join(sorted(new_squads))}")
-    print(f"режим:         {'APPLIED ✅' if apply else 'DRY-RUN (--apply для записи)'}")
+    print(f"режим:         {'APPLIED' if apply else 'DRY-RUN (--apply для записи)'}")
 
 
 def main() -> None:

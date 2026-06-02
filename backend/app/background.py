@@ -120,9 +120,9 @@ def _build_notification_keyboard(notification: Notification, settings: Settings)
     if notification.type_code == "NORMATIVE" and notification.entity_id and "Новая сдача" in (notification.title or ""):
         submission_id = notification.entity_id
         return InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="✅ Принять", callback_data=f"norm_review:{submission_id}:ACCEPTED"),
-            InlineKeyboardButton(text="🔄 Доработка", callback_data=f"norm_review:{submission_id}:NEEDS_REDO"),
-            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"norm_review:{submission_id}:REJECTED"),
+            InlineKeyboardButton(text="Принять", callback_data=f"norm_review:{submission_id}:ACCEPTED"),
+            InlineKeyboardButton(text="Доработка", callback_data=f"norm_review:{submission_id}:NEEDS_REDO"),
+            InlineKeyboardButton(text="Отклонить", callback_data=f"norm_review:{submission_id}:REJECTED"),
         ]])
     if notification.type_code == "NEW_APPLICATION" and settings.mini_app_url:
         return InlineKeyboardMarkup(inline_keyboard=[[
@@ -302,7 +302,7 @@ async def send_event_reminders_2h() -> None:
                 start_str = event.start_datetime.strftime("%H:%M")
                 place_str = f" • {event.place}" if event.place else ""
                 if rc == "COMING":
-                    body = f"Через 2 часа занятие «{event.title}»!\n{start_str}{place_str}\nВы сказали «Приду» ✅"
+                    body = f"Через 2 часа занятие «{event.title}»!\n{start_str}{place_str}\nВы сказали «Приду»"
                 elif rc == "NOT_COMING":
                     body = f"Напоминание: «{event.title}» в {start_str}. Вы не придёте — причина записана."
                 elif rc == "MAYBE":
@@ -313,7 +313,7 @@ async def send_event_reminders_2h() -> None:
                     Notification(
                         user_id=user.id,
                         type_code="SCHEDULE",
-                        title=f"⏰ Скоро: {event.title}",
+                        title=f"Скоро: {event.title}",
                         body=body,
                         entity_name="schedule_events_2h",
                         entity_id=event.id,
@@ -399,13 +399,13 @@ async def send_morning_briefing(settings: Settings) -> None:
             if user.id in already_sent_ids:
                 continue
 
-            lines: list[str] = ["☀️ Доброе утро!"]
+            lines: list[str] = ["Доброе утро!"]
             for event in user_events:
                 start_str = event.start_datetime.strftime("%H:%M")
                 place_str = f" · {event.place}" if event.place else ""
                 resp = responses_map.get((user.id, event.id))
-                emoji = {"COMING": "✅", "NOT_COMING": "❌", "MAYBE": "⏳"}.get(resp.response_code if resp else "", "❓")
-                lines.append(f"{emoji} {event.title} в {start_str}{place_str}")
+                response_label = {"COMING": "Приду", "NOT_COMING": "Не приду", "MAYBE": "Уточню"}.get(resp.response_code if resp else "", "Без ответа")
+                lines.append(f"{response_label}: {event.title} в {start_str}{place_str}")
 
             # Commander extra: response summary (using pre-loaded responses)
             if user.role_code in COMMANDER_ROLE_CODES:
@@ -431,13 +431,13 @@ async def send_morning_briefing(settings: Settings) -> None:
                             not_coming += 1
                         else:
                             maybe += 1
-                    lines.append(f"\n📋 {event.title}: придут {coming}, нет {not_coming}, не ответили {no_answer}")
+                    lines.append(f"\n{event.title}: придут {coming}, нет {not_coming}, не ответили {no_answer}")
 
             session.add(
                 Notification(
                     user_id=user.id,
                     type_code="SYSTEM",
-                    title="☀️ Утренняя сводка",
+                    title="Утренняя сводка",
                     body="\n".join(lines),
                     entity_name="morning_briefing",
                     entity_id=0,
@@ -533,7 +533,7 @@ async def check_appeal_sla() -> None:
                             Notification(
                                 user_id=admin.id,
                                 type_code="URGENT",
-                                title=f"🚨 Эскалация: обращение #{appeal.id}",
+                                title=f"Эскалация: обращение #{appeal.id}",
                                 body=f"Обращение «{appeal.subject}» без ответа {int(age_h)} ч. Требует вмешательства.",
                                 entity_name="appeal_sla_escalate",
                                 entity_id=appeal.id,
@@ -646,7 +646,7 @@ async def check_low_attendance_and_grades() -> None:
                     Notification(
                         user_id=commander.id,
                         type_code="COMMANDER",
-                        title=f"⚠️ {user.full_name} — низкие показатели",
+                        title=f"{user.full_name} — низкие показатели",
                         body=f"У участника {user.full_name}: {problem_text}. Рекомендуем уделить внимание.",
                         entity_name="low_stats_warning",
                         entity_id=uid,
@@ -714,7 +714,7 @@ async def check_overdue_normatives() -> None:
                     Notification(
                         user_id=user.id,
                         type_code="NORMATIVE",
-                        title=f"📋 Норматив «{norm.title}» — осталось {days_left} д.",
+                        title=f"Норматив «{norm.title}» — осталось {days_left} д.",
                         body=f"Срок сдачи: {deadline_str}. Вы ещё не сдали. Откройте раздел «Нормативы».",
                         entity_name="normative_deadline_warn",
                         entity_id=norm.id,
@@ -737,7 +737,7 @@ _BIRTHDAY_ROLES = (
     "SUPER_ADMIN",
 )
 
-_DEFAULT_BIRTHDAY_TEMPLATE = "🎉 Поздравляем {name} с днём рождения! Желаем успехов и боевого духа!"
+_DEFAULT_BIRTHDAY_TEMPLATE = "Поздравляем {name} с днём рождения! Желаем успехов и боевого духа!"
 
 
 def _is_birthday_today(birth_date, today, leap_policy: str) -> bool:

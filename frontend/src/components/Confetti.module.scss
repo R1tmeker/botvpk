@@ -39,11 +39,22 @@
   }
 }
 
-.milestoneEmoji {
-  font-size: 52px;
-  line-height: 1;
-  display: block;
+.milestoneIcon {
+  width: 56px;
+  height: 56px;
+  display: inline-grid;
+  place-items: center;
+  justify-self: center;
+  border-radius: 16px;
+  color: #1a2f5a;
+  background: #eef5ff;
   animation: bounce 0.6s ease infinite alternate;
+
+  svg {
+    width: 34px;
+    height: 34px;
+    stroke-width: 2.2;
+  }
 }
 
 @keyframes popBounce {
@@ -59,4 +70,9 @@
 [data-theme="dark"] .milestoneCard {
   background: #1a2040;
   strong { color: #e8edf5; }
+
+  .milestoneIcon {
+    color: #e8edf5;
+    background: rgba(232, 237, 245, 0.12);
+  }
 }

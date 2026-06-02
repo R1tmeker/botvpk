@@ -136,9 +136,8 @@ async def activity_feed(
         )
     ).all()
     for rc, ts, name, event_title in resp_rows:
-        emoji = {"COMING": "✅", "NOT_COMING": "❌", "MAYBE": "⏳"}.get(rc, "❓")
         label = {"COMING": "ответил «Приду»", "NOT_COMING": "ответил «Не приду»", "MAYBE": "ответил «Уточню»"}.get(rc, "ответил")
-        feed.append({"type": "response", "text": f"{emoji} {name} {label} на «{event_title}»", "created_at": ts.isoformat()})
+        feed.append({"type": "response", "text": f"{name} {label} на «{event_title}»", "created_at": ts.isoformat()})
 
     # Normative submissions
     subm_rows = (
@@ -154,7 +153,7 @@ async def activity_feed(
         )
     ).all()
     for sc, ts, name in subm_rows:
-        feed.append({"type": "normative", "text": f"📋 {name} сдал норматив (статус: {sc})", "created_at": ts.isoformat()})
+        feed.append({"type": "normative", "text": f"{name} сдал норматив (статус: {sc})", "created_at": ts.isoformat()})
 
     # Appeals created
     appeal_rows = (
@@ -170,8 +169,8 @@ async def activity_feed(
         )
     ).all()
     for subject, urgency, ts, name in appeal_rows:
-        urgency_emoji = {"URGENT": "🚨", "HIGH": "⚠️", "NORMAL": "📝", "LOW": "💬"}.get(urgency, "📝")
-        feed.append({"type": "appeal", "text": f"{urgency_emoji} {name} отправил обращение: «{subject}»", "created_at": ts.isoformat()})
+        urgency_label = {"URGENT": "срочное", "HIGH": "важное", "NORMAL": "обычное", "LOW": "низкий приоритет"}.get(urgency, "обычное")
+        feed.append({"type": "appeal", "text": f"{name} отправил обращение ({urgency_label}): «{subject}»", "created_at": ts.isoformat()})
 
     # Recent attendance marks
     att_rows = (
@@ -188,10 +187,10 @@ async def activity_feed(
             .limit(15)
         )
     ).all()
-    status_emoji = {"PRESENT": "✅", "ABSENT": "❌", "LATE": "⏰", "EXCUSED": "📋", "SICK": "🤒"}
+    status_label = {"PRESENT": "присутствовал", "ABSENT": "отсутствовал", "LATE": "опоздал", "EXCUSED": "уважительная причина", "SICK": "болел"}
     for sc, ts, name, event_title in att_rows:
-        emoji = status_emoji.get(sc, "📝")
-        feed.append({"type": "attendance", "text": f"{emoji} {name} — {sc} на «{event_title}»", "created_at": ts.isoformat()})
+        label = status_label.get(sc, sc)
+        feed.append({"type": "attendance", "text": f"{name} — {label} на «{event_title}»", "created_at": ts.isoformat()})
 
     # Sort by created_at desc and limit
     feed.sort(key=lambda x: x["created_at"], reverse=True)

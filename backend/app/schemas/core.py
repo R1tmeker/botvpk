@@ -25,6 +25,8 @@ class UserRead(ORMModel):
     status_code: str
     birth_date: date | None = None
     phone: str | None = None
+    city: str | None = None
+    education_place: str | None = None
     linked_at: datetime | None = None
     created_at: datetime
     updated_at: datetime | None = None
@@ -40,6 +42,8 @@ class UserCreate(BaseModel):
     status_code: str = "ACTIVE"
     birth_date: date | None = None
     phone: str | None = None
+    city: str | None = None
+    education_place: str | None = None
 
 
 class UserUpdate(BaseModel):
@@ -52,6 +56,8 @@ class UserUpdate(BaseModel):
     status_code: str | None = None
     birth_date: date | None = None
     phone: str | None = None
+    city: str | None = None
+    education_place: str | None = None
 
 
 class UserSelfUpdate(BaseModel):

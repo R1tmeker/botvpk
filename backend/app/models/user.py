@@ -25,6 +25,8 @@ class User(Base):
     status_code: Mapped[str] = mapped_column(String(50), nullable=False, server_default="ACTIVE")
     birth_date: Mapped[date | None] = mapped_column(Date)
     phone: Mapped[str | None] = mapped_column(String(50))
+    city: Mapped[str | None] = mapped_column(String(255))
+    education_place: Mapped[str | None] = mapped_column(String(255))
     linked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ...config import Settings, get_settings
 from ...database import get_db_session
 from ...dependencies.auth import CurrentUser, require_role
 from ...models import Squad, User
@@ -232,6 +233,83 @@ async def export_users_xlsx(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": 'attachment; filename="roster.xlsx"'},
     )
+
+
+@router.post("/export.csv/send", status_code=200)
+async def export_users_csv_send(
+    squad_id: int | None = None,
+    search: str | None = None,
+    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_SQUAD_COMMANDER)),
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Generate CSV roster and send it to the requester via Telegram bot DM."""
+    from ...background import _get_bot
+    from aiogram.types import BufferedInputFile
+
+    statement = _build_users_query(current_user, squad_id, None, None, search, exclude_public=True)
+    users = [] if statement is None else list((await session.scalars(statement)).all())
+    squad_map = {s.id: s.name for s in (await session.scalars(select(Squad))).all()}
+    output = io.StringIO()
+    output.write("﻿")  # BOM for Cyrillic
+    writer = csv.writer(output, delimiter=";")
+    writer.writerow(EXPORT_COLUMNS)
+    for user in users:
+        writer.writerow(_user_to_row(user, squad_map))
+    data = output.getvalue().encode("utf-8")
+    bot = _get_bot(settings)
+    await bot.send_document(
+        current_user.telegram_id,
+        BufferedInputFile(data, filename="roster.csv"),
+        caption=f"Состав ВПК Звезда — {len(users)} чел.",
+    )
+    return {"sent": True, "count": len(users)}
+
+
+@router.post("/export.xlsx/send", status_code=200)
+async def export_users_xlsx_send(
+    squad_id: int | None = None,
+    search: str | None = None,
+    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_SQUAD_COMMANDER)),
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Generate XLSX roster and send it to the requester via Telegram bot DM."""
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+    except ImportError as exc:
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="openpyxl not installed.") from exc
+    from ...background import _get_bot
+    from aiogram.types import BufferedInputFile
+
+    statement = _build_users_query(current_user, squad_id, None, None, search, exclude_public=True)
+    users = [] if statement is None else list((await session.scalars(statement)).all())
+    squad_map = {s.id: s.name for s in (await session.scalars(select(Squad))).all()}
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Состав"
+    header_fill = PatternFill(fill_type="solid", fgColor="1a2f5a")
+    header_font = Font(bold=True, color="FFFFFF")
+    for col, title in enumerate(EXPORT_COLUMNS, 1):
+        cell = ws.cell(row=1, column=col, value=title)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+    for row_idx, user in enumerate(users, 2):
+        for col_idx, value in enumerate(_user_to_row(user, squad_map), 1):
+            ws.cell(row=row_idx, column=col_idx, value=value)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    data = buf.read()
+    bot = _get_bot(settings)
+    await bot.send_document(
+        current_user.telegram_id,
+        BufferedInputFile(data, filename="roster.xlsx"),
+        caption=f"Состав ВПК Звезда — {len(users)} чел.",
+    )
+    return {"sent": True, "count": len(users)}
 
 
 @router.patch("/{user_id}", response_model=UserRead)

@@ -40,7 +40,6 @@ import {
   useCreateJoinApplication,
   useCreateSquad,
   useDashboardSettings,
-  useExportReport,
   useGradesReport,
   useJoinEvents,
   useJoinMe,
@@ -116,8 +115,12 @@ import {
   useDeactivateUser,
   useAdminSettings,
   useUpdateSettings,
-  useExportUsersCSV,
-  useExportUsersXLSX,
+  usePublicUsers,
+  useExportCSVviaBot,
+  useExportXLSXviaBot,
+  useExportReportViaBot,
+  useGetFileBlob,
+  useSendFileToBotDM,
   useEventResponses,
   useJoinHistory,
   type ApplicationHistoryItem,
@@ -191,12 +194,198 @@ function FilePicker({ accept, onFile, label = "Прикрепить файл", c
 
 const FILE_PREVIEW_ACCEPT = "video/*,image/*,application/pdf";
 
+function toYouTubeEmbedUrl(url: string): string | null {
+  const m = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&?/]+)/);
+  if (m) return `https://www.youtube.com/embed/${m[1]}?autoplay=1`;
+  return null;
+}
+
+function VideoPlayerModal({ src, embedSrc, onClose }: { src?: string; embedSrc?: string; onClose: () => void }) {
+  return (
+    <div className={styles.videoOverlay} onClick={onClose}>
+      <div className={styles.videoModalBox} onClick={(e) => e.stopPropagation()}>
+        <button type="button" className={styles.videoCloseBtn} onClick={onClose} aria-label="Закрыть">✕</button>
+        {embedSrc ? (
+          <iframe
+            src={embedSrc}
+            className={styles.videoPlayer}
+            allowFullScreen
+            allow="autoplay; encrypted-media"
+            title="Видео"
+          />
+        ) : src ? (
+          <video src={src} controls autoPlay playsInline className={styles.videoPlayer} />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function VideoThumbnailCard({ title, isLoading, onClick }: { title: string; isLoading?: boolean; onClick: () => void }) {
+  return (
+    <div className={styles.videoCard} onClick={!isLoading ? onClick : undefined} role="button" tabIndex={0}>
+      <div className={styles.videoCardThumb}>
+        {isLoading ? (
+          <div className={styles.videoLoadingSpinner} />
+        ) : (
+          <svg width="52" height="52" viewBox="0 0 52 52" fill="white" aria-hidden="true">
+            <circle cx="26" cy="26" r="26" fill="rgba(0,0,0,0.55)" />
+            <path d="M21 18l16 8-16 8V18z" />
+          </svg>
+        )}
+      </div>
+      <div className={styles.videoCardMeta}>{title}</div>
+    </div>
+  );
+}
+
 function materialTypeFromMime(mimeType?: string | null) {
   if (!mimeType) return "FILE";
   if (mimeType.startsWith("video/")) return "VIDEO";
   if (mimeType.startsWith("image/")) return "IMAGE";
   if (mimeType === "application/pdf") return "PDF";
   return "FILE";
+}
+
+/* ─────────── ApplicantDetailDrawer ─────────── */
+const APP_STATUS_COLOR: Record<string, string> = {
+  NEW: "#1a2f5a",
+  REVIEWING: "#3498db",
+  NEEDS_INFO: "#f39c12",
+  INVITED_MEETING: "#9b59b6",
+  INVITED_NORMATIVES: "#e67e22",
+  AWAITING_DECISION: "#16a085",
+  ACCEPTED: "#27ae60",
+  REJECTED: "#e74c3c",
+  ARCHIVED: "#8a96b0",
+};
+
+function ApplicantDetailDrawer({
+  app,
+  publicUser,
+  rosterUser,
+  squads,
+  applicationSquad,
+  rejectReason,
+  isBusy,
+  onSquadChange,
+  onRejectReasonChange,
+  onInviteNormatives,
+  onAccept,
+  onReject,
+  onClose,
+}: {
+  app?: JoinApplication | null;
+  publicUser?: UserRecord | null;
+  rosterUser?: UserRecord | null;
+  squads: Squad[];
+  applicationSquad?: string;
+  rejectReason?: string;
+  isBusy: boolean;
+  onSquadChange?: (v: string) => void;
+  onRejectReasonChange?: (v: string) => void;
+  onInviteNormatives?: () => void;
+  onAccept?: () => void;
+  onReject?: () => void;
+  onClose: () => void;
+}) {
+  const item = app ?? publicUser ?? rosterUser;
+  if (!item) return null;
+
+  const statusLabel = app ? (applicationStatusLabels[app.status_code] ?? app.status_code) : null;
+  const statusColor = app ? (APP_STATUS_COLOR[app.status_code] ?? "#65708a") : null;
+
+  const isInvited = app && app.status_code === "INVITED_NORMATIVES";
+  const isNew = app && ["NEW", "REVIEWING", "NEEDS_INFO", "AWAITING_DECISION"].includes(app.status_code);
+  const isClosed = app && ["ACCEPTED", "REJECTED", "ARCHIVED"].includes(app.status_code);
+
+  const field = (label: string, value: string | null | undefined) =>
+    value ? (
+      <div className={styles.detailRow} key={label}>
+        <span className={styles.detailLabel}>{label}</span>
+        <span className={styles.detailValue}>{value}</span>
+      </div>
+    ) : null;
+
+  return (
+    <div className={styles.drawerOverlay} onClick={onClose}>
+      <div className={styles.drawerSheet} onClick={(e) => e.stopPropagation()}>
+        <div className={styles.drawerHandle} />
+        <div className={styles.drawerHeader}>
+          <div>
+            <strong className={styles.drawerName}>{item.full_name}</strong>
+            {item.username && <span className={styles.drawerUsername}>@{item.username}</span>}
+          </div>
+          {statusLabel && (
+            <span className={styles.drawerStageBadge} style={{ background: statusColor ?? "#65708a" }}>
+              {statusLabel}
+            </span>
+          )}
+        </div>
+
+        <div className={styles.detailGrid}>
+          {field("Telegram ID", String(item.telegram_id))}
+          {app && field("Дата подачи", formatDate(app.created_at))}
+          {!app && rosterUser && field("В составе с", formatDate(rosterUser.linked_at ?? rosterUser.created_at))}
+          {!app && publicUser && field("Нажал /start", formatDate(publicUser.created_at))}
+          {app?.birth_date && field("Дата рождения", formatShortDate(new Date(app.birth_date)))}
+          {!app && (item as UserRecord).birth_date && field("Дата рождения", formatShortDate(new Date((item as UserRecord).birth_date!)))}
+          {field("Телефон", app?.phone ?? (item as UserRecord).phone)}
+          {field("Город", app?.city ?? (item as UserRecord).city)}
+          {field("Учёба / работа", app?.education_place ?? (item as UserRecord).education_place)}
+          {app?.experience_text && field("Опыт", app.experience_text)}
+          {app?.motivation_text && (
+            <div className={styles.detailRow}>
+              <span className={styles.detailLabel}>Мотивация</span>
+              <span className={`${styles.detailValue} ${styles.detailLong}`}>{app.motivation_text}</span>
+            </div>
+          )}
+          {app?.source_text && field("Откуда узнал", app.source_text)}
+          {app?.comment && field("Комментарий", app.comment)}
+          {app?.admin_comment && field("Комментарий команды", app.admin_comment)}
+          {app?.decision_reason && field("Причина решения", app.decision_reason)}
+          {rosterUser && field("Отделение", squads.find((s) => s.id === rosterUser.squad_id)?.name ?? "—")}
+        </div>
+
+        {!isClosed && app && (
+          <div className={styles.drawerActions}>
+            <input
+              className={styles.drawerInput}
+              placeholder="Комментарий / причина"
+              value={rejectReason ?? ""}
+              onChange={(e) => onRejectReasonChange?.(e.target.value)}
+            />
+            {isNew && (
+              <button type="button" className={styles.drawerBtnWarning} disabled={isBusy} onClick={onInviteNormatives}>
+                Пригласить на нормативы
+              </button>
+            )}
+            {isInvited && (
+              <>
+                <select
+                  className={styles.drawerSelect}
+                  value={applicationSquad ?? ""}
+                  onChange={(e) => onSquadChange?.(e.target.value)}
+                  disabled={isBusy}
+                >
+                  <option value="">Выбрать отделение</option>
+                  {squads.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+                <button type="button" className={styles.drawerBtnSuccess} disabled={isBusy} onClick={onAccept}>
+                  Принять в состав
+                </button>
+              </>
+            )}
+            <button type="button" className={styles.drawerBtnDanger} disabled={isBusy} onClick={onReject}>
+              Отклонить
+            </button>
+          </div>
+        )}
+
+        <button type="button" className={styles.drawerCloseBtn} onClick={onClose}>Закрыть</button>
+      </div>
+    </div>
+  );
 }
 
 function apiErrorDetail(error: unknown): string | null {
@@ -957,7 +1146,7 @@ export function App({ webApp }: Props) {
                   {
                     onSuccess: () => {
                       hapticSuccess();
-                      const labels: Record<string, string> = { COMING: "Ответ «Приду» сохранён", NOT_COMING: "Ответ «Не приду» сохранён", MAYBE: "Ответ «Уточню» сохранён" };
+                      const labels: Record<string, string> = { COMING: "Ответ «Приду» сохранён", NOT_COMING: "Ответ «Не приду» сохранён", MAYBE: "Ответ «Пока не знаю» сохранён" };
                       toast(labels[responseCode] ?? "Ответ сохранён", "success");
                     },
                     onError: () => { hapticError(); toast("Не удалось сохранить ответ", "error"); },
@@ -1205,12 +1394,16 @@ function ResponseButtons({
   onRespond: RespondFn;
 }) {
   const [pickingReason, setPickingReason] = useState(false);
+  const [changing, setChanging] = useState(false);
   const [customReason, setCustomReason] = useState("");
   const reasons = useAbsenceReasons();
   const activeReasons = reasons.data?.filter((r) => r.is_active) ?? [];
 
-  const responseLabels: Record<string, string> = { COMING: "Приду", NOT_COMING: "Не приду", MAYBE: "Уточню" };
-  const responseStyles: Record<string, string> = { COMING: styles.btnComing, NOT_COMING: styles.btnNotComing, MAYBE: styles.btnMaybe };
+  const handleRespond = (code: string, reasonId?: number | null, custom?: string) => {
+    setChanging(false);
+    setPickingReason(false);
+    onRespond(eventId, code, reasonId, custom);
+  };
 
   if (pickingReason) {
     return (
@@ -1227,8 +1420,7 @@ function ResponseButtons({
                 if (reason.requires_comment) {
                   setCustomReason("");
                 } else {
-                  setPickingReason(false);
-                  onRespond(eventId, "NOT_COMING", reason.id, undefined);
+                  handleRespond("NOT_COMING", reason.id, undefined);
                 }
               }}
             >
@@ -1245,15 +1437,12 @@ function ResponseButtons({
             <button
               type="button"
               className={styles.btnNotComing}
-              onClick={() => {
-                setPickingReason(false);
-                onRespond(eventId, "NOT_COMING", null, customReason.trim());
-              }}
+              onClick={() => handleRespond("NOT_COMING", null, customReason.trim())}
             >
               Отправить причину
             </button>
           )}
-          <button type="button" className={styles.btnMaybeOutline} onClick={() => setPickingReason(false)}>
+          <button type="button" className={styles.btnMaybeOutline} onClick={() => { setPickingReason(false); setChanging(false); }}>
             Отмена
           </button>
         </div>
@@ -1261,23 +1450,14 @@ function ResponseButtons({
     );
   }
 
-  if (currentResponse) {
+  if (currentResponse && !changing) {
     return (
-      <div className={styles.actions} style={{ gridTemplateColumns: "1fr 1fr" }}>
-        <div className={responseStyles[currentResponse] ?? styles.btnMaybe} style={{ display: "grid", placeItems: "center", minHeight: 36, borderRadius: 10, fontSize: 12, fontWeight: 900 }}>
-          {responseLabels[currentResponse] ?? currentResponse}
-        </div>
+      <div className={styles.actions} style={{ gridTemplateColumns: "1fr" }}>
         <button
           type="button"
           className={styles.btnMaybeOutline}
-          onClick={() => {
-            const newCode = currentResponse === "COMING" ? "NOT_COMING" : "COMING";
-            if (newCode === "NOT_COMING" && requiresResponse) {
-              setPickingReason(true);
-            } else {
-              onRespond(eventId, newCode);
-            }
-          }}
+          style={{ gridColumn: "1/-1" }}
+          onClick={() => setChanging(true)}
         >
           Изменить ответ
         </button>
@@ -1290,7 +1470,7 @@ function ResponseButtons({
       <button
         type="button"
         className={styles.btnComingOutline}
-        onClick={() => onRespond(eventId, "COMING")}
+        onClick={() => handleRespond("COMING")}
       >
         Приду
       </button>
@@ -1301,7 +1481,7 @@ function ResponseButtons({
           if (requiresResponse) {
             setPickingReason(true);
           } else {
-            onRespond(eventId, "NOT_COMING");
+            handleRespond("NOT_COMING");
           }
         }}
       >
@@ -1310,9 +1490,9 @@ function ResponseButtons({
       <button
         type="button"
         className={styles.btnMaybeOutline}
-        onClick={() => onRespond(eventId, "MAYBE")}
+        onClick={() => handleRespond("MAYBE")}
       >
-        Уточню
+        Пока не знаю
       </button>
     </div>
   );
@@ -1935,7 +2115,7 @@ function EventVoterList({ eventId, squads, canView }: { eventId: number; squads:
     return acc;
   }, {}) ?? {};
 
-  const codeLabel: Record<string, string> = { COMING: "Идут", NOT_COMING: "Не идут", MAYBE: "Уточняют", NO_RESPONSE: "Без ответа" };
+  const codeLabel: Record<string, string> = { COMING: "Идут", NOT_COMING: "Не идут", MAYBE: "Пока не знают", NO_RESPONSE: "Без ответа" };
 
   return (
     <div style={{ gridColumn: "1/-1", marginTop: 4 }}>
@@ -2375,8 +2555,26 @@ function NormativesView({
   const archiveItems = items.filter((item) => !item.is_active);
   const upload = useUploadFile();
   const openFile = useOpenFile();
+  const getFileBlob = useGetFileBlob();
+  const sendFileToBotDM = useSendFileToBotDM();
+  const [videoModal, setVideoModal] = useState<{ src?: string; embedSrc?: string } | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<Record<number, Array<{ id: number; name: string }>>>({});
   const [comments, setComments] = useState<Record<number, string>>({});
+
+  const openVideoModal = async (url?: string | null, fileId?: number | null) => {
+    if (url) {
+      const embed = toYouTubeEmbedUrl(url);
+      setVideoModal(embed ? { embedSrc: embed } : { src: url });
+    } else if (fileId) {
+      try {
+        const blobUrl = await getFileBlob.mutateAsync(fileId);
+        setVideoModal({ src: blobUrl });
+      } catch {
+        toast("Не удалось загрузить видео", "error");
+      }
+    }
+  };
+
   const tabs: Array<["active" | "mine" | "pending" | "accepted" | "archive", string]> = [
     ["active", "Активные"],
     ...(canSubmit ? ([["mine", "Мои сдачи"]] as Array<["mine", string]>) : []),
@@ -2400,6 +2598,16 @@ function NormativesView({
 
   return (
     <div className={styles.panel}>
+      {videoModal && (
+        <VideoPlayerModal
+          src={videoModal.src}
+          embedSrc={videoModal.embedSrc}
+          onClose={() => {
+            if (videoModal.src?.startsWith("blob:")) URL.revokeObjectURL(videoModal.src);
+            setVideoModal(null);
+          }}
+        />
+      )}
       <div className={styles.panelHeader}>
         <h2>Нормативы</h2>
         <span>{activeItems.length} активных</span>
@@ -2452,21 +2660,11 @@ function NormativesView({
                   <span>{item.description ?? "описание будет добавлено"} · до {formatDate(item.deadline_at)}</span>
                 </div>
                 {(item.instruction_video_url || item.instruction_video_file_id) && (
-                  <div className={styles.filePreviewActions}>
-                    <button
-                      type="button"
-                      disabled={openFile.isPending}
-                      onClick={() => {
-                        if (item.instruction_video_url) {
-                          window.open(item.instruction_video_url, "_blank");
-                        } else if (item.instruction_video_file_id) {
-                          openFile.mutate({ fileId: item.instruction_video_file_id });
-                        }
-                      }}
-                    >
-                      {openFile.isPending ? "Открываем..." : "Смотреть видео выполнения"}
-                    </button>
-                  </div>
+                  <VideoThumbnailCard
+                    title="Смотреть видео выполнения"
+                    isLoading={getFileBlob.isPending}
+                    onClick={() => openVideoModal(item.instruction_video_url, item.instruction_video_file_id)}
+                  />
                 )}
                 {acceptedThisWeek ? (
                   <div className={styles.normLocked}>
@@ -2548,18 +2746,11 @@ function NormativesView({
                 <span>{item.description ?? "закрытый норматив"} · до {formatDate(item.deadline_at)}</span>
               </div>
               {(item.instruction_video_url || item.instruction_video_file_id) && (
-                <div className={styles.filePreviewActions}>
-                  <button
-                    type="button"
-                    disabled={openFile.isPending}
-                    onClick={() => {
-                      if (item.instruction_video_url) window.open(item.instruction_video_url, "_blank");
-                      else if (item.instruction_video_file_id) openFile.mutate({ fileId: item.instruction_video_file_id });
-                    }}
-                  >
-                    {openFile.isPending ? "Открываем..." : "Смотреть видео выполнения"}
-                  </button>
-                </div>
+                <VideoThumbnailCard
+                  title="Смотреть видео выполнения"
+                  isLoading={getFileBlob.isPending}
+                  onClick={() => openVideoModal(item.instruction_video_url, item.instruction_video_file_id)}
+                />
               )}
             </article>
           ))
@@ -2988,7 +3179,7 @@ function ReportsView({
   normatives?: ReportSummary;
 }) {
   const [tab, setTab] = useState<"attendance" | "grades" | "normatives" | "export">("attendance");
-  const exportReport = useExportReport();
+  const exportReport = useExportReportViaBot();
   const tabs: Array<[typeof tab, string]> = [["attendance", "Явка"], ["grades", "Оценки"], ["normatives", "Нормативы"]];
   if (level >= 6) tabs.push(["export", "Экспорт"]);
   const activeReport = tab === "grades" ? grades : tab === "normatives" ? normatives : attendance;
@@ -3040,16 +3231,21 @@ function ReportsView({
         <div className={styles.dashboardStack}>
           <div className={styles.nextItem}>
             <span>Экспорт данных</span>
-            <strong>Скачать сводный отчёт CSV</strong>
-            <small>Включает явку, оценки, нормативы и заявки</small>
+            <strong>Сводный отчёт CSV</strong>
+            <small>Бот отправит файл в личные сообщения</small>
           </div>
           <div className={styles.commandStrip}>
             <button
               type="button"
               disabled={exportReport.isPending}
-              onClick={() => { exportReport.mutate(); toast("Файл формируется...", "info"); }}
+              onClick={() => {
+                exportReport.mutate(undefined, {
+                  onSuccess: () => toast("CSV отправлен в личные сообщения", "success"),
+                  onError: () => toast("Не удалось отправить", "error"),
+                });
+              }}
             >
-              {exportReport.isPending ? "Формируем..." : "Скачать CSV"}
+              {exportReport.isPending ? "Отправляем..." : "Получить CSV"}
             </button>
           </div>
         </div>
@@ -3129,8 +3325,25 @@ function ReportsView({
 function LearningView({ items, courses, canTrack }: { items: LearningMaterial[]; courses: LearningCourse[]; canTrack: boolean }) {
   const [tab, setTab] = useState<"main" | "candidates" | "courses">("main");
   const [selectedCourseId, setSelectedCourseId] = useState<number | null>(null);
+  const [videoModal, setVideoModal] = useState<{ src?: string; embedSrc?: string } | null>(null);
   const markViewed = useMarkMaterialViewed();
   const openFile = useOpenFile();
+  const getFileBlob = useGetFileBlob();
+  const sendFileToBotDM = useSendFileToBotDM();
+
+  const openVideoModal = async (url?: string | null, fileId?: number | null) => {
+    if (url) {
+      const embed = toYouTubeEmbedUrl(url);
+      setVideoModal(embed ? { embedSrc: embed } : { src: url });
+    } else if (fileId) {
+      try {
+        const blobUrl = await getFileBlob.mutateAsync(fileId);
+        setVideoModal({ src: blobUrl });
+      } catch {
+        toast("Не удалось загрузить видео", "error");
+      }
+    }
+  };
   const audienceItems = items.filter((item) => {
     if (tab === "candidates") return item.audience_code === "CANDIDATE";
     return item.audience_code !== "CANDIDATE";
@@ -3151,6 +3364,16 @@ function LearningView({ items, courses, canTrack }: { items: LearningMaterial[];
 
   return (
     <div className={styles.panel}>
+      {videoModal && (
+        <VideoPlayerModal
+          src={videoModal.src}
+          embedSrc={videoModal.embedSrc}
+          onClose={() => {
+            if (videoModal.src?.startsWith("blob:")) URL.revokeObjectURL(videoModal.src);
+            setVideoModal(null);
+          }}
+        />
+      )}
       <div className={styles.panelHeader}>
         <h2>Материалы</h2>
         <span>{visibleItems.length} доступно</span>
@@ -3171,31 +3394,45 @@ function LearningView({ items, courses, canTrack }: { items: LearningMaterial[];
           <Empty text={tab === "candidates" ? "Материалы отбора появятся после публикации" : "Материалы основного состава появятся после публикации"} />
         )}
         {tab !== "courses" && visibleItems.map((item) => (
-          <article className={styles.row} key={item.id} style={{ cursor: item.external_url || item.file_id ? "pointer" : "default" }}
-            onClick={() => {
-              if (item.external_url) {
-                if (canTrack) markViewed.mutate(item.id);
-                window.open(item.external_url, "_blank");
-                return;
-              }
-              if (item.file_id) {
-                if (canTrack) markViewed.mutate(item.id);
-                openFile.mutate({ fileId: item.file_id });
-              }
-            }}
-          >
+          <article className={styles.row} key={item.id} style={{ cursor: "default" }}>
             <AppIcon code="learning" />
             <div>
               <strong>{item.title}</strong>
               <span>{typeLabels[item.type_code] ?? item.type_code} · {item.description ?? "материал подготовки"}{item.duration_minutes ? ` · ${item.duration_minutes} мин` : ""}</span>
             </div>
-            {(item.external_url || item.file_id) && (
+            {(item.external_url || item.file_id) && (item.type_code === "VIDEO" ? (
+              <VideoThumbnailCard
+                title={item.external_url ? "Смотреть видео" : "Смотреть видео"}
+                isLoading={getFileBlob.isPending}
+                onClick={() => openVideoModal(item.external_url, item.file_id)}
+              />
+            ) : (
               <div className={styles.filePreviewActions}>
-                <button type="button" disabled={openFile.isPending}>
-                  {item.external_url ? "Открыть материал" : openFile.isPending ? "Открываем..." : item.type_code === "VIDEO" ? "Смотреть видео" : "Открыть файл"}
-                </button>
+                {item.file_id && (
+                  <button
+                    type="button"
+                    disabled={sendFileToBotDM.isPending}
+                    onClick={() => sendFileToBotDM.mutate(item.file_id!, {
+                      onSuccess: () => toast("Файл отправлен в личные сообщения", "success"),
+                      onError: () => toast("Не удалось отправить файл", "error"),
+                    })}
+                  >
+                    {sendFileToBotDM.isPending ? "Отправляем..." : "Отправить в бота"}
+                  </button>
+                )}
+                {item.external_url && (
+                  <button type="button" onClick={() => {
+                    if (typeof window !== "undefined" && (window as unknown as Record<string, unknown>).Telegram) {
+                      (window as unknown as { Telegram: { WebApp: { openLink: (url: string) => void } } }).Telegram.WebApp.openLink(item.external_url!);
+                    } else {
+                      window.open(item.external_url!, "_blank");
+                    }
+                  }}>
+                    Открыть материал
+                  </button>
+                )}
               </div>
-            )}
+            ))}
           </article>
         ))}
         {tab === "courses" && courses.length === 0 && <Empty text="Курсы появятся после публикации" />}
@@ -3790,6 +4027,11 @@ function AdminView({
   const [userSearch, setUserSearch] = useState("");
   const [appStatusFilter, setAppStatusFilter] = useState("");
   const [logFilter, setLogFilter] = useState({ action_code: "", entity_name: "" });
+  const [pipelineStage, setPipelineStage] = useState<"start" | "applied" | "invited" | "roster">("applied");
+  const [drawerApp, setDrawerApp] = useState<JoinApplication | null>(null);
+  const [drawerPublicUser, setDrawerPublicUser] = useState<UserRecord | null>(null);
+  const [drawerRosterUser, setDrawerRosterUser] = useState<UserRecord | null>(null);
+  const publicUsers = usePublicUsers(tab === "applications");
   const [newNorm, setNewNorm] = useState({
     title: "",
     description: "",
@@ -3867,6 +4109,21 @@ function AdminView({
   const updateMaterial = useUpdateLearningMaterial();
   const uploadLearningFile = useUploadFile();
   const openFile = useOpenFile();
+  const getFileBlob = useGetFileBlob();
+  const [videoModal, setVideoModal] = useState<{ src?: string; embedSrc?: string } | null>(null);
+  const openVideoModal = async (url?: string | null, fileId?: number | null) => {
+    if (url) {
+      const embed = toYouTubeEmbedUrl(url);
+      setVideoModal(embed ? { embedSrc: embed } : { src: url });
+    } else if (fileId) {
+      try {
+        const blobUrl = await getFileBlob.mutateAsync(fileId);
+        setVideoModal({ src: blobUrl });
+      } catch {
+        toast("Не удалось загрузить видео", "error");
+      }
+    }
+  };
   const createCourse = useCreateLearningCourse();
   const updateCourse = useUpdateLearningCourse();
   const auditFiltered = useAdminAuditFiltered(
@@ -3875,8 +4132,8 @@ function AdminView({
   );
   const adminSettings = useAdminSettings(tab === "settings" && level >= 9);
   const updateSettings = useUpdateSettings();
-  const exportCSV = useExportUsersCSV();
-  const exportXLSX = useExportUsersXLSX();
+  const exportCSV = useExportCSVviaBot();
+  const exportXLSX = useExportXLSXviaBot();
   const [settingsDraft, setSettingsDraft] = useState<Record<string, string>>({});
 
   const squadMap = new Map(squads.map((s) => [s.id, s.name]));
@@ -3979,6 +4236,16 @@ function AdminView({
 
   return (
     <div className={styles.panel}>
+      {videoModal && (
+        <VideoPlayerModal
+          src={videoModal.src}
+          embedSrc={videoModal.embedSrc}
+          onClose={() => {
+            if (videoModal.src?.startsWith("blob:")) URL.revokeObjectURL(videoModal.src);
+            setVideoModal(null);
+          }}
+        />
+      )}
       <div className={styles.panelHeader}>
         <h2>Админка</h2>
         <span className={styles.adminAccessPill} data-tone={level >= 8 ? "admin" : level >= 6 ? "commander" : "squad"}>
@@ -4093,16 +4360,22 @@ function AdminView({
                     <button
                       type="button"
                       disabled={exportCSV.isPending}
-                      onClick={() => exportCSV.mutate({ search: userSearch || undefined })}
+                      onClick={() => exportCSV.mutate(
+                        { search: userSearch || undefined },
+                        { onSuccess: () => toast("CSV отправлен в личные сообщения", "success"), onError: () => toast("Не удалось отправить CSV", "error") },
+                      )}
                     >
-                      {exportCSV.isPending ? "Готовим..." : "CSV"}
+                      {exportCSV.isPending ? "Отправляем..." : "CSV в бот"}
                     </button>
                     <button
                       type="button"
                       disabled={exportXLSX.isPending}
-                      onClick={() => exportXLSX.mutate({ search: userSearch || undefined })}
+                      onClick={() => exportXLSX.mutate(
+                        { search: userSearch || undefined },
+                        { onSuccess: () => toast("Excel отправлен в личные сообщения", "success"), onError: () => toast("Не удалось отправить Excel", "error") },
+                      )}
                     >
-                      {exportXLSX.isPending ? "Готовим..." : "Excel"}
+                      {exportXLSX.isPending ? "Отправляем..." : "Excel в бот"}
                     </button>
                   </div>
                 </details>
@@ -4431,113 +4704,150 @@ function AdminView({
             </>
           )}
 
-          {/* ── Applications ── */}
+          {/* ── Applications (Pipeline) ── */}
           {tab === "applications" && (() => {
-            const newApps = (applications ?? []).filter((a) => !["ACCEPTED", "REJECTED", "ARCHIVED", "INVITED_NORMATIVES"].includes(a.status_code));
-            const invitedNorms = (applications ?? []).filter((a) => a.status_code === "INVITED_NORMATIVES");
-            const closedApps = (applications ?? []).filter((a) => ["ACCEPTED", "REJECTED", "ARCHIVED"].includes(a.status_code));
+            const startUsers = publicUsers.data ?? [];
+            const appliedApps = (applications ?? []).filter((a) => ["NEW", "REVIEWING", "NEEDS_INFO", "AWAITING_DECISION"].includes(a.status_code));
+            const invitedApps = (applications ?? []).filter((a) => ["INVITED_MEETING", "INVITED_NORMATIVES"].includes(a.status_code));
+            const rosterMembers = (users ?? []).filter((u) => !["PUBLIC_USER", "CANDIDATE", "USER_PENDING"].includes(u.role_code));
 
-            const renderApp = (item: JoinApplication, stage: "new" | "invited" | "closed") => (
-              <article className={styles.row} key={item.id}>
-                <AppIcon code="my_squad" />
-                <div>
-                  <strong>{item.full_name}</strong>
-                  <span>
-                    {applicationStatusLabels[item.status_code] ?? item.status_code}
-                    {item.phone ? ` · ${formatPhoneDisplay(item.phone)}` : ""}
-                  </span>
-                  {(item.city || item.education_place) && (
-                    <span>{[item.city, item.education_place].filter(Boolean).join(" · ")}</span>
-                  )}
-                  {item.admin_comment && <span style={{ color: "#65708a" }}>Комментарий: {item.admin_comment}</span>}
+            const stages: Array<{ key: typeof pipelineStage; label: string; count: number; color: string }> = [
+              { key: "start", label: "/start", count: startUsers.length, color: "#64708b" },
+              { key: "applied", label: "Заявки", count: appliedApps.length, color: "#1a2f5a" },
+              { key: "invited", label: "Приглашены", count: invitedApps.length, color: "#e67e22" },
+              { key: "roster", label: "Состав", count: rosterMembers.length, color: "#27ae60" },
+            ];
+
+            const PipelineRow = ({ name, sub, date, badge, badgeColor, onClick }: {
+              name: string; sub?: string; date?: string; badge?: string; badgeColor?: string; onClick: () => void;
+            }) => (
+              <div className={styles.pipelineRow} onClick={onClick} role="button" tabIndex={0}>
+                <div className={styles.pipelineRowInfo}>
+                  <strong>{name}</strong>
+                  {sub && <span>{sub}</span>}
                 </div>
-                {stage !== "closed" && (
-                  <div className={styles.applicationActions}>
-                    <input
-                      value={rejectReasons[item.id] ?? ""}
-                      disabled={isBusy}
-                      placeholder="Комментарий / причина отказа"
-                      onChange={(event) => setRejectReasons((prev) => ({ ...prev, [item.id]: event.target.value }))}
-                    />
-                    {stage === "new" && (
-                      <button
-                        type="button"
-                        className={styles.btnMaybe}
-                        disabled={isBusy}
-                        style={{ background: "#f39c12", borderColor: "#f39c12", color: "#fff" }}
-                        onClick={() => updateApplication.mutate(
-                          { id: item.id, status_code: "INVITED_NORMATIVES", admin_comment: rejectReasons[item.id] || undefined },
-                          { onSuccess: () => toast("Приглашён на нормативы", "info") },
-                        )}
-                      >
-                        Пригласить на нормативы
-                      </button>
-                    )}
-                    {stage === "invited" && (
-                      <>
-                        <select
-                          value={applicationSquads[item.id] ?? ""}
-                          disabled={isBusy}
-                          onChange={(event) => setApplicationSquads((prev) => ({ ...prev, [item.id]: event.target.value }))}
-                        >
-                          <option value="">Выбрать отделение</option>
-                          {squads.map((squad) => (
-                            <option key={squad.id} value={squad.id}>{squad.name}</option>
-                          ))}
-                        </select>
-                        <button
-                          type="button"
-                          className={styles.btnComing}
-                          disabled={isBusy}
-                          onClick={() => {
-                            const squadId = applicationSquads[item.id];
-                            onAccept(item.id, squadId ? Number(squadId) : null);
-                          }}
-                        >
-                          Принять в состав
-                        </button>
-                      </>
-                    )}
-                    <button
-                      type="button"
-                      className={styles.btnNotComing}
-                      disabled={isBusy}
-                      onClick={() => onReject(item.id, rejectReasons[item.id]?.trim() || undefined)}
-                    >
-                      Отклонить
-                    </button>
-                  </div>
-                )}
-              </article>
+                <div className={styles.pipelineRowMeta}>
+                  {date && <span className={styles.pipelineDate}>{date}</span>}
+                  {badge && <span className={styles.pipelineBadge} style={{ background: badgeColor ?? "#65708a" }}>{badge}</span>}
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: "#c0c8da", flexShrink: 0 }}><path d="M9 18l6-6-6-6"/></svg>
+                </div>
+              </div>
             );
 
             return (
               <>
-                {newApps.length > 0 && (
-                  <>
-                    <div className={styles.sectionHeader} style={{ background: "#1a2f5a", color: "#fff", borderRadius: 10, padding: "8px 12px", marginBottom: 8 }}>
-                      <strong style={{ color: "#fff" }}>Новые заявки ({newApps.length})</strong>
-                    </div>
-                    {newApps.map((item) => renderApp(item, "new"))}
-                  </>
+                {/* Funnel stage tabs */}
+                <div className={styles.pipelineStages}>
+                  {stages.map((s) => (
+                    <button
+                      key={s.key}
+                      type="button"
+                      className={styles.pipelineStageTab}
+                      data-active={pipelineStage === s.key}
+                      style={pipelineStage === s.key ? { borderColor: s.color, color: s.color } : undefined}
+                      onClick={() => setPipelineStage(s.key)}
+                    >
+                      <span className={styles.pipelineStageCount} style={pipelineStage === s.key ? { background: s.color } : undefined}>{s.count}</span>
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Stage content */}
+                <div className={styles.pipelineTable}>
+                  {pipelineStage === "start" && (
+                    startUsers.length === 0
+                      ? <div className={styles.pipelineEmpty}>Нет пользователей, нажавших /start</div>
+                      : startUsers.map((u) => (
+                        <PipelineRow
+                          key={u.telegram_id}
+                          name={u.full_name}
+                          sub={u.username ? `@${u.username}` : `TG ${u.telegram_id}`}
+                          date={formatShortDate(new Date(u.created_at))}
+                          onClick={() => { setDrawerPublicUser(u); setDrawerApp(null); setDrawerRosterUser(null); }}
+                        />
+                      ))
+                  )}
+
+                  {pipelineStage === "applied" && (
+                    appliedApps.length === 0
+                      ? <div className={styles.pipelineEmpty}>Новых заявок нет</div>
+                      : appliedApps.map((a) => (
+                        <PipelineRow
+                          key={a.id}
+                          name={a.full_name}
+                          sub={a.username ? `@${a.username}` : a.phone ? formatPhoneDisplay(a.phone) : undefined}
+                          date={formatShortDate(new Date(a.created_at))}
+                          badge={applicationStatusLabels[a.status_code] ?? a.status_code}
+                          badgeColor={APP_STATUS_COLOR[a.status_code]}
+                          onClick={() => { setDrawerApp(a); setDrawerPublicUser(null); setDrawerRosterUser(null); }}
+                        />
+                      ))
+                  )}
+
+                  {pipelineStage === "invited" && (
+                    invitedApps.length === 0
+                      ? <div className={styles.pipelineEmpty}>Нет приглашённых</div>
+                      : invitedApps.map((a) => (
+                        <PipelineRow
+                          key={a.id}
+                          name={a.full_name}
+                          sub={a.username ? `@${a.username}` : a.phone ? formatPhoneDisplay(a.phone) : undefined}
+                          date={formatShortDate(new Date(a.created_at))}
+                          badge={applicationStatusLabels[a.status_code] ?? a.status_code}
+                          badgeColor={APP_STATUS_COLOR[a.status_code]}
+                          onClick={() => { setDrawerApp(a); setDrawerPublicUser(null); setDrawerRosterUser(null); }}
+                        />
+                      ))
+                  )}
+
+                  {pipelineStage === "roster" && (
+                    rosterMembers.length === 0
+                      ? <div className={styles.pipelineEmpty}>Состав пуст</div>
+                      : rosterMembers.map((u) => (
+                        <PipelineRow
+                          key={u.telegram_id}
+                          name={u.full_name}
+                          sub={u.username ? `@${u.username}` : squads.find((s) => s.id === u.squad_id)?.name}
+                          date={u.linked_at ? formatShortDate(new Date(u.linked_at)) : undefined}
+                          badge={squads.find((s) => s.id === u.squad_id)?.name}
+                          badgeColor="#27ae60"
+                          onClick={() => { setDrawerRosterUser(u); setDrawerApp(null); setDrawerPublicUser(null); }}
+                        />
+                      ))
+                  )}
+                </div>
+
+                {/* Detail drawer */}
+                {(drawerApp || drawerPublicUser || drawerRosterUser) && (
+                  <ApplicantDetailDrawer
+                    app={drawerApp}
+                    publicUser={drawerPublicUser}
+                    rosterUser={drawerRosterUser}
+                    squads={squads}
+                    applicationSquad={drawerApp ? applicationSquads[drawerApp.id] : undefined}
+                    rejectReason={drawerApp ? rejectReasons[drawerApp.id] : undefined}
+                    isBusy={isBusy}
+                    onSquadChange={(v) => drawerApp && setApplicationSquads((prev) => ({ ...prev, [drawerApp.id]: v }))}
+                    onRejectReasonChange={(v) => drawerApp && setRejectReasons((prev) => ({ ...prev, [drawerApp.id]: v }))}
+                    onInviteNormatives={() => drawerApp && updateApplication.mutate(
+                      { id: drawerApp.id, status_code: "INVITED_NORMATIVES", admin_comment: rejectReasons[drawerApp.id] || undefined },
+                      { onSuccess: () => { toast("Приглашён на нормативы", "info"); setDrawerApp(null); } },
+                    )}
+                    onAccept={() => {
+                      if (!drawerApp) return;
+                      const squadId = applicationSquads[drawerApp.id];
+                      onAccept(drawerApp.id, squadId ? Number(squadId) : null);
+                      setDrawerApp(null);
+                    }}
+                    onReject={() => {
+                      if (!drawerApp) return;
+                      onReject(drawerApp.id, rejectReasons[drawerApp.id]?.trim() || undefined);
+                      setDrawerApp(null);
+                    }}
+                    onClose={() => { setDrawerApp(null); setDrawerPublicUser(null); setDrawerRosterUser(null); }}
+                  />
                 )}
-                {invitedNorms.length > 0 && (
-                  <>
-                    <div className={styles.sectionHeader} style={{ background: "#f39c12", color: "#fff", borderRadius: 10, padding: "8px 12px", marginTop: 12, marginBottom: 8 }}>
-                      <strong style={{ color: "#fff" }}>Приглашены на нормативы ({invitedNorms.length})</strong>
-                    </div>
-                    {invitedNorms.map((item) => renderApp(item, "invited"))}
-                  </>
-                )}
-                {closedApps.length > 0 && (
-                  <>
-                    <div className={styles.sectionHeader} style={{ background: "#8a96b0", color: "#fff", borderRadius: 10, padding: "8px 12px", marginTop: 12, marginBottom: 8 }}>
-                      <strong style={{ color: "#fff" }}>Завершённые ({closedApps.length})</strong>
-                    </div>
-                    {closedApps.map((item) => renderApp(item, "closed"))}
-                  </>
-                )}
-                {(newApps.length + invitedNorms.length + closedApps.length) === 0 && <Empty text="Заявок нет" />}
               </>
             );
           })()}
@@ -4777,10 +5087,10 @@ function AdminView({
                     {norm.instruction_video_file_id && (
                       <button
                         type="button"
-                        disabled={openFile.isPending}
-                        onClick={() => openFile.mutate({ fileId: norm.instruction_video_file_id ?? undefined })}
+                        disabled={getFileBlob.isPending}
+                        onClick={() => openVideoModal(null, norm.instruction_video_file_id)}
                       >
-                        {openFile.isPending ? "Открываем..." : "Смотреть видеофайл"}
+                        {getFileBlob.isPending ? "Загружаем..." : "Смотреть видеофайл"}
                       </button>
                     )}
                     <input
@@ -4950,10 +5260,12 @@ function AdminView({
                     {mat.file_id && (
                       <button
                         type="button"
-                        disabled={openFile.isPending}
-                        onClick={() => openFile.mutate({ fileId: mat.file_id ?? undefined })}
+                        disabled={getFileBlob.isPending}
+                        onClick={() => mat.type_code === "VIDEO"
+                          ? openVideoModal(null, mat.file_id)
+                          : openFile.mutate({ fileId: mat.file_id ?? undefined })}
                       >
-                        {openFile.isPending ? "Открываем..." : mat.type_code === "VIDEO" ? "Смотреть видео" : "Открыть файл"}
+                        {getFileBlob.isPending ? "Загружаем..." : mat.type_code === "VIDEO" ? "Смотреть видео" : "Открыть файл"}
                       </button>
                     )}
                     <FilePicker
@@ -5347,6 +5659,7 @@ function SubmissionRow({
   isBusy?: boolean;
 }) {
   const openFile = useOpenFile();
+  const sendToBot = useSendFileToBotDM();
   const [reviewComment, setReviewComment] = useState("");
   const fileIds = item.file_ids?.length ? item.file_ids : (item.file_id ? [item.file_id] : []);
   const statusColors: Record<string, string> = {
@@ -5381,7 +5694,7 @@ function SubmissionRow({
           const tgFileId = tgMatch[1];
           return (
             <div className={styles.filePreviewActions}>
-              <small style={{ color: "#65708a", fontSize: 11, fontWeight: 700 }}>Файл отправлен через бот</small>
+              <small style={{ color: "#65708a", fontSize: 11, fontWeight: 700 }}>Файл загружен через бот</small>
               <button
                 type="button"
                 disabled={openFile.isPending}
@@ -5399,10 +5712,13 @@ function SubmissionRow({
                 <button
                   key={fileId}
                   type="button"
-                  disabled={openFile.isPending}
-                  onClick={() => openFile.mutate({ fileId })}
+                  disabled={sendToBot.isPending}
+                  onClick={() => sendToBot.mutate(fileId, {
+                    onSuccess: () => toast("Файл отправлен в личные сообщения", "success"),
+                    onError: () => toast("Не удалось отправить файл", "error"),
+                  })}
                 >
-                  {openFile.isPending ? "Открываем..." : `Открыть файл ${fileIds.length > 1 ? index + 1 : ""}`.trim()}
+                  {sendToBot.isPending ? "Отправляем..." : `Отправить в бота${fileIds.length > 1 ? ` (${index + 1})` : ""}`}
                 </button>
               ))}
             </div>

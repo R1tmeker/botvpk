@@ -1408,6 +1408,68 @@ export function useExportUsersXLSX() {
   });
 }
 
+export function useExportCSVviaBot() {
+  return useMutation({
+    mutationFn: async (params: { squad_id?: number | null; search?: string }) => {
+      const q = new URLSearchParams();
+      if (params.squad_id) q.set("squad_id", String(params.squad_id));
+      if (params.search) q.set("search", params.search);
+      await api.post(`/admin/users/export.csv/send?${q}`);
+    },
+  });
+}
+
+export function useExportXLSXviaBot() {
+  return useMutation({
+    mutationFn: async (params: { squad_id?: number | null; search?: string }) => {
+      const q = new URLSearchParams();
+      if (params.squad_id) q.set("squad_id", String(params.squad_id));
+      if (params.search) q.set("search", params.search);
+      await api.post(`/admin/users/export.xlsx/send?${q}`);
+    },
+  });
+}
+
+export function useExportReportViaBot() {
+  return useMutation({
+    mutationFn: async (params?: { squad_id?: number | null }) => {
+      const q = new URLSearchParams();
+      if (params?.squad_id) q.set("squad_id", String(params.squad_id));
+      await api.post(`/reports/export/send?${q}`);
+    },
+  });
+}
+
+export function useGetFileBlob() {
+  return useMutation({
+    mutationFn: async (fileId: number): Promise<string> => {
+      const response = await api.get(`/files/${fileId}/download`, { responseType: "blob" });
+      const mimeType = String(response.headers["content-type"] ?? "video/mp4");
+      const blob = new Blob([response.data as BlobPart], { type: mimeType });
+      return URL.createObjectURL(blob);
+    },
+  });
+}
+
+export function useSendFileToBotDM() {
+  return useMutation({
+    mutationFn: async (fileId: number) => {
+      await api.post(`/files/${fileId}/send-to-tg`);
+    },
+  });
+}
+
+export function usePublicUsers(enabled: boolean) {
+  return useQuery({
+    queryKey: ["admin", "users", "public_only"],
+    queryFn: async () => {
+      const { data } = await api.get<UserRecord[]>("/admin/users?exclude_public=false&role_code=PUBLIC_USER");
+      return data;
+    },
+    enabled,
+  });
+}
+
 export function useActivityFeed(enabled: boolean) {
   return useQuery({
     queryKey: ["reports", "activity-feed"],

@@ -102,7 +102,7 @@ def event_keyboard(event_id: int) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="Приду", callback_data=f"event:{event_id}:COMING"),
                 InlineKeyboardButton(text="Не приду", callback_data=f"event:{event_id}:NOT_COMING"),
-                InlineKeyboardButton(text="Уточню", callback_data=f"event:{event_id}:MAYBE"),
+                InlineKeyboardButton(text="Пока не знаю", callback_data=f"event:{event_id}:MAYBE"),
             ]
         ]
     )

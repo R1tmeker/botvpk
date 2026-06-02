@@ -18,12 +18,14 @@ from .models import (
     EventResponse,
     Normative,
     NormativeSubmission,
+    NormativeSubmissionFile,
     Notification,
     ScheduleEvent,
     Setting,
     Squad,
     User,
 )
+from .models.file import File as StoredFile
 from .utils.audit import utcnow
 
 logger = logging.getLogger(__name__)
@@ -115,7 +117,7 @@ def _build_notification_keyboard(notification: Notification, settings: Settings)
         return InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="Приду", callback_data=f"event:{event_id}:COMING"),
             InlineKeyboardButton(text="Не приду", callback_data=f"event:{event_id}:NOT_COMING"),
-            InlineKeyboardButton(text="Уточню", callback_data=f"event:{event_id}:MAYBE"),
+            InlineKeyboardButton(text="Пока не знаю", callback_data=f"event:{event_id}:MAYBE"),
         ]])
     if notification.type_code == "NORMATIVE" and notification.entity_id and "Новая сдача" in (notification.title or ""):
         submission_id = notification.entity_id
@@ -133,6 +135,44 @@ def _build_notification_keyboard(notification: Notification, settings: Settings)
             InlineKeyboardButton(text="Открыть приложение", web_app=WebAppInfo(url=settings.mini_app_url)),
         ]])
     return None
+
+
+async def _send_submission_files(bot: Bot, telegram_id: int, submission_id: int, session: AsyncSession) -> None:
+    """Send files attached to a normative submission to the user via bot."""
+    from pathlib import Path
+    from aiogram.types import FSInputFile
+
+    submission = await session.get(NormativeSubmission, submission_id)
+    if not submission:
+        return
+    # Files uploaded via web app
+    sub_files = list((await session.scalars(
+        select(NormativeSubmissionFile).where(NormativeSubmissionFile.submission_id == submission_id)
+    )).all())
+    for sub_file in sub_files:
+        stored = await session.get(StoredFile, sub_file.file_id)
+        if not stored:
+            continue
+        try:
+            if stored.telegram_file_id:
+                await bot.send_document(telegram_id, stored.telegram_file_id)
+            elif stored.file_path and Path(stored.file_path).exists():
+                await bot.send_document(
+                    telegram_id,
+                    FSInputFile(stored.file_path, filename=stored.original_name or Path(stored.file_path).name),
+                )
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to send submission file %s to %s", sub_file.file_id, telegram_id)
+    # Files submitted via bot (stored as [tg_file_id] in comment)
+    if submission.comment and "[" in submission.comment:
+        start = submission.comment.find("[") + 1
+        end = submission.comment.find("]", start)
+        if end > start:
+            tg_file_id = submission.comment[start:end]
+            try:
+                await bot.send_document(telegram_id, tg_file_id)
+            except Exception:  # noqa: BLE001
+                logger.warning("Failed to forward bot submission file for submission_id=%s", submission_id)
 
 
 async def send_pending_tg_notifications(settings: Settings) -> None:
@@ -159,6 +199,13 @@ async def send_pending_tg_notifications(settings: Settings) -> None:
                 text = notification.title if not notification.body else f"{notification.title}\n\n{notification.body}"
                 keyboard = _build_notification_keyboard(notification, settings)
                 await bot.send_message(telegram_id, text, reply_markup=keyboard)
+                # For normative review results, send the submitted files to the user
+                if (
+                    notification.type_code == "NORMATIVE"
+                    and notification.entity_id
+                    and "Новая сдача" not in (notification.title or "")
+                ):
+                    await _send_submission_files(bot, telegram_id, notification.entity_id, session)
                 notification.tg_sent_at = utcnow()
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to send notification id=%s", notification.id)
@@ -294,8 +341,15 @@ async def send_event_reminders_2h() -> None:
                 ).all()
             )
             for user in users:
-                # Skip duplicate
-                if await _notification_exists(session, user_id=user.id, type_code="SCHEDULE", entity_name="schedule_events_2h", entity_id=event.id):
+                # Skip duplicate (check any 2h notification for this user+event regardless of type)
+                existing_2h = await session.scalar(
+                    select(Notification.id).where(
+                        Notification.user_id == user.id,
+                        Notification.entity_name == "schedule_events_2h",
+                        Notification.entity_id == event.id,
+                    )
+                )
+                if existing_2h:
                     continue
                 response = await _get_user_event_response(session, user.id, event.id)
                 rc = response.response_code if response else None
@@ -303,16 +357,20 @@ async def send_event_reminders_2h() -> None:
                 place_str = f" • {event.place}" if event.place else ""
                 if rc == "COMING":
                     body = f"Через 2 часа занятие «{event.title}»!\n{start_str}{place_str}\nВы сказали «Приду»"
+                    type_code = "SCHEDULE"
                 elif rc == "NOT_COMING":
                     body = f"Напоминание: «{event.title}» в {start_str}. Вы не придёте — причина записана."
+                    type_code = "SCHEDULE"
                 elif rc == "MAYBE":
-                    body = f"«{event.title}» через 2 часа ({start_str}{place_str}).\nВы ещё не решили! Пожалуйста, ответьте."
+                    body = f"«{event.title}» через 2 часа ({start_str}{place_str}).\nВы сказали «Пока не знаю» — пора определиться!"
+                    type_code = "SCHEDULE_POLL"
                 else:
                     body = f"Через 2 часа занятие «{event.title}»!\n{start_str}{place_str}\nВы ещё не ответили — не забудьте!"
+                    type_code = "SCHEDULE_POLL"
                 session.add(
                     Notification(
                         user_id=user.id,
-                        type_code="SCHEDULE",
+                        type_code=type_code,
                         title=f"Скоро: {event.title}",
                         body=body,
                         entity_name="schedule_events_2h",
@@ -404,7 +462,7 @@ async def send_morning_briefing(settings: Settings) -> None:
                 start_str = event.start_datetime.strftime("%H:%M")
                 place_str = f" · {event.place}" if event.place else ""
                 resp = responses_map.get((user.id, event.id))
-                response_label = {"COMING": "Приду", "NOT_COMING": "Не приду", "MAYBE": "Уточню"}.get(resp.response_code if resp else "", "Без ответа")
+                response_label = {"COMING": "Приду", "NOT_COMING": "Не приду", "MAYBE": "Пока не знаю"}.get(resp.response_code if resp else "", "Без ответа")
                 lines.append(f"{response_label}: {event.title} в {start_str}{place_str}")
 
             # Commander extra: response summary (using pre-loaded responses)

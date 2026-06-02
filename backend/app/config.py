@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     bot_username: str | None = Field(None, alias="BOT_USERNAME")
     telegram_init_data_max_age_seconds: int = Field(0, alias="TELEGRAM_INIT_DATA_MAX_AGE_SECONDS")
     uploads_dir: Path = Field(Path("uploads"), alias="UPLOADS_DIR")
-    max_upload_size_mb: int = Field(20, alias="MAX_UPLOAD_SIZE_MB")
+    max_upload_size_mb: int = Field(200, alias="MAX_UPLOAD_SIZE_MB")
     dryrun: bool = Field(False, alias="DRYRUN")
     super_admin_id: int | None = Field(None, validation_alias=AliasChoices("SUPER_ADMIN_ID", "SUPER_ADMIN_TG_ID"))
 

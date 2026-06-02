@@ -112,6 +112,40 @@ async def upload_file(
     return stored
 
 
+@router.post("/{file_id}/send-to-tg", status_code=200)
+async def send_file_to_tg(
+    file_id: int,
+    current_user: CurrentUser = Depends(require_role(RoleLevel.CANDIDATE)),
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Send a stored file to the requesting user via Telegram bot DM."""
+    from pathlib import Path
+    from aiogram.types import FSInputFile, BufferedInputFile
+    from ..background import _get_bot
+
+    stored = await session.get(StoredFile, file_id)
+    if not stored:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found.")
+    await _check_file_access(stored, current_user, session)
+    bot = _get_bot(settings)
+    try:
+        if stored.telegram_file_id:
+            await bot.send_document(current_user.telegram_id, stored.telegram_file_id)
+        elif stored.file_path and Path(stored.file_path).exists():
+            await bot.send_document(
+                current_user.telegram_id,
+                FSInputFile(stored.file_path, filename=stored.original_name or Path(stored.file_path).name),
+            )
+        else:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File data not available.")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to send file via bot.") from exc
+    return {"sent": True}
+
+
 def _learning_audience_visible(audience_code: str, current_user: CurrentUser) -> bool:
     if audience_code == "ALL" or audience_code == current_user.role_code:
         return True

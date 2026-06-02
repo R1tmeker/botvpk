@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select, union_all, literal
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import Settings, get_settings
 from ..database import get_db_session
 from ..dependencies.auth import CurrentUser, require_role
 from ..models import Appeal, Attendance, AttendanceGrade, EventResponse, JoinApplication, NormativeSubmission, ScheduleEvent, User
@@ -108,6 +109,38 @@ async def export_report(
     )
 
 
+@router.post("/export/send", status_code=200)
+async def export_report_send(
+    squad_id: int | None = None,
+    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_PLATOON_COMMANDER)),
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Generate report CSV and send it to the requester via Telegram bot DM."""
+    from ..background import _get_bot
+    from aiogram.types import BufferedInputFile
+
+    attendance = await attendance_report(squad_id, current_user, session)
+    grades = await grades_report(squad_id, current_user, session)
+    normatives = await normatives_report(squad_id, current_user, session)
+    applications = await applications_report(current_user, session)
+    output = io.StringIO()
+    writer = csv.writer(output, delimiter=";")
+    writer.writerow(["section", "key", "value", "count"])
+    for section in [attendance, grades, normatives, applications]:
+        for item in section.items:
+            key, value = next(((k, v) for k, v in item.items() if k != "count"), ("item", ""))
+            writer.writerow([section.title, key, value, item.get("count", "")])
+    data = output.getvalue().encode("utf-8")
+    bot = _get_bot(settings)
+    await bot.send_document(
+        current_user.telegram_id,
+        BufferedInputFile(data, filename="vpk-report.csv"),
+        caption="Сводный отчёт ВПК Звезда",
+    )
+    return {"sent": True}
+
+
 @router.get("/activity-feed", response_model=list[dict])
 async def activity_feed(
     limit: int = 40,
@@ -136,7 +169,7 @@ async def activity_feed(
         )
     ).all()
     for rc, ts, name, event_title in resp_rows:
-        label = {"COMING": "ответил «Приду»", "NOT_COMING": "ответил «Не приду»", "MAYBE": "ответил «Уточню»"}.get(rc, "ответил")
+        label = {"COMING": "ответил «Приду»", "NOT_COMING": "ответил «Не приду»", "MAYBE": "ответил «Пока не знаю»"}.get(rc, "ответил")
         feed.append({"type": "response", "text": f"{name} {label} на «{event_title}»", "created_at": ts.isoformat()})
 
     # Normative submissions

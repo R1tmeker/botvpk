@@ -181,6 +181,8 @@ export type NormativeSubmission = {
   id: number;
   normative_id: number;
   user_id: number;
+  normative_title: string | null;
+  user_full_name: string | null;
   status_code: string;
   file_id: number | null;
   file_ids: number[];
@@ -188,6 +190,7 @@ export type NormativeSubmission = {
   reviewer_comment: string | null;
   grade_value: string | null;
   reviewed_by_id: number | null;
+  reviewer_full_name: string | null;
   reviewed_at: string | null;
   submitted_at: string;
   updated_at: string | null;

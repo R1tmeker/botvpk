@@ -10,6 +10,7 @@ from ..schemas.core import NormativeReviewRequest, NormativeSubmissionRead
 from .normatives import my_submissions as list_my_normative_submissions
 from .normatives import pending_submissions as list_pending_normative_submissions
 from .normatives import review_submission as review_normative_submission
+from .normatives import submission_history as list_normative_submission_history
 
 router = APIRouter(prefix="/submissions", tags=["submissions"])
 
@@ -25,17 +26,27 @@ async def my_submissions(
 @router.get("/pending", response_model=list[NormativeSubmissionRead])
 async def pending_submissions(
     squad_id: int | None = None,
-    current_user: CurrentUser = Depends(require_role(RoleLevel.SQUAD_COMMANDER)),
+    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_SQUAD_COMMANDER)),
     session: AsyncSession = Depends(get_db_session),
 ):
     return await list_pending_normative_submissions(squad_id, current_user, session)
+
+
+@router.get("/history", response_model=list[NormativeSubmissionRead])
+async def submission_history(
+    status_code: str | None = None,
+    squad_id: int | None = None,
+    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_SQUAD_COMMANDER)),
+    session: AsyncSession = Depends(get_db_session),
+):
+    return await list_normative_submission_history(status_code, squad_id, current_user, session)
 
 
 @router.patch("/{submission_id}/review", response_model=NormativeSubmissionRead)
 async def review_submission(
     submission_id: int,
     payload: NormativeReviewRequest,
-    current_user: CurrentUser = Depends(require_role(RoleLevel.SQUAD_COMMANDER)),
+    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_SQUAD_COMMANDER)),
     session: AsyncSession = Depends(get_db_session),
 ):
     return await review_normative_submission(submission_id, payload, current_user, session)

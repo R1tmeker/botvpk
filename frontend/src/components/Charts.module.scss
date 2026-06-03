@@ -4,8 +4,8 @@
 }
 
 .donut {
-  transform: rotate(-90deg);
   flex-shrink: 0;
+  overflow: visible;
 }
 
 .donutArc {
@@ -14,16 +14,16 @@
 }
 
 .donutLabel {
-  transform: rotate(90deg);
-  transform-origin: center;
   font-size: 18px;
   font-weight: 900;
   fill: #1a2f5a;
+  paint-order: stroke;
+  stroke: #fff;
+  stroke-width: 2px;
+  stroke-linejoin: round;
 }
 
 .donutSublabel {
-  transform: rotate(90deg);
-  transform-origin: center;
   font-size: 10px;
   font-weight: 800;
   fill: #8a96b0;

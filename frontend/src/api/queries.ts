@@ -27,6 +27,19 @@ import type {
   UserRecord,
 } from "../types/api";
 
+const LIVE_QUERY_OPTIONS = {
+  refetchInterval: 8000,
+  refetchIntervalInBackground: true,
+  refetchOnMount: "always",
+  refetchOnReconnect: true,
+  refetchOnWindowFocus: true,
+} as const;
+
+const FAST_QUERY_OPTIONS = {
+  ...LIVE_QUERY_OPTIONS,
+  refetchInterval: 5000,
+} as const;
+
 export function useTelegramAuth() {
   return useMutation({
     mutationFn: async (initData: string) => {
@@ -133,6 +146,7 @@ export function useSchedule(enabled: boolean) {
       return data;
     },
     enabled,
+    ...FAST_QUERY_OPTIONS,
   });
 }
 
@@ -166,6 +180,7 @@ export function useNormatives(enabled: boolean, includeInactive = false) {
       return data;
     },
     enabled,
+    ...LIVE_QUERY_OPTIONS,
   });
 }
 
@@ -177,6 +192,7 @@ export function useMyNormativeSubmissions(enabled: boolean) {
       return data;
     },
     enabled,
+    ...FAST_QUERY_OPTIONS,
   });
 }
 
@@ -188,6 +204,21 @@ export function usePendingNormativeSubmissions(enabled: boolean) {
       return data;
     },
     enabled,
+    ...FAST_QUERY_OPTIONS,
+  });
+}
+
+export function useNormativeSubmissionsHistory(enabled: boolean, statusCode = "ALL") {
+  return useQuery({
+    queryKey: ["normatives", "submissions", "history", statusCode],
+    queryFn: async () => {
+      const { data } = await api.get<NormativeSubmission[]>("/submissions/history", {
+        params: statusCode && statusCode !== "ALL" ? { status_code: statusCode } : undefined,
+      });
+      return data;
+    },
+    enabled,
+    ...FAST_QUERY_OPTIONS,
   });
 }
 
@@ -199,6 +230,7 @@ export function useNotifications(enabled: boolean) {
       return data;
     },
     enabled,
+    ...LIVE_QUERY_OPTIONS,
   });
 }
 
@@ -210,6 +242,7 @@ export function useAnnouncements(enabled: boolean) {
       return data;
     },
     enabled,
+    ...FAST_QUERY_OPTIONS,
   });
 }
 
@@ -221,6 +254,7 @@ export function useAttendanceReport(enabled: boolean) {
       return data;
     },
     enabled,
+    ...FAST_QUERY_OPTIONS,
   });
 }
 
@@ -232,6 +266,7 @@ export function useGradesReport(enabled: boolean) {
       return data;
     },
     enabled,
+    ...FAST_QUERY_OPTIONS,
   });
 }
 
@@ -243,6 +278,7 @@ export function useNormativesReport(enabled: boolean) {
       return data;
     },
     enabled,
+    ...FAST_QUERY_OPTIONS,
   });
 }
 
@@ -287,6 +323,7 @@ export function usePromo(enabled: boolean) {
       return data;
     },
     enabled,
+    ...FAST_QUERY_OPTIONS,
   });
 }
 
@@ -298,6 +335,7 @@ export function useDashboardSettings(enabled: boolean) {
       return data;
     },
     enabled,
+    ...FAST_QUERY_OPTIONS,
   });
 }
 
@@ -320,6 +358,7 @@ export function useAdminUsers(enabled: boolean) {
       return data;
     },
     enabled,
+    ...FAST_QUERY_OPTIONS,
   });
 }
 
@@ -342,6 +381,7 @@ export function useAdminPromo(enabled: boolean) {
       return data;
     },
     enabled,
+    ...FAST_QUERY_OPTIONS,
   });
 }
 
@@ -399,6 +439,7 @@ export function useEventResponses(eventId: number | null, enabled: boolean) {
       return data;
     },
     enabled: enabled && eventId !== null,
+    ...FAST_QUERY_OPTIONS,
   });
 }
 
@@ -423,7 +464,11 @@ export function useRespondEvent() {
       });
       return data;
     },
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
+      queryClient.setQueryData<ScheduleEvent[]>(["schedule"], (items) =>
+        items?.map((event) => event.id === variables.eventId ? { ...event, my_response_code: variables.responseCode } : event) ?? items,
+      );
+      queryClient.invalidateQueries({ queryKey: ["schedule", "event", variables.eventId, "responses"] });
       queryClient.invalidateQueries({ queryKey: ["schedule"] });
     },
   });
@@ -526,14 +571,20 @@ export function useSubmitNormative() {
       const { data } = await api.post(`/normatives/${normativeId}/submit`, { comment, file_id: ids[0] ?? undefined, file_ids: ids });
       return data;
     },
-    onSuccess: () => {
+    onSuccess: (submission) => {
+      queryClient.setQueryData<NormativeSubmission[]>(["normatives", "submissions", "my"], (items) => {
+        const list = items ?? [];
+        return [submission, ...list.filter((item) => item.id !== submission.id)];
+      });
       queryClient.invalidateQueries({ queryKey: ["normatives", "submissions", "my"] });
       queryClient.invalidateQueries({ queryKey: ["normatives", "submissions", "pending"] });
+      queryClient.invalidateQueries({ queryKey: ["normatives", "submissions", "history"] });
     },
   });
 }
 
 export function useReviewSubmission() {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({
       submissionId,
@@ -546,12 +597,24 @@ export function useReviewSubmission() {
       reviewerComment?: string;
       gradeValue?: string;
     }) => {
-      const { data } = await api.patch(`/submissions/${submissionId}/review`, {
+      const { data } = await api.patch<NormativeSubmission>(`/submissions/${submissionId}/review`, {
         status_code: statusCode,
         reviewer_comment: reviewerComment,
         grade_value: gradeValue,
       });
       return data;
+    },
+    onSuccess: (submission) => {
+      queryClient.setQueryData<NormativeSubmission[]>(["normatives", "submissions", "pending"], (items) =>
+        items?.filter((item) => item.id !== submission.id) ?? items,
+      );
+      queryClient.setQueriesData<NormativeSubmission[]>({ queryKey: ["normatives", "submissions", "history"] }, (items) => {
+        const list = items ?? [];
+        return [submission, ...list.filter((item) => item.id !== submission.id)];
+      });
+      queryClient.invalidateQueries({ queryKey: ["normatives", "submissions", "my"] });
+      queryClient.invalidateQueries({ queryKey: ["normatives", "submissions", "pending"] });
+      queryClient.invalidateQueries({ queryKey: ["normatives", "submissions", "history"] });
     },
   });
 }
@@ -571,8 +634,38 @@ export function useUpdateDashboardSettings() {
       const { data } = await api.patch<DashboardSetting[]>("/dashboard/settings", { items });
       return data;
     },
+    onMutate: async (items) => {
+      await queryClient.cancelQueries({ queryKey: ["dashboard", "settings"] });
+      const previous = queryClient.getQueryData<DashboardSetting[]>(["dashboard", "settings"]);
+      const now = new Date().toISOString();
+      queryClient.setQueryData<DashboardSetting[]>(["dashboard", "settings"], (current) => {
+        const existing = current ?? previous ?? [];
+        const byCode = new Map(existing.map((item) => [item.block_code, item]));
+        const userId = existing[0]?.user_id ?? 0;
+        return items
+          .map((item, index) => {
+            const old = byCode.get(item.block_code);
+            return {
+              id: old?.id ?? -(index + 1),
+              user_id: old?.user_id ?? userId,
+              block_code: item.block_code,
+              sort_order: item.sort_order,
+              is_hidden: item.is_hidden,
+              is_pinned: item.is_pinned,
+              view_mode_code: item.view_mode_code ?? null,
+              updated_at: old?.updated_at ?? now,
+            };
+          })
+          .sort((left, right) => left.sort_order - right.sort_order);
+      });
+      return { previous };
+    },
+    onError: (_error, _items, context) => {
+      if (context?.previous) queryClient.setQueryData(["dashboard", "settings"], context.previous);
+    },
     onSuccess: (data) => {
       queryClient.setQueryData(["dashboard", "settings"], data);
+      queryClient.invalidateQueries({ queryKey: ["dashboard", "settings"] });
     },
   });
 }
@@ -581,11 +674,12 @@ export function useResetDashboardSettings() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async () => {
-      const { data } = await api.post<DashboardSetting[]>("/dashboard/settings/reset");
+      const { data } = await api.post<{ detail: string }>("/dashboard/settings/reset");
       return data;
     },
-    onSuccess: (data) => {
-      queryClient.setQueryData(["dashboard", "settings"], data);
+    onSuccess: () => {
+      queryClient.setQueryData(["dashboard", "settings"], []);
+      queryClient.invalidateQueries({ queryKey: ["dashboard", "settings"] });
     },
   });
 }
@@ -811,10 +905,22 @@ export function useUpdatePromoBlock() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ id, ...payload }: { id: number; is_active?: boolean; title?: string; body?: string | null; button_text?: string | null; button_url?: string | null; style_code?: string; audience_code?: string; sort_order?: number }) => {
-      const { data } = await api.patch(`/admin/promo/${id}`, payload);
+      const { data } = await api.patch<PromoBlock>(`/admin/promo/${id}`, payload);
       return data;
     },
-    onSuccess: () => {
+    onSuccess: (block) => {
+      queryClient.setQueryData<PromoBlock[]>(["admin", "promo"], (items) => {
+        const list = items ?? [];
+        const next = list.some((item) => item.id === block.id)
+          ? list.map((item) => (item.id === block.id ? block : item))
+          : [block, ...list];
+        return next.sort((left, right) => left.sort_order - right.sort_order || right.id - left.id);
+      });
+      queryClient.setQueryData<PromoBlock[]>(["promo", "active"], (items) => {
+        const list = (items ?? []).filter((item) => item.id !== block.id);
+        if (!block.is_active) return list;
+        return [block, ...list].sort((left, right) => left.sort_order - right.sort_order || right.id - left.id);
+      });
       queryClient.invalidateQueries({ queryKey: ["admin", "promo"] });
       queryClient.invalidateQueries({ queryKey: ["promo", "active"] });
     },
@@ -828,8 +934,15 @@ export function useDeletePromoBlock() {
       const { data } = await api.delete(`/admin/promo/${id}`);
       return data;
     },
-    onSuccess: () => {
+    onSuccess: (_data, id) => {
+      queryClient.setQueryData<PromoBlock[]>(["admin", "promo"], (items) =>
+        items?.filter((item) => item.id !== id) ?? items,
+      );
+      queryClient.setQueryData<PromoBlock[]>(["promo", "active"], (items) =>
+        items?.filter((item) => item.id !== id) ?? items,
+      );
       queryClient.invalidateQueries({ queryKey: ["admin", "promo"] });
+      queryClient.invalidateQueries({ queryKey: ["promo", "active"] });
     },
   });
 }
@@ -1014,6 +1127,7 @@ export function useAdminSchedule(enabled: boolean) {
       return data;
     },
     enabled,
+    ...FAST_QUERY_OPTIONS,
   });
 }
 
@@ -1036,6 +1150,7 @@ export function useScheduleTemplates(enabled: boolean) {
       return data;
     },
     enabled,
+    ...FAST_QUERY_OPTIONS,
   });
 }
 
@@ -1074,7 +1189,15 @@ export function useCreateScheduleEvent() {
       const { data } = await api.post<ScheduleEvent>("/schedule/events", payload);
       return data;
     },
-    onSuccess: () => {
+    onSuccess: (event) => {
+      queryClient.setQueryData<ScheduleEvent[]>(["admin", "schedule"], (items) => {
+        const list = items ?? [];
+        return [...list.filter((item) => item.id !== event.id), event].sort((a, b) => a.start_datetime.localeCompare(b.start_datetime));
+      });
+      queryClient.setQueryData<ScheduleEvent[]>(["schedule"], (items) => {
+        const list = items ?? [];
+        return [...list.filter((item) => item.id !== event.id), event].sort((a, b) => a.start_datetime.localeCompare(b.start_datetime));
+      });
       queryClient.invalidateQueries({ queryKey: ["admin", "schedule"] });
       queryClient.invalidateQueries({ queryKey: ["schedule"] });
     },
@@ -1088,7 +1211,10 @@ export function useUpdateScheduleEvent() {
       const { data } = await api.patch<ScheduleEvent>(`/schedule/events/${id}`, payload);
       return data;
     },
-    onSuccess: () => {
+    onSuccess: (event) => {
+      const update = (items: ScheduleEvent[] | undefined) => items?.map((item) => item.id === event.id ? event : item) ?? items;
+      queryClient.setQueryData<ScheduleEvent[]>(["admin", "schedule"], update);
+      queryClient.setQueryData<ScheduleEvent[]>(["schedule"], update);
       queryClient.invalidateQueries({ queryKey: ["admin", "schedule"] });
       queryClient.invalidateQueries({ queryKey: ["schedule"] });
     },
@@ -1102,8 +1228,33 @@ export function useCreateScheduleTemplate() {
       const { data } = await api.post<ScheduleTemplate>("/schedule/templates", payload);
       return data;
     },
-    onSuccess: () => {
+    onSuccess: (template) => {
+      queryClient.setQueryData<ScheduleTemplate[]>(["admin", "schedule", "templates"], (items) => [template, ...(items ?? [])]);
       queryClient.invalidateQueries({ queryKey: ["admin", "schedule", "templates"] });
+    },
+  });
+}
+
+export function useDeleteScheduleTemplate() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: number) => {
+      const { data } = await api.delete(`/schedule/templates/${id}`);
+      return data;
+    },
+    onSuccess: (_data, id) => {
+      queryClient.setQueryData<ScheduleTemplate[]>(["admin", "schedule", "templates"], (items) =>
+        items?.filter((template) => template.id !== id) ?? items,
+      );
+      queryClient.setQueryData<ScheduleEvent[]>(["admin", "schedule"], (items) =>
+        items?.map((event) => event.template_id === id ? { ...event, status_code: "CANCELLED" } : event) ?? items,
+      );
+      queryClient.setQueryData<ScheduleEvent[]>(["schedule"], (items) =>
+        items?.map((event) => event.template_id === id ? { ...event, status_code: "CANCELLED" } : event) ?? items,
+      );
+      queryClient.invalidateQueries({ queryKey: ["admin", "schedule", "templates"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "schedule"] });
+      queryClient.invalidateQueries({ queryKey: ["schedule"] });
     },
   });
 }
@@ -1115,7 +1266,14 @@ export function useGenerateScheduleTemplate() {
       const { data } = await api.post<ScheduleEvent[]>(`/schedule/templates/${id}/generate?days=${days}`);
       return data;
     },
-    onSuccess: () => {
+    onSuccess: (events) => {
+      const mergeEvents = (items: ScheduleEvent[] | undefined) => {
+        const byId = new Map((items ?? []).map((item) => [item.id, item]));
+        for (const event of events) byId.set(event.id, event);
+        return Array.from(byId.values()).sort((a, b) => a.start_datetime.localeCompare(b.start_datetime));
+      };
+      queryClient.setQueryData<ScheduleEvent[]>(["admin", "schedule"], mergeEvents);
+      queryClient.setQueryData<ScheduleEvent[]>(["schedule"], mergeEvents);
       queryClient.invalidateQueries({ queryKey: ["admin", "schedule"] });
       queryClient.invalidateQueries({ queryKey: ["schedule"] });
     },
@@ -1127,8 +1285,13 @@ export function useDeleteScheduleEvent() {
   return useMutation({
     mutationFn: async (id: number) => {
       await api.delete(`/schedule/events/${id}`);
+      return id;
     },
-    onSuccess: () => {
+    onSuccess: (id) => {
+      const markCancelled = (items: ScheduleEvent[] | undefined) =>
+        items?.map((item) => item.id === id ? { ...item, status_code: "CANCELLED" } : item) ?? items;
+      queryClient.setQueryData<ScheduleEvent[]>(["admin", "schedule"], markCancelled);
+      queryClient.setQueryData<ScheduleEvent[]>(["schedule"], markCancelled);
       queryClient.invalidateQueries({ queryKey: ["admin", "schedule"] });
       queryClient.invalidateQueries({ queryKey: ["schedule"] });
     },
@@ -1155,7 +1318,13 @@ export function useAdminUpdateUser() {
       const { data } = await api.patch<UserRecord>(`/admin/users/${userId}`, payload);
       return data;
     },
-    onSuccess: () => {
+    onSuccess: (user) => {
+      queryClient.setQueryData<UserRecord[]>(["admin", "users"], (items) =>
+        items?.map((item) => (item.id === user.id ? user : item)) ?? items,
+      );
+      queryClient.setQueryData<UserRecord[]>(["users"], (items) =>
+        items?.map((item) => (item.id === user.id ? user : item)) ?? items,
+      );
       queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
       queryClient.invalidateQueries({ queryKey: ["users"] });
     },
@@ -1169,8 +1338,15 @@ export function useDeactivateUser() {
       const { data } = await api.patch<UserRecord>(`/admin/users/${userId}/deactivate`);
       return data;
     },
-    onSuccess: () => {
+    onSuccess: (user) => {
+      queryClient.setQueryData<UserRecord[]>(["admin", "users"], (items) =>
+        items?.map((item) => (item.id === user.id ? user : item)) ?? items,
+      );
+      queryClient.setQueryData<UserRecord[]>(["users"], (items) =>
+        items?.map((item) => (item.id === user.id ? user : item)) ?? items,
+      );
       queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+      queryClient.invalidateQueries({ queryKey: ["users"] });
     },
   });
 }
@@ -1183,6 +1359,7 @@ export function useNormativesAdmin(enabled: boolean) {
       return data;
     },
     enabled,
+    ...LIVE_QUERY_OPTIONS,
   });
 }
 

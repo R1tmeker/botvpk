@@ -57,7 +57,15 @@ export function DonutChart({
 
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className={styles.donut}>
-      <circle cx={cx} cy={cx} r={r} fill="none" stroke="#e8ecf0" strokeWidth={strokeWidth} />
+      <circle
+        cx={cx}
+        cy={cx}
+        r={r}
+        fill="none"
+        stroke="#e8ecf0"
+        strokeWidth={strokeWidth}
+        transform={`rotate(-90 ${cx} ${cx})`}
+      />
       {arcs.map((arc, i) => (
         <circle
           key={i}
@@ -70,6 +78,7 @@ export function DonutChart({
           strokeDasharray={`${arc.dash} ${arc.gap}`}
           strokeDashoffset={arc.startOffset}
           strokeLinecap="round"
+          transform={`rotate(-90 ${cx} ${cx})`}
           className={styles.donutArc}
           style={{ animationDelay: `${i * 0.1}s` }}
         />

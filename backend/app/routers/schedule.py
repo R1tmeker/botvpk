@@ -362,6 +362,50 @@ async def update_template(
     return template
 
 
+@router.delete("/templates/{template_id}", response_model=MessageResponse)
+async def delete_template(
+    template_id: int,
+    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_PLATOON_COMMANDER)),
+    session: AsyncSession = Depends(get_db_session),
+) -> MessageResponse:
+    template = await session.get(ScheduleTemplate, template_id)
+    if not template:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found.")
+    if not can_manage_squad(current_user, template.squad_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot manage this template.")
+
+    old = model_snapshot(template, ["is_active"])
+    template.is_active = False
+
+    now = utcnow()
+    future_events = list(
+        (
+            await session.scalars(
+                select(ScheduleEvent).where(
+                    ScheduleEvent.template_id == template.id,
+                    ScheduleEvent.status_code != "CANCELLED",
+                    ScheduleEvent.start_datetime >= now,
+                )
+            )
+        ).all()
+    )
+    for event in future_events:
+        event.status_code = "CANCELLED"
+        event.updated_at = now
+
+    await record_audit(
+        session,
+        user_id=current_user.user_id,
+        action_code="schedule_template.archive",
+        entity_name="schedule_templates",
+        entity_id=template.id,
+        old_value=old,
+        new_value={"is_active": False, "cancelled_future_events": len(future_events)},
+    )
+    await session.commit()
+    return MessageResponse(detail=f"Template archived. Cancelled future events: {len(future_events)}.")
+
+
 @router.post("/templates/{template_id}/generate", response_model=list[ScheduleEventRead])
 async def generate_template_events(
     template_id: int,
@@ -372,6 +416,8 @@ async def generate_template_events(
     template = await session.get(ScheduleTemplate, template_id)
     if not template:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found.")
+    if not template.is_active:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Template is archived.")
     if not can_manage_squad(current_user, template.squad_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot manage this template.")
     week_a_start = None
@@ -380,9 +426,20 @@ async def generate_template_events(
         if week_a_start is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="schedule_week_a_start is required for templates with week_parity A/B.",
+                detail="schedule_week_a_start is required for templates with week parity 1/2.",
             )
-    weekdays = {int(item.strip()) for item in template.week_days.split(",") if item.strip()}
+    try:
+        weekdays = {int(item.strip()) for item in template.week_days.split(",") if item.strip()}
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Week days must be numbers from 1 to 7 separated by commas.",
+        ) from exc
+    if not weekdays or any(day < 1 or day > 7 for day in weekdays):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Week days must be numbers from 1 to 7 separated by commas.",
+        )
     start_day = template.valid_from or date.today()
     end_day = min(template.valid_to or start_day + timedelta(days=days), start_day + timedelta(days=days))
     existing_events = list(
@@ -390,6 +447,7 @@ async def generate_template_events(
             await session.scalars(
                 select(ScheduleEvent).where(
                     ScheduleEvent.template_id == template.id,
+                    ScheduleEvent.status_code != "CANCELLED",
                     ScheduleEvent.start_datetime >= datetime.combine(start_day, time.min),
                     ScheduleEvent.start_datetime <= datetime.combine(end_day, time.max),
                 )

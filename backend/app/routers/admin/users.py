@@ -362,7 +362,7 @@ async def deactivate_user(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
     if user.id == current_user.user_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot deactivate yourself.")
-    if ROLE_LEVELS.get(user.role_code, 0) >= current_user.role_level:
+    if current_user.role_level < RoleLevel.SUPER_ADMIN and ROLE_LEVELS.get(user.role_code, 0) >= current_user.role_level:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot deactivate a user with equal or higher role.")
     old_status = user.status_code
     user.status_code = "ARCHIVED"

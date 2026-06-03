@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot
@@ -29,6 +30,7 @@ from .models.file import File as StoredFile
 from .utils.audit import utcnow
 
 logger = logging.getLogger(__name__)
+_TG_FILE_ID_RE = re.compile(r"\[TG file_id:\s*([^\]]+)\]")
 
 _bot_instance: Bot | None = None
 
@@ -163,12 +165,11 @@ async def _send_submission_files(bot: Bot, telegram_id: int, submission_id: int,
                 )
         except Exception:  # noqa: BLE001
             logger.warning("Failed to send submission file %s to %s", sub_file.file_id, telegram_id)
-    # Files submitted via bot (stored as [tg_file_id] in comment)
-    if submission.comment and "[" in submission.comment:
-        start = submission.comment.find("[") + 1
-        end = submission.comment.find("]", start)
-        if end > start:
-            tg_file_id = submission.comment[start:end]
+    # Files submitted via bot are stored as "[TG file_id: ...]" in comment.
+    if submission.comment:
+        match = _TG_FILE_ID_RE.search(submission.comment)
+        if match:
+            tg_file_id = match.group(1).strip()
             try:
                 await bot.send_document(telegram_id, tg_file_id)
             except Exception:  # noqa: BLE001
@@ -199,11 +200,11 @@ async def send_pending_tg_notifications(settings: Settings) -> None:
                 text = notification.title if not notification.body else f"{notification.title}\n\n{notification.body}"
                 keyboard = _build_notification_keyboard(notification, settings)
                 await bot.send_message(telegram_id, text, reply_markup=keyboard)
-                # For normative review results, send the submitted files to the user
+                # Send normative submission files immediately to commanders and with review results to participants.
                 if (
                     notification.type_code == "NORMATIVE"
                     and notification.entity_id
-                    and "Новая сдача" not in (notification.title or "")
+                    and notification.entity_name == "normative_submissions"
                 ):
                     await _send_submission_files(bot, telegram_id, notification.entity_id, session)
                 notification.tg_sent_at = utcnow()

@@ -13,7 +13,16 @@ WebApp.expand();
 document.documentElement.removeAttribute("data-theme");
 document.documentElement.setAttribute("data-theme", "light");
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnMount: "always",
+      refetchOnReconnect: true,
+      refetchOnWindowFocus: true,
+      staleTime: 0,
+    },
+  },
+});
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

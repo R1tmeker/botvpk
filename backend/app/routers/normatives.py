@@ -77,6 +77,32 @@ async def attach_submission_files(session: AsyncSession, submissions: list[Norma
     return submissions
 
 
+async def attach_submission_context(session: AsyncSession, submissions: list[NormativeSubmission]) -> list[NormativeSubmission]:
+    await attach_submission_files(session, submissions)
+    if not submissions:
+        return submissions
+
+    user_ids = {item.user_id for item in submissions}
+    reviewer_ids = {item.reviewed_by_id for item in submissions if item.reviewed_by_id is not None}
+    normative_ids = {item.normative_id for item in submissions}
+
+    user_rows = (
+        await session.execute(select(User.id, User.full_name).where(User.id.in_(user_ids | reviewer_ids)))
+    ).all()
+    user_names = {user_id: full_name for user_id, full_name in user_rows}
+
+    normative_rows = (
+        await session.execute(select(Normative.id, Normative.title).where(Normative.id.in_(normative_ids)))
+    ).all()
+    normative_titles = {normative_id: title for normative_id, title in normative_rows}
+
+    for submission in submissions:
+        setattr(submission, "user_full_name", user_names.get(submission.user_id))
+        setattr(submission, "normative_title", normative_titles.get(submission.normative_id))
+        setattr(submission, "reviewer_full_name", user_names.get(submission.reviewed_by_id) if submission.reviewed_by_id else None)
+    return submissions
+
+
 @router.get("", response_model=list[NormativeRead])
 async def list_normatives(
     active_only: bool = True,
@@ -103,13 +129,13 @@ async def my_submissions(
         .where(NormativeSubmission.user_id == user_id)
         .order_by(NormativeSubmission.submitted_at.desc())
     )
-    return await attach_submission_files(session, list((await session.scalars(statement)).all()))
+    return await attach_submission_context(session, list((await session.scalars(statement)).all()))
 
 
 @router.get("/submissions/pending", response_model=list[NormativeSubmissionRead])
 async def pending_submissions(
     squad_id: int | None = None,
-    current_user: CurrentUser = Depends(require_role(RoleLevel.SQUAD_COMMANDER)),
+    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_SQUAD_COMMANDER)),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[NormativeSubmission]:
     statement = (
@@ -124,14 +150,39 @@ async def pending_submissions(
         statement = statement.where(User.squad_id == squad_id)
     elif current_user.role_level < RoleLevel.DEPUTY_PLATOON_COMMANDER:
         statement = statement.where(User.squad_id == current_user.squad_id)
-    return await attach_submission_files(session, list((await session.scalars(statement)).all()))
+    return await attach_submission_context(session, list((await session.scalars(statement)).all()))
+
+
+@router.get("/submissions/history", response_model=list[NormativeSubmissionRead])
+async def submission_history(
+    status_code: str | None = None,
+    squad_id: int | None = None,
+    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_SQUAD_COMMANDER)),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[NormativeSubmission]:
+    statement = (
+        select(NormativeSubmission)
+        .join(User, User.id == NormativeSubmission.user_id)
+        .order_by(NormativeSubmission.submitted_at.desc())
+    )
+    if status_code and status_code.upper() != "ALL":
+        codes = [item.strip().upper() for item in status_code.split(",") if item.strip()]
+        if codes:
+            statement = statement.where(NormativeSubmission.status_code.in_(codes))
+    if squad_id is not None:
+        if not can_manage_squad(current_user, squad_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot view this squad.")
+        statement = statement.where(User.squad_id == squad_id)
+    elif current_user.role_level < RoleLevel.DEPUTY_PLATOON_COMMANDER:
+        statement = statement.where(User.squad_id == current_user.squad_id)
+    return await attach_submission_context(session, list((await session.scalars(statement)).all()))
 
 
 @router.patch("/submissions/{submission_id}/review", response_model=NormativeSubmissionRead)
 async def review_submission(
     submission_id: int,
     payload: NormativeReviewRequest,
-    current_user: CurrentUser = Depends(require_role(RoleLevel.SQUAD_COMMANDER)),
+    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_SQUAD_COMMANDER)),
     session: AsyncSession = Depends(get_db_session),
 ) -> NormativeSubmission:
     reviewer_id = require_profile(current_user)
@@ -183,7 +234,7 @@ async def review_submission(
     )
     await session.commit()
     await session.refresh(submission)
-    await attach_submission_files(session, [submission])
+    await attach_submission_context(session, [submission])
     return submission
 
 
@@ -263,7 +314,7 @@ async def submit_normative(
         )
     await session.commit()
     await session.refresh(submission)
-    await attach_submission_files(session, [submission])
+    await attach_submission_context(session, [submission])
     return submission
 
 

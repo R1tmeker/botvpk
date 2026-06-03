@@ -85,17 +85,31 @@ async def delete_promo_block(
     item = await session.get(PromoBlock, promo_id)
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Promo block not found.")
-    old = {"is_active": item.is_active}
-    item.is_active = False
-    item.updated_at = datetime.now(timezone.utc)
+    old = model_snapshot(
+        item,
+        [
+            "title",
+            "body",
+            "button_text",
+            "button_url",
+            "action_type_code",
+            "audience_code",
+            "style_code",
+            "sort_order",
+            "is_active",
+            "active_from",
+            "active_to",
+        ],
+    )
     await record_audit(
         session,
         user_id=current_user.user_id,
-        action_code="promo_block.archive",
+        action_code="promo_block.delete",
         entity_name="promo_blocks",
         entity_id=item.id,
         old_value=old,
-        new_value={"is_active": False},
+        new_value=None,
     )
+    await session.delete(item)
     await session.commit()
-    return MessageResponse(detail="Promo block archived.")
+    return MessageResponse(detail="Promo block deleted.")

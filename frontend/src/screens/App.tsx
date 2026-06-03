@@ -12,6 +12,7 @@ import {
   Download,
   Dumbbell,
   Flag,
+  Flame,
   Home,
   Megaphone,
   MessageSquareWarning,
@@ -57,6 +58,7 @@ import {
   useNormatives,
   useNormativesReport,
   useNotifications,
+  useNormativeSubmissionsHistory,
   useOpenFile,
   usePendingNormativeSubmissions,
   usePromo,
@@ -84,6 +86,7 @@ import {
   useCreatePromoBlock,
   useUpdatePromoBlock,
   useDeletePromoBlock,
+  useDeleteScheduleTemplate,
   useAttendanceEvent,
   useUpdateMenuCard,
   useAdminSchedule,
@@ -167,17 +170,18 @@ import { ToastContainer, toast } from "../components/Toast";
 import { PromoCard, PromoStrip, AdminPromoCard, PromoEditForm } from "../components/PromoCard";
 import { MilestoneToast } from "../components/Confetti";
 
-function FilePicker({ accept, onFile, label = "Прикрепить файл", className }: {
+function FilePicker({ accept, onFile, label = "Прикрепить файл", className, iconSrc }: {
   accept: string;
   onFile: (file: File) => void;
   label?: string;
   className?: string;
+  iconSrc?: string;
 }) {
   const ref = useRef<HTMLInputElement>(null);
   return (
     <>
-      <button type="button" className={className} onClick={() => ref.current?.click()}>
-        {label}
+      <button type="button" className={className} onClick={() => ref.current?.click()} aria-label={label} title={label}>
+        {iconSrc ? <img src={iconSrc} alt="" aria-hidden="true" /> : label}
       </button>
       <input
         ref={ref}
@@ -195,6 +199,12 @@ function FilePicker({ accept, onFile, label = "Прикрепить файл", c
 }
 
 const FILE_PREVIEW_ACCEPT = "video/*,image/*,application/pdf";
+const PAPERCLIP_ICON_SRC = "/assets/icons/paperclip.png";
+const PENDING_NORMATIVE_STATUSES = new Set(["SUBMITTED", "PENDING", "PENDING_REVIEW"]);
+
+function isPendingNormativeStatus(statusCode: string): boolean {
+  return PENDING_NORMATIVE_STATUSES.has(statusCode);
+}
 
 function toYouTubeEmbedUrl(url: string): string | null {
   const m = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&?/]+)/);
@@ -400,6 +410,18 @@ function apiErrorDetail(error: unknown): string | null {
   if (typeof detail === "string") return detail;
   if (Array.isArray(detail)) return detail.map((item) => typeof item === "string" ? item : JSON.stringify(item)).join(", ");
   return null;
+}
+
+function scheduleTemplateErrorMessage(error: unknown): string {
+  const detail = apiErrorDetail(error);
+  if (!detail) return "Не удалось сгенерировать шаблон";
+  if (detail.includes("schedule_week_a_start")) {
+    return "Для недель 1/2 укажите «Дата начала недели 1» в настройках.";
+  }
+  if (detail.includes("Week days")) {
+    return "Дни недели укажите числами 1-7 через запятую.";
+  }
+  return detail;
 }
 
 type Props = {
@@ -939,6 +961,7 @@ export function App({ webApp }: Props) {
   const normatives = useNormatives(hasToken, level >= 6);
   const mySubmissions = useMyNormativeSubmissions(hasToken && level >= 1);
   const pendingSubmissions = usePendingNormativeSubmissions(hasToken && level >= 4);
+  const submissionHistory = useNormativeSubmissionsHistory(hasToken && level >= 4);
   const notifications = useNotifications(internalMode);
   const announcements = useAnnouncements(internalMode);
   const attendanceReport = useAttendanceReport(hasToken && level >= 5);
@@ -1234,8 +1257,18 @@ export function App({ webApp }: Props) {
               settings={dashboardSettings.data ?? []}
               streak={myStreak.data ?? null}
               activityFeed={activityFeed.data ?? []}
-              onSaveSettings={(items) => updateDashboardSettings.mutate(items)}
-              onResetSettings={() => resetDashboardSettings.mutate()}
+              onSaveSettings={(items) =>
+                updateDashboardSettings.mutate(items, {
+                  onSuccess: () => toast("Главная сохранена", "success"),
+                  onError: () => toast("Не удалось сохранить главную", "error"),
+                })
+              }
+              onResetSettings={() =>
+                resetDashboardSettings.mutate(undefined, {
+                  onSuccess: () => toast("Главная сброшена", "info"),
+                  onError: () => toast("Не удалось сбросить главную", "error"),
+                })
+              }
               isSavingSettings={updateDashboardSettings.isPending || resetDashboardSettings.isPending}
               navigate={openView}
               onRespond={(eventId, responseCode, absenceReasonId, customReason) =>
@@ -1303,6 +1336,7 @@ export function App({ webApp }: Props) {
             items={visibleNormatives}
             submissions={mySubmissions.data ?? []}
             pending={pendingSubmissions.data ?? []}
+            history={submissionHistory.data ?? []}
             canSubmit={level >= 1}
             canReview={level >= 4}
             onSubmit={(normativeId, comment, fileIds) =>
@@ -1412,6 +1446,7 @@ export function App({ webApp }: Props) {
         {!isAuthenticating && hasToken && activeView === "admin" && level >= 6 && (
           <AdminView
             level={level}
+            currentUserId={profile.id}
             users={adminUsers.data ?? []}
             applications={adminApplications.data ?? []}
             promo={adminPromo.data ?? []}
@@ -2307,7 +2342,7 @@ function ScheduleView({
       {weekType?.parity && (
         <div className={styles.weekBadge}>
           <span>Текущая неделя</span>
-          <b>{weekType.parity === "A" ? "А" : "Б"}</b>
+          <b>{weekType.parity === "A" ? "1" : "2"}</b>
         </div>
       )}
       <Tabs
@@ -2379,17 +2414,20 @@ function AttendanceView({
   const [draftAttendance, setDraftAttendance] = useState<Record<number, string>>({});
   const manageableEvents = schedule.filter((event) => event.status_code !== "CANCELLED");
   const selectedEvent = manageableEvents.find((event) => event.id === selectedEventId) ?? null;
-  const eventAttendance = useAttendanceEvent(selectedEventId, canManage && selectedEventId !== null);
+  const hasSelectedEvent = selectedEvent !== null;
+  const eventAttendance = useAttendanceEvent(selectedEventId, canManage && hasSelectedEvent);
   const markAttendance = useMarkAttendance();
   const eventMap = new Map(schedule.map((e) => [e.id, e.title]));
   const scopeSquadId = selectedEvent?.squad_id ?? (managerLevel < 5 ? managerSquadId : null);
-  const targetUsers = users.filter((user) => {
-    if (managerLevel < 5 && scopeSquadId === null) return false;
-    if (typeof user.id !== "number" || user.status_code !== "ACTIVE") return false;
-    if (roleLevels[user.role_code as RoleCode] < roleLevels.PARTICIPANT) return false;
-    if (scopeSquadId !== null && user.squad_id !== scopeSquadId) return false;
-    return true;
-  });
+  const targetUsers = hasSelectedEvent
+    ? users.filter((user) => {
+        if (managerLevel < 5 && scopeSquadId === null) return false;
+        if (typeof user.id !== "number" || user.status_code !== "ACTIVE") return false;
+        if (roleLevels[user.role_code as RoleCode] < roleLevels.PARTICIPANT) return false;
+        if (scopeSquadId !== null && user.squad_id !== scopeSquadId) return false;
+        return true;
+      })
+    : [];
   const existingAttendance = new Map((eventAttendance.data ?? []).map((item) => [item.user_id, item.status_code]));
   const eventTitle = (eventId: number) => eventMap.get(eventId) ?? "Событие вне текущего расписания";
 
@@ -2401,8 +2439,8 @@ function AttendanceView({
 
   useEffect(() => {
     if (!canManage) return;
-    if (selectedEventId === null && manageableEvents.length > 0) {
-      setSelectedEventId(manageableEvents[0].id);
+    if (selectedEventId !== null && !manageableEvents.some((event) => event.id === selectedEventId)) {
+      setSelectedEventId(null);
     }
   }, [canManage, selectedEventId, manageableEvents]);
 
@@ -2512,7 +2550,7 @@ function AttendanceView({
               value={selectedEventId ?? ""}
               onChange={(event) => setSelectedEventId(event.target.value ? Number(event.target.value) : null)}
             >
-              {manageableEvents.length === 0 && <option value="">Нет доступных событий</option>}
+              <option value="">{manageableEvents.length === 0 ? "Нет доступных событий" : "Выберите событие"}</option>
               {manageableEvents.map((event) => (
                 <option key={event.id} value={event.id}>
                   {event.title} · {formatDate(event.start_datetime)}
@@ -2520,7 +2558,7 @@ function AttendanceView({
               ))}
             </select>
           </div>
-          {selectedEventId !== null && targetUsers.length > 0 && (
+          {hasSelectedEvent && targetUsers.length > 0 && (
             <div className={styles.commandStrip}>
               <button
                 type="button"
@@ -2547,8 +2585,8 @@ function AttendanceView({
             </div>
           )}
           <div className={styles.list}>
-            {selectedEventId === null && <Empty text="Выберите событие для отметки" />}
-            {selectedEventId !== null && targetUsers.length === 0 && <Empty text="Нет участников для отметки" />}
+            {!hasSelectedEvent && <Empty text="Выберите событие для отметки" />}
+            {hasSelectedEvent && targetUsers.length === 0 && <Empty text="Нет участников для отметки" />}
             {targetUsers.map((user) => {
               const userId = user.id as number;
               const value = draftAttendance[userId] ?? existingAttendance.get(userId) ?? "NOT_MARKED";
@@ -2572,7 +2610,7 @@ function AttendanceView({
               );
             })}
           </div>
-          {selectedEventId !== null && targetUsers.length > 0 && (
+          {hasSelectedEvent && targetUsers.length > 0 && (
             <div className={styles.commandStrip}>
               <button
                 type="button"
@@ -2580,7 +2618,7 @@ function AttendanceView({
                 onClick={() => {
                   markAttendance.mutate(
                     {
-                      eventId: selectedEventId,
+                      eventId: selectedEvent!.id,
                       entries: targetUsers.map((user) => ({
                         user_id: user.id as number,
                         status_code: draftAttendance[user.id as number] ?? existingAttendance.get(user.id as number) ?? "NOT_MARKED",
@@ -2634,6 +2672,7 @@ function NormativesView({
   items,
   submissions,
   pending,
+  history,
   canSubmit,
   canReview,
   onSubmit,
@@ -2643,14 +2682,17 @@ function NormativesView({
   items: Normative[];
   submissions: NormativeSubmission[];
   pending: NormativeSubmission[];
+  history: NormativeSubmission[];
   canSubmit: boolean;
   canReview: boolean;
   onSubmit: (normativeId: number, comment?: string, fileIds?: number[]) => void;
   onReview: (submissionId: number, statusCode: string, reviewerComment?: string) => void;
   isBusy: boolean;
 }) {
-  const [tab, setTab] = useState<"active" | "mine" | "pending" | "accepted" | "archive">("active");
-  const accepted = submissions.filter((item) => item.status_code === "ACCEPTED");
+  const [tab, setTab] = useState<"active" | "mine" | "pending" | "accepted" | "history" | "archive">("active");
+  const reviewHistory = canReview ? history : [];
+  const accepted = (canReview ? reviewHistory : submissions).filter((item) => item.status_code === "ACCEPTED");
+  const historyRows = reviewHistory.filter((item) => !isPendingNormativeStatus(item.status_code));
   const activeItems = items.filter((item) => item.is_active);
   const archiveItems = items.filter((item) => !item.is_active);
   const upload = useUploadFile();
@@ -2675,11 +2717,12 @@ function NormativesView({
     }
   };
 
-  const tabs: Array<["active" | "mine" | "pending" | "accepted" | "archive", string]> = [
+  const tabs: Array<["active" | "mine" | "pending" | "accepted" | "history" | "archive", string]> = [
     ["active", "Активные"],
     ...(canSubmit ? ([["mine", "Мои сдачи"]] as Array<["mine", string]>) : []),
     ...(canReview ? ([["pending", "На проверке"]] as Array<["pending", string]>) : []),
-    ...(canSubmit ? ([["accepted", "Принятые"]] as Array<["accepted", string]>) : []),
+    ...(canSubmit || canReview ? ([["accepted", "Принятые"]] as Array<["accepted", string]>) : []),
+    ...(canReview ? ([["history", "История"]] as Array<["history", string]>) : []),
     ...(canReview ? ([["archive", "Архив"]] as Array<["archive", string]>) : []),
   ];
 
@@ -2727,7 +2770,7 @@ function NormativesView({
                 <div className={styles.normProgressList}>
                   {activeItems.slice(0, 5).map((item) => {
                     const sub = submissions.find((s) => s.normative_id === item.id);
-                    const pct = !sub ? 0 : sub.status_code === "ACCEPTED" ? 100 : sub.status_code === "PENDING" ? 50 : 10;
+                    const pct = !sub ? 0 : sub.status_code === "ACCEPTED" ? 100 : isPendingNormativeStatus(sub.status_code) ? 50 : 10;
                     const color = pct === 100 ? "#27ae60" : pct === 50 ? "#f39c12" : "#e8ecf0";
                     return (
                       <div key={item.id} className={styles.normProgressItem}>
@@ -2750,7 +2793,7 @@ function NormativesView({
               (s) => s.normative_id === item.id && s.status_code === "ACCEPTED" && new Date(s.submitted_at) >= weekStart,
             );
             const pendingSub = !acceptedThisWeek && submissions.find(
-              (s) => s.normative_id === item.id && s.status_code === "PENDING",
+              (s) => s.normative_id === item.id && isPendingNormativeStatus(s.status_code),
             );
             return (
               <article className={styles.row} key={item.id}>
@@ -2793,18 +2836,20 @@ function NormativesView({
                         </button>
                       </div>
                     ))}
-                    <FilePicker
-                      accept={FILE_PREVIEW_ACCEPT}
-                      label={attached.length ? "Добавить ещё файл" : "Прикрепить файл"}
-                      onFile={(file) => handleFileChange(item.id, file)}
-                      className={styles.fileButton}
-                    />
-                    <input
-                      placeholder="Комментарий к сдаче..."
-                      value={comments[item.id] ?? ""}
-                      onChange={(e) => setComments((prev) => ({ ...prev, [item.id]: e.target.value }))}
-                      style={{ border: "1px solid #d9deea", borderRadius: 10, padding: "8px 12px", fontSize: 16, width: "100%", fontFamily: "inherit", color: "#1a2f5a" }}
-                    />
+                    <div className={styles.submissionCommentRow}>
+                      <input
+                        placeholder="Комментарий к сдаче..."
+                        value={comments[item.id] ?? ""}
+                        onChange={(e) => setComments((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                      />
+                      <FilePicker
+                        accept={FILE_PREVIEW_ACCEPT}
+                        label={attached.length ? "Добавить ещё файл" : "Прикрепить файл"}
+                        iconSrc={PAPERCLIP_ICON_SRC}
+                        onFile={(file) => handleFileChange(item.id, file)}
+                        className={`${styles.fileButton} ${styles.fileIconButton}`}
+                      />
+                    </div>
                     <button
                       className={styles.iconAction}
                       type="button"
@@ -2835,6 +2880,13 @@ function NormativesView({
         {tab === "accepted" && (accepted.length === 0
           ? <Empty text="Принятых сдач пока нет" />
           : accepted.map((item) => <SubmissionRow key={item.id} item={item} />)
+        )}
+        {tab === "history" && (
+          canReview
+            ? (historyRows.length === 0 ? <Empty text="История сдач пока пуста" /> : historyRows.map((item) => (
+              <SubmissionRow key={item.id} item={item} />
+            )))
+            : <Empty text="История доступна командирам" />
         )}
         {tab === "archive" && (archiveItems.length === 0
           ? <Empty text="Архив нормативов пуст" />
@@ -4096,6 +4148,7 @@ function ProfileView({
 /* ─────────── AdminView ─────────── */
 function AdminView({
   level,
+  currentUserId,
   users,
   applications,
   promo,
@@ -4107,6 +4160,7 @@ function AdminView({
   isBusy,
 }: {
   level: number;
+  currentUserId: number | null;
   users: UserRecord[];
   applications: JoinApplication[];
   promo: PromoBlock[];
@@ -4119,6 +4173,7 @@ function AdminView({
 }) {
   type AdminTab = "users" | "applications" | "appeals" | "squads" | "schedule" | "events" | "normatives" | "learning" | "promo" | "menu" | "logs" | "settings";
   const [tab, setTab] = useState<AdminTab>("users");
+  const [scheduleAdminTab, setScheduleAdminTab] = useState<"active" | "closed">("active");
   const [editingPromo, setEditingPromo] = useState<PromoBlock | null | "new">(null);
   const [applicationSquads, setApplicationSquads] = useState<Record<number, string>>({});
   const [rejectReasons, setRejectReasons] = useState<Record<number, string>>({});
@@ -4191,6 +4246,7 @@ function AdminView({
   const updateEvent = useUpdateScheduleEvent();
   const deleteEvent = useDeleteScheduleEvent();
   const createTemplate = useCreateScheduleTemplate();
+  const deleteTemplate = useDeleteScheduleTemplate();
   const generateTemplate = useGenerateScheduleTemplate();
   const adminAppeals = useAdminAppeals(tab === "appeals");
   const updateAppeal = useUpdateAppeal();
@@ -4240,6 +4296,16 @@ function AdminView({
   const roleOptions = Object.keys(roleLabels) as RoleCode[];
   const statusOptions = ["ACTIVE", "INACTIVE", "ARCHIVED", "BLOCKED"];
   const [newEvent, setNewEvent] = useState({ title: "", start_datetime: "", end_datetime: "", place: "", squad_id: "", requires_response: true });
+  const scheduleEvents = adminSchedule.data ?? [];
+  const isClosedAdminScheduleEvent = (event: ScheduleEvent) => {
+    if (event.status_code === "CANCELLED") return true;
+    if (!event.requires_response || !event.response_deadline_at) return false;
+    const deadlineTime = new Date(event.response_deadline_at).getTime();
+    return Number.isFinite(deadlineTime) && deadlineTime < Date.now();
+  };
+  const activeScheduleEvents = scheduleEvents.filter((event) => !isClosedAdminScheduleEvent(event));
+  const closedScheduleEvents = scheduleEvents.filter(isClosedAdminScheduleEvent);
+  const visibleScheduleEvents = scheduleAdminTab === "active" ? activeScheduleEvents : closedScheduleEvents;
 
   const filteredUsers = userSearch.trim()
     ? users.filter((u) => u.full_name.toLowerCase().includes(userSearch.toLowerCase()) || (u.username ?? "").toLowerCase().includes(userSearch.toLowerCase()))
@@ -4480,7 +4546,15 @@ function AdminView({
                   </div>
                 </details>
               </div>
-              {filteredUsers.length === 0 ? <Empty text="Пользователей нет" /> : filteredUsers.map((user) => (
+              {filteredUsers.length === 0 ? <Empty text="Пользователей нет" /> : filteredUsers.map((user) => {
+                const userLevel = roleLevels[user.role_code as RoleCode] ?? 0;
+                const canDeactivate =
+                  level >= roleLevels.ADMIN &&
+                  user.id !== null &&
+                  user.id !== currentUserId &&
+                  user.status_code !== "ARCHIVED" &&
+                  (level >= roleLevels.SUPER_ADMIN || userLevel < level);
+                return (
                 <div className={`${styles.memberRow} ${styles.adminUserRow}`} key={user.id ?? user.telegram_id}>
                   <div>
                     <strong>{user.full_name}</strong>
@@ -4544,14 +4618,17 @@ function AdminView({
                         ))}
                       </select>
                     </label>
-                    {level >= 8 && user.id !== null && user.status_code !== "ARCHIVED" && (
+                    {canDeactivate && (
                       <button
                         type="button"
                         className={styles.adminDangerButton}
                         disabled={deactivateUser.isPending}
                         onClick={() => {
                           if (!window.confirm(`Деактивировать ${user.full_name}?`)) return;
-                          deactivateUser.mutate(user.id as number, { onSuccess: () => toast("Пользователь деактивирован", "warning") });
+                          deactivateUser.mutate(user.id as number, {
+                            onSuccess: () => toast("Пользователь деактивирован", "warning"),
+                            onError: () => toast("Не удалось деактивировать пользователя", "error"),
+                          });
                         }}
                       >
                         Деактивировать
@@ -4559,7 +4636,7 @@ function AdminView({
                     )}
                   </div>
                 </div>
-              ))}
+              );})}
             </>
           )}
 
@@ -4578,8 +4655,8 @@ function AdminView({
                   <span>Чередование</span>
                   <select value={newTemplate.week_parity} onChange={(e) => setNewTemplate({ ...newTemplate, week_parity: e.target.value })}>
                     <option value="">Каждую неделю</option>
-                    <option value="A">Неделя А</option>
-                    <option value="B">Неделя Б</option>
+                    <option value="A">Неделя 1</option>
+                    <option value="B">Неделя 2</option>
                   </select>
                 </label>
                 <div className={styles.twoCol}>
@@ -4643,22 +4720,43 @@ function AdminView({
                       <strong>
                         {template.title}
                         <span className={styles.inlineBadge}>
-                          {template.week_parity === "A" ? "А" : template.week_parity === "B" ? "Б" : "каждую"}
+                          {template.week_parity === "A" ? "1" : template.week_parity === "B" ? "2" : "каждую"}
                         </span>
                       </strong>
                       <span>{template.week_days} · {template.start_time.slice(0, 5)}{template.place ? ` · ${template.place}` : ""}</span>
                     </div>
-                    <button
-                      type="button"
-                      className={styles.iconAction}
-                      disabled={generateTemplate.isPending}
-                      onClick={() => generateTemplate.mutate(
-                        { id: template.id, days: 60 },
-                        { onSuccess: (created) => toast(`Сгенерировано: ${created.length}`, "success"), onError: () => toast("Проверьте дату начала недели А", "error") },
-                      )}
-                    >
-                      Сгенерировать на 60 дней
-                    </button>
+                    <div className={styles.commandStrip} style={{ gridColumn: "1/-1" }}>
+                      <button
+                        type="button"
+                        disabled={generateTemplate.isPending}
+                        onClick={() => generateTemplate.mutate(
+                          { id: template.id, days: 60 },
+                          {
+                            onSuccess: (created) => toast(
+                              created.length ? `Сгенерировано: ${created.length}` : "Новых событий нет: даты уже заняты или не подходят",
+                              created.length ? "success" : "info",
+                            ),
+                            onError: (error) => toast(scheduleTemplateErrorMessage(error), "error"),
+                          },
+                        )}
+                      >
+                        Сгенерировать на 60 дней
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.btnNotComing}
+                        disabled={deleteTemplate.isPending}
+                        onClick={() => {
+                          if (!window.confirm(`Удалить шаблон «${template.title}» и закрыть будущие занятия по нему?`)) return;
+                          deleteTemplate.mutate(template.id, {
+                            onSuccess: () => toast("Шаблон удалён, будущие занятия закрыты", "warning"),
+                            onError: (error) => toast(apiErrorDetail(error) ?? "Не удалось удалить шаблон", "error"),
+                          });
+                        }}
+                      >
+                        Удалить шаблон
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -4702,14 +4800,26 @@ function AdminView({
                   {createEvent.isPending ? "Создаём..." : "Создать событие"}
                 </button>
               </div>
-              {adminSchedule.data?.length === 0 && <Empty text="Событий нет" />}
-              {adminSchedule.data?.map((ev) => (
+              <Tabs
+                tabs={[
+                  ["active", `Активные (${activeScheduleEvents.length})`],
+                  ["closed", `Закрытые (${closedScheduleEvents.length})`],
+                ]}
+                active={scheduleAdminTab}
+                onChange={(value) => setScheduleAdminTab(value as typeof scheduleAdminTab)}
+              />
+              {scheduleEvents.length === 0 && <Empty text="Событий нет" />}
+              {scheduleEvents.length > 0 && visibleScheduleEvents.length === 0 && (
+                <Empty text={scheduleAdminTab === "active" ? "Активных событий нет" : "Закрытых событий нет"} />
+              )}
+              {visibleScheduleEvents.map((ev) => (
                 <div className={styles.row} key={ev.id}>
                   <AppIcon code="schedule" />
                   <div>
                     <strong>
                       {ev.title}
                       {ev.is_overridden && <span className={styles.inlineBadge} data-tone="warning">изм.</span>}
+                      {isClosedAdminScheduleEvent(ev) && <span className={styles.inlineBadge} data-tone="warning">закрыт</span>}
                     </strong>
                     <span>{formatDate(ev.start_datetime)}{ev.place ? ` · ${ev.place}` : ""}{ev.squad_id ? ` · ${squadMap.get(ev.squad_id) ?? "отделение"}` : " · все"}</span>
                   </div>
@@ -4772,7 +4882,7 @@ function AdminView({
                     >
                       Изменить
                     </button>
-                    {ev.requires_response && ev.status_code !== "CANCELLED" && (
+                    {ev.requires_response && !isClosedAdminScheduleEvent(ev) && (
                       <button
                         type="button"
                         className={styles.btnMaybe}
@@ -4791,9 +4901,10 @@ function AdminView({
                     <button
                       type="button"
                       className={styles.btnNotComing}
+                      disabled={deleteEvent.isPending || ev.status_code === "CANCELLED"}
                       onClick={() => {
                         if (!window.confirm(`Удалить событие «${ev.title}»?`)) return;
-                        deleteEvent.mutate(ev.id, { onSuccess: () => toast("Событие удалено", "warning") });
+                        deleteEvent.mutate(ev.id, { onSuccess: () => toast("Событие перемещено в закрытые", "warning") });
                       }}
                     >
                       Удалить
@@ -5547,9 +5658,9 @@ function AdminView({
                       <p>{birthdayPreview}</p>
                     </div>
                     <strong className={styles.settingsGroupTitle}>Расписание</strong>
-                    {field("schedule_week_a_start", "Дата начала недели А", "2026-06-02", "date")}
+                    {field("schedule_week_a_start", "Дата начала недели 1", "2026-06-02", "date")}
                     <small style={{ color: "#65708a", fontWeight: 700 }}>
-                      Любой понедельник: эта неделя и все четные после нее считаются неделей А.
+                      Любой понедельник: эта неделя и все четные после нее считаются неделей 1.
                     </small>
                     <label className={styles.fieldLabel} style={{ flexDirection: "column", alignItems: "flex-start", gap: 4 }}>
                       <span style={{ fontWeight: 600, fontSize: "0.85rem" }}>Политика 29 февраля</span>
@@ -5642,7 +5753,7 @@ function DashboardCustomizer({
       </summary>
       <div className={styles.dragList}>
         {draft.map((item, index) => (
-          <div key={item.block_code}>
+          <div key={item.block_code} data-hidden={item.is_hidden ? "true" : "false"}>
             <span>{item.title}</span>
             <button
               type="button"
@@ -5763,14 +5874,18 @@ function SubmissionRow({
   const [reviewComment, setReviewComment] = useState("");
   const fileIds = item.file_ids?.length ? item.file_ids : (item.file_id ? [item.file_id] : []);
   const statusColors: Record<string, string> = {
+    SUBMITTED: "#f39c12",
     PENDING: "#f39c12",
+    PENDING_REVIEW: "#f39c12",
     ACCEPTED: "#27ae60",
     REJECTED: "#e74c3c",
     NEEDS_REDO: "#3498db",
     OVERDUE: "#95a5a6",
   };
   const statusLabels: Record<string, string> = {
+    SUBMITTED: "На проверке",
     PENDING: "На проверке",
+    PENDING_REVIEW: "На проверке",
     ACCEPTED: "Принято",
     REJECTED: "Отклонено",
     NEEDS_REDO: "Нужна пересдача",
@@ -5780,10 +5895,13 @@ function SubmissionRow({
     <article className={styles.row}>
       <AppIcon code="norms" />
       <div>
-        <strong>{(item as unknown as Record<string, unknown>).user_full_name ? String((item as unknown as Record<string, unknown>).user_full_name) : `Сдача #${item.id}`}</strong>
+        <strong>{item.user_full_name ?? `Сдача #${item.id}`}</strong>
         <span style={{ color: statusColors[item.status_code] ?? "#65708a" }}>
-          {statusLabels[item.status_code] ?? item.status_code} · норматив {item.normative_id} · {formatDate(item.submitted_at)}
+          {statusLabels[item.status_code] ?? item.status_code} · {item.normative_title ?? `норматив #${item.normative_id}`} · сдано {formatDate(item.submitted_at)}
         </span>
+        {item.reviewed_at && (
+          <span>Проверено {formatDate(item.reviewed_at)}{item.reviewer_full_name ? ` · ${item.reviewer_full_name}` : ""}</span>
+        )}
         {item.comment && <span style={{ color: "#65708a" }}>Пояснение: {item.comment}</span>}
         {item.reviewer_comment && <span>Комментарий: {item.reviewer_comment}</span>}
         {item.grade_value && <span>Оценка: {item.grade_value}</span>}
@@ -5859,22 +5977,15 @@ function Empty({ text }: { text: string }) {
 }
 
 function StreakBadge({ current, best }: { current: number; best: number }) {
+  const isActive = current > 0;
   return (
     <div className={styles.streakBadge}>
-      <span className={styles.streakIcon} data-active={current > 0 ? "true" : "false"}>
-        {current > 0 ? (
-          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M12 2c-1.2 2.9-3.8 5.1-3 8.5-.8-.9-1-2.2-.6-3.3C6 9 5.5 11.8 7 14c-1.2-1-1.8-2.6-1.5-4-2.2 2-3 5.2-1.5 7.8C5.4 20.1 8.4 22 12 22s6.6-1.9 8-5.2C22 13 19.4 9 15.5 7.5c.4 1.3.2 2.7-.5 3.8C14.2 7.8 13.5 4.7 12 2z"/>
-          </svg>
-        ) : (
-          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M12 3a9 9 0 1 0 9 9c0-.46-.04-.92-.1-1.36a5.4 5.4 0 0 1-4.4 2.26A5.4 5.4 0 0 1 11.1 7.5 5.4 5.4 0 0 1 13.36 3.1 9.05 9.05 0 0 0 12 3z"/>
-          </svg>
-        )}
+      <span className={styles.streakIcon} data-active={isActive ? "true" : "false"}>
+        <Flame aria-hidden="true" />
       </span>
       <div>
         <strong>
-          {current > 0
+          {isActive
             ? `${current} занятий подряд без пропуска`
             : "Серия прервана — вернись скорее!"}
         </strong>

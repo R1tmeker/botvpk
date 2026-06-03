@@ -738,12 +738,19 @@ async def normative_review_callback(callback: CallbackQuery) -> None:
     if len(parts) != 3:
         await callback.answer("Некорректный запрос.", show_alert=True)
         return
-    submission_id, status_code = int(parts[1]), parts[2]
+    try:
+        submission_id, status_code = int(parts[1]), parts[2]
+    except ValueError:
+        await callback.answer("Некорректный запрос.", show_alert=True)
+        return
     user = await find_user(callback.from_user.id)
     if user is None or user_role(user) < RoleLevel.DEPUTY_SQUAD_COMMANDER:
         await callback.answer("Только для командиров.", show_alert=True)
         return
     STATUS_LABELS = {"ACCEPTED": "Принято", "REJECTED": "Отклонено", "NEEDS_REDO": "На доработку"}
+    if status_code not in STATUS_LABELS:
+        await callback.answer("Некорректный статус.", show_alert=True)
+        return
     status_label = STATUS_LABELS.get(status_code, status_code)
     async with AsyncSessionLocal() as session:
         submission = await session.get(NormativeSubmission, submission_id)
@@ -778,10 +785,13 @@ async def normative_review_callback(callback: CallbackQuery) -> None:
             ))
         await session.commit()
     if callback.message:
-        await callback.message.edit_text(
-            f"{status_label} — {norm_title}\nУчастник: {submitter_name}",
-            parse_mode=None,
-        )
+        try:
+            await callback.message.edit_text(
+                f"{status_label} — {norm_title}\nУчастник: {submitter_name}",
+                parse_mode=None,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to edit normative review message for submission_id=%s", submission_id)
     await callback.answer(f"Статус: {status_label}")
 
 
@@ -800,6 +810,37 @@ def batch_events_keyboard(events: list[ScheduleEvent]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+async def _upcoming_unanswered_events(session, user: User, limit: int = 7) -> list[ScheduleEvent]:
+    now = datetime.now(timezone.utc)
+    events = list(
+        (
+            await session.scalars(
+                select(ScheduleEvent)
+                .where(
+                    ScheduleEvent.start_datetime >= now,
+                    ScheduleEvent.status_code != "CANCELLED",
+                    (ScheduleEvent.squad_id.is_(None)) | (ScheduleEvent.squad_id == user.squad_id),
+                    ScheduleEvent.requires_response.is_(True),
+                )
+                .order_by(ScheduleEvent.start_datetime)
+                .limit(limit)
+            )
+        ).all()
+    )
+    if not events:
+        return []
+    response_rows = (
+        await session.execute(
+            select(EventResponse.event_id).where(
+                EventResponse.user_id == user.id,
+                EventResponse.event_id.in_([event.id for event in events]),
+            )
+        )
+    ).all()
+    answered_ids = {event_id for (event_id,) in response_rows}
+    return [event for event in events if event.id not in answered_ids]
+
+
 @router.callback_query(F.data.startswith("batch:"))
 async def batch_response(callback: CallbackQuery) -> None:
     action = (callback.data or "").split(":")[1]
@@ -809,21 +850,7 @@ async def batch_response(callback: CallbackQuery) -> None:
         return
     now = datetime.now(timezone.utc)
     async with AsyncSessionLocal() as session:
-        events = list(
-            (
-                await session.scalars(
-                    select(ScheduleEvent)
-                    .where(
-                        ScheduleEvent.start_datetime >= now,
-                        ScheduleEvent.status_code != "CANCELLED",
-                        (ScheduleEvent.squad_id.is_(None)) | (ScheduleEvent.squad_id == user.squad_id),
-                        ScheduleEvent.requires_response.is_(True),
-                    )
-                    .order_by(ScheduleEvent.start_datetime)
-                    .limit(7)
-                )
-            ).all()
-        )
+        events = await _upcoming_unanswered_events(session, user)
         if action == "ONE_BY_ONE":
             await callback.answer()
             if callback.message:
@@ -836,6 +863,14 @@ async def batch_response(callback: CallbackQuery) -> None:
                     reply_markup=event_keyboard(event.id),
                     parse_mode=None,
                 )
+            return
+        if action not in {"COMING", "NOT_COMING"}:
+            await callback.answer("Некорректный ответ.", show_alert=True)
+            return
+        if not events:
+            if callback.message:
+                await callback.message.edit_text("Нет занятий без ответа.")
+            await callback.answer("Нечего обновлять.")
             return
         saved = 0
         for event in events:
@@ -868,6 +903,7 @@ async def _send_schedule_with_batch(message: Message, user: User) -> None:
                     select(ScheduleEvent)
                     .where(
                         ScheduleEvent.start_datetime >= now,
+                        ScheduleEvent.status_code != "CANCELLED",
                         (ScheduleEvent.squad_id.is_(None)) | (ScheduleEvent.squad_id == user.squad_id),
                     )
                     .order_by(ScheduleEvent.start_datetime)

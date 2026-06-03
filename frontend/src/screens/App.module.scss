@@ -1134,6 +1134,12 @@
   place-items: center;
   cursor: pointer;
 
+  img {
+    width: 20px;
+    height: 20px;
+    object-fit: contain;
+  }
+
   input {
     position: absolute;
     width: 1px;
@@ -1145,6 +1151,19 @@
 .iconAction {
   grid-column: 1 / -1;
   background: #1a2f5a;
+}
+
+.fileIconButton {
+  grid-column: auto;
+  width: 42px;
+  min-height: 42px;
+  border: 1px solid rgba(26, 47, 90, 0.16);
+  background: #eef3fb;
+  padding: 0;
+
+  &:active {
+    transform: translateY(1px);
+  }
 }
 
 .commandStrip {
@@ -1254,6 +1273,11 @@
     border-radius: 10px;
     background: #f8f9fc;
     padding: 8px;
+
+    &[data-hidden="true"] {
+      border-style: solid;
+      opacity: 0.62;
+    }
   }
 
   span,
@@ -2283,6 +2307,24 @@ button[data-active="true"] .navIcon {
   gap: 6px;
 }
 
+.submissionCommentRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  gap: 8px;
+  align-items: center;
+
+  input {
+    width: 100%;
+    min-width: 0;
+    border: 1px solid #d9deea;
+    border-radius: 10px;
+    padding: 8px 12px;
+    color: #1a2f5a;
+    font-family: inherit;
+    font-size: 16px;
+  }
+}
+
 .fileAttached {
   display: flex;
   gap: 8px;
@@ -2455,8 +2497,10 @@ button[data-active="true"] .navIcon {
   }
 
   svg {
+    display: block;
     width: 22px;
     height: 22px;
+    stroke-width: 2.4;
   }
 }
 

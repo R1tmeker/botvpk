@@ -15,6 +15,7 @@ from ...schemas.core import (
     ApplicationAdminUpdate,
     CandidateEventCreate,
     CandidateEventRead,
+    CandidateEventUpdate,
     JoinApplicationRead,
 )
 from ...utils.audit import model_snapshot, record_audit, utcnow
@@ -268,7 +269,7 @@ async def create_candidate_event(
 @router.patch("/events/{event_id}", response_model=CandidateEventRead)
 async def update_candidate_event(
     event_id: int,
-    payload: CandidateEventCreate,
+    payload: CandidateEventUpdate,
     current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_PLATOON_COMMANDER)),
     session: AsyncSession = Depends(get_db_session),
 ) -> CandidateEvent:

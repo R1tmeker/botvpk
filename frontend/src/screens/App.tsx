@@ -122,6 +122,8 @@ import {
   useUpdateSettings,
   usePublicUsers,
   useExportCSVviaBot,
+  useExportAttendanceCSVviaBot,
+  useExportAttendanceXLSXviaBot,
   useExportXLSXviaBot,
   useExportReportViaBot,
   useGetFileBlob,
@@ -602,14 +604,12 @@ const roleLevels: Record<RoleCode, number> = {
   SUPER_ADMIN: 9,
 };
 
-type DashboardBlockCode = "next_event" | "personal_stats" | "commander_summary" | "normatives" | "notifications" | "promo";
+type DashboardBlockCode = "next_event" | "personal_stats" | "commander_summary" | "promo";
 
 const dashboardBlocks: Array<{ code: DashboardBlockCode; title: string; required: boolean; commanderOnly?: boolean }> = [
   { code: "next_event", title: "Ближайшее занятие", required: true },
   { code: "personal_stats", title: "Личная статистика", required: false },
   { code: "commander_summary", title: "Сводка отделения", required: false, commanderOnly: true },
-  { code: "normatives", title: "Активные нормативы", required: false },
-  { code: "notifications", title: "Уведомления", required: false },
   { code: "promo", title: "Инфоблок", required: false },
 ];
 
@@ -1251,7 +1251,6 @@ export function App({ webApp }: Props) {
               schedule={visibleSchedule}
               attendance={visibleAttendance}
               normatives={visibleNormatives}
-              notifications={notifications.data ?? []}
               attendanceStats={attendanceStats.data}
               promo={promo.data ?? []}
               settings={dashboardSettings.data ?? []}
@@ -1642,7 +1641,6 @@ function Dashboard({
   schedule,
   attendance,
   normatives,
-  notifications,
   attendanceStats,
   promo,
   settings,
@@ -1658,7 +1656,6 @@ function Dashboard({
   schedule: ScheduleEvent[];
   attendance: AttendanceRecord[];
   normatives: Normative[];
-  notifications: Notification[];
   attendanceStats?: ReportSummary;
   promo: PromoBlock[];
   settings: DashboardSetting[];
@@ -1743,12 +1740,6 @@ function Dashboard({
                 activityFeed={activityFeed}
               />
             );
-          }
-          if (block.code === "normatives") {
-            return <MiniList key={block.code} title="Активные нормативы" items={normatives.map((item) => item.title).slice(0, 3)} />;
-          }
-          if (block.code === "notifications") {
-            return <MiniList key={block.code} title="Непрочитанные" items={notifications.filter((item) => !item.is_read).map((item) => item.title).slice(0, 3)} />;
           }
           return <PromoStrip key={block.code} blocks={promo} navigate={navigate} />;
         })}
@@ -2316,13 +2307,16 @@ function ScheduleView({
   const [tab, setTab] = useState<"today" | "week" | "month" | "archive">("week");
   const [filter, setFilter] = useState<"all" | "unanswered" | "coming" | "not_coming">("all");
   const now = Date.now();
+  const isArchivedEvent = (event: ScheduleEvent) =>
+    event.status_code === "CANCELLED" || new Date(event.start_datetime).getTime() < now;
 
   const byDate = events.filter((event) => {
     const t = new Date(event.start_datetime).getTime();
-    if (tab === "archive") return t < now || event.status_code === "CANCELLED";
-    if (tab === "today") return Math.abs(t - now) < 86400000;
-    if (tab === "week") return t >= now - 86400000 && t <= now + 7 * 86400000;
-    return t >= now - 86400000 && t <= now + 31 * 86400000;
+    if (tab === "archive") return isArchivedEvent(event);
+    if (isArchivedEvent(event)) return false;
+    if (tab === "today") return new Date(event.start_datetime).toDateString() === new Date(now).toDateString();
+    if (tab === "week") return t <= now + 7 * 86400000;
+    return t <= now + 31 * 86400000;
   });
 
   const filtered = byDate.filter((event) => {
@@ -2337,7 +2331,7 @@ function ScheduleView({
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
         <h2>Расписание</h2>
-        <span>{events.length} событий</span>
+        <span>{filtered.length} событий</span>
       </div>
       {weekType?.parity && (
         <div className={styles.weekBadge}>
@@ -2412,6 +2406,8 @@ function AttendanceView({
   const [tab, setTab] = useState<"chart" | "calendar" | "history" | "journal">("chart");
   const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
   const [draftAttendance, setDraftAttendance] = useState<Record<number, string>>({});
+  const exportAttendanceCSV = useExportAttendanceCSVviaBot();
+  const exportAttendanceXLSX = useExportAttendanceXLSXviaBot();
   const manageableEvents = schedule.filter((event) => event.status_code !== "CANCELLED");
   const selectedEvent = manageableEvents.find((event) => event.id === selectedEventId) ?? null;
   const hasSelectedEvent = selectedEvent !== null;
@@ -2462,6 +2458,7 @@ function AttendanceView({
   const present = statsByCode.get("PRESENT") ?? 0;
   const absent = statsByCode.get("ABSENT") ?? 0;
   const late = statsByCode.get("LATE") ?? 0;
+  const canExportAttendance = canManage && managerLevel >= 6;
 
   // Build heatmap data: use marked_at or event start_datetime as fallback
   // Convert to local app timezone so calendar cells match displayed dates
@@ -2501,6 +2498,30 @@ function AttendanceView({
         active={tab}
         onChange={(v) => setTab(v as typeof tab)}
       />
+      {canExportAttendance && (
+        <div className={styles.commandStrip}>
+          <button
+            type="button"
+            disabled={exportAttendanceCSV.isPending}
+            onClick={() => exportAttendanceCSV.mutate(undefined, {
+              onSuccess: () => toast("CSV посещаемости отправлен в личные сообщения", "success"),
+              onError: () => toast("Не удалось отправить CSV", "error"),
+            })}
+          >
+            {exportAttendanceCSV.isPending ? "Отправляем..." : "CSV в бот"}
+          </button>
+          <button
+            type="button"
+            disabled={exportAttendanceXLSX.isPending}
+            onClick={() => exportAttendanceXLSX.mutate(undefined, {
+              onSuccess: () => toast("Excel посещаемости отправлен в личные сообщения", "success"),
+              onError: () => toast("Не удалось отправить Excel", "error"),
+            })}
+          >
+            {exportAttendanceXLSX.isPending ? "Отправляем..." : "Excel в бот"}
+          </button>
+        </div>
+      )}
 
       {tab === "chart" && (
         <div>
@@ -4174,6 +4195,7 @@ function AdminView({
   type AdminTab = "users" | "applications" | "appeals" | "squads" | "schedule" | "events" | "normatives" | "learning" | "promo" | "menu" | "logs" | "settings";
   const [tab, setTab] = useState<AdminTab>("users");
   const [scheduleAdminTab, setScheduleAdminTab] = useState<"active" | "closed">("active");
+  const [candidateEventsTab, setCandidateEventsTab] = useState<"active" | "archive">("active");
   const [editingPromo, setEditingPromo] = useState<PromoBlock | null | "new">(null);
   const [applicationSquads, setApplicationSquads] = useState<Record<number, string>>({});
   const [rejectReasons, setRejectReasons] = useState<Record<number, string>>({});
@@ -5187,6 +5209,13 @@ function AdminView({
           {/* ── Candidate Events ── */}
           {tab === "events" && (
             <>
+              {(() => {
+                const candidateEvents = adminJoinEvents.data ?? [];
+                const activeCandidateEvents = candidateEvents.filter((event) => event.is_active);
+                const archivedCandidateEvents = candidateEvents.filter((event) => !event.is_active);
+                const visibleCandidateAdminEvents = candidateEventsTab === "active" ? activeCandidateEvents : archivedCandidateEvents;
+                return (
+                  <>
               <div className={styles.formBlock}>
                 <input placeholder="Название события *" value={newCandEvent.title} onChange={(e) => setNewCandEvent({ ...newCandEvent, title: e.target.value })} />
                 <label className={styles.fieldLabel}>
@@ -5211,9 +5240,20 @@ function AdminView({
                   {createCandEvent.isPending ? "Создаём..." : "Создать событие для кандидатов"}
                 </button>
               </div>
+              <Tabs
+                tabs={[
+                  ["active", `Активные (${activeCandidateEvents.length})`],
+                  ["archive", `Архив (${archivedCandidateEvents.length})`],
+                ]}
+                active={candidateEventsTab}
+                onChange={(value) => setCandidateEventsTab(value as typeof candidateEventsTab)}
+              />
               {adminJoinEvents.isLoading && <Empty text="Загрузка..." />}
-              {(adminJoinEvents.data ?? []).length === 0 && !adminJoinEvents.isLoading && <Empty text="Событий нет" />}
-              {(adminJoinEvents.data ?? []).map((ev) => (
+              {candidateEvents.length === 0 && !adminJoinEvents.isLoading && <Empty text="Событий нет" />}
+              {candidateEvents.length > 0 && visibleCandidateAdminEvents.length === 0 && !adminJoinEvents.isLoading && (
+                <Empty text={candidateEventsTab === "active" ? "Активных событий нет" : "Архив пуст"} />
+              )}
+              {visibleCandidateAdminEvents.map((ev) => (
                 <div className={styles.row} key={ev.id}>
                   <AppIcon code="schedule" />
                   <div>
@@ -5225,12 +5265,16 @@ function AdminView({
                     className={styles.iconAction}
                     onClick={() => updateCandEvent.mutate({ id: ev.id, is_active: !ev.is_active }, {
                       onSuccess: () => toast(ev.is_active ? "Скрыто" : "Показано", "info"),
+                      onError: () => toast("Не удалось обновить событие", "error"),
                     })}
                   >
                     {ev.is_active ? "Скрыть" : "Показать"}
                   </button>
                 </div>
               ))}
+                  </>
+                );
+              })()}
             </>
           )}
 

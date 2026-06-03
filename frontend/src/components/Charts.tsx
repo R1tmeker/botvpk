@@ -40,60 +40,36 @@ export function DonutChart({
   label?: string | number;
   sublabel?: string;
 }) {
-  const r = (size - strokeWidth) / 2;
-  const circumference = 2 * Math.PI * r;
-  const cx = size / 2;
   const visibleSegments = segments.filter((seg) => seg.value > 0);
   const total = visibleSegments.reduce((s, seg) => s + seg.value, 0) || 1;
 
   let offset = 0;
-  const arcs = visibleSegments.map((seg) => {
-    const fraction = seg.value / total;
-    const dash = fraction * circumference;
-    const startOffset = circumference - offset * circumference / total;
-    offset += seg.value;
-    return { ...seg, dash, gap: circumference - dash, startOffset };
-  });
+  const gradient = visibleSegments.length
+    ? `conic-gradient(${visibleSegments.map((seg) => {
+        const start = (offset / total) * 100;
+        offset += seg.value;
+        const end = (offset / total) * 100;
+        return `${seg.color} ${start}% ${end}%`;
+      }).join(", ")})`
+    : "#e8ecf0";
 
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className={styles.donut}>
-      <circle
-        cx={cx}
-        cy={cx}
-        r={r}
-        fill="none"
-        stroke="#e8ecf0"
-        strokeWidth={strokeWidth}
-        transform={`rotate(-90 ${cx} ${cx})`}
-      />
-      {arcs.map((arc, i) => (
-        <circle
-          key={i}
-          cx={cx}
-          cy={cx}
-          r={r}
-          fill="none"
-          stroke={arc.color}
-          strokeWidth={strokeWidth}
-          strokeDasharray={`${arc.dash} ${arc.gap}`}
-          strokeDashoffset={arc.startOffset}
-          strokeLinecap="round"
-          transform={`rotate(-90 ${cx} ${cx})`}
-          className={styles.donutArc}
-          style={{ animationDelay: `${i * 0.1}s` }}
-        />
-      ))}
-      {label !== undefined && (
-        <text x={cx} y={cx - (sublabel ? 8 : 0)} textAnchor="middle" dominantBaseline="middle" className={styles.donutLabel}>
-          {label}
-        </text>
-      )}
-      {sublabel && (
-        <text x={cx} y={cx + 14} textAnchor="middle" dominantBaseline="middle" className={styles.donutSublabel}>
-          {sublabel}
-        </text>
-      )}
-    </svg>
+    <div
+      className={styles.donut}
+      style={{
+        width: size,
+        height: size,
+        background: gradient,
+        ["--donut-hole" as string]: `${Math.max(0, size - strokeWidth * 2)}px`,
+      }}
+      role="img"
+      aria-label={label !== undefined ? `${label}${sublabel ? ` ${sublabel}` : ""}` : undefined}
+    >
+      <div className={styles.donutCenter}>
+        {label !== undefined && <strong className={styles.donutLabel}>{label}</strong>}
+        {sublabel && <span className={styles.donutSublabel}>{sublabel}</span>}
+      </div>
+    </div>
   );
 }
 
@@ -155,7 +131,9 @@ export function BarChart({
   const max = Math.max(...data.map((d) => d.value), 1);
   const barW = 28;
   const gap = 10;
-  const chartH = height - 32;
+  const topPad = 16;
+  const bottomPad = 26;
+  const chartH = Math.max(24, height - topPad - bottomPad);
   const width = data.length * (barW + gap) - gap + 20;
 
   return (
@@ -164,7 +142,7 @@ export function BarChart({
         {data.map((d, i) => {
           const barH = animated ? Math.max(4, (d.value / max) * chartH) : 4;
           const x = i * (barW + gap) + 10;
-          const y = chartH - barH;
+          const y = topPad + chartH - barH;
           const color = d.color ?? barColor;
           return (
             <g key={i}>

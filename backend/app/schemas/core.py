@@ -178,6 +178,17 @@ class CandidateEventCreate(BaseModel):
     is_active: bool = True
 
 
+class CandidateEventUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
+    event_type_code: str | None = None
+    start_datetime: datetime | None = None
+    end_datetime: datetime | None = None
+    place: str | None = None
+    capacity: int | None = None
+    is_active: bool | None = None
+
+
 class CandidateEventResponseCreate(BaseModel):
     response_code: str
     comment: str | None = None

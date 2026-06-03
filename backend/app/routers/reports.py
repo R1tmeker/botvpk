@@ -4,7 +4,7 @@ import csv
 import io
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select, union_all, literal
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,11 +12,80 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import Settings, get_settings
 from ..database import get_db_session
 from ..dependencies.auth import CurrentUser, require_role
-from ..models import Appeal, Attendance, AttendanceGrade, EventResponse, JoinApplication, NormativeSubmission, ScheduleEvent, User
+from ..models import Appeal, Attendance, AttendanceGrade, EventResponse, JoinApplication, NormativeSubmission, ScheduleEvent, Squad, User
 from ..roles import RoleLevel
 from ..schemas.core import ReportSummary
 
 router = APIRouter(prefix="/reports", tags=["reports"])
+
+ATTENDANCE_EXPORT_COLUMNS = [
+    "Дата занятия",
+    "Событие",
+    "Место",
+    "ФИО",
+    "Telegram",
+    "Отделение",
+    "Статус",
+    "Отмечено",
+]
+
+ATTENDANCE_STATUS_LABELS = {
+    "PRESENT": "Присутствовал",
+    "ABSENT": "Отсутствовал",
+    "LATE": "Опоздал",
+    "EXCUSED": "Уважительная",
+    "SICK": "Больничный",
+    "RELEASED": "Освобождён",
+    "NOT_MARKED": "Не отмечен",
+}
+
+
+def _format_dt(value: datetime | None) -> str:
+    if value is None:
+        return ""
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M")
+
+
+async def _attendance_export_rows(
+    current_user: CurrentUser,
+    session: AsyncSession,
+    squad_id: int | None = None,
+) -> list[list[str]]:
+    statement = (
+        select(
+            ScheduleEvent.start_datetime,
+            ScheduleEvent.title,
+            ScheduleEvent.place,
+            User.full_name,
+            User.username,
+            User.squad_id,
+            Attendance.status_code,
+            Attendance.marked_at,
+        )
+        .join(ScheduleEvent, ScheduleEvent.id == Attendance.event_id)
+        .join(User, User.id == Attendance.user_id)
+        .order_by(ScheduleEvent.start_datetime.desc(), User.full_name)
+    )
+    if squad_id is not None:
+        statement = statement.where(User.squad_id == squad_id)
+    elif current_user.role_level < RoleLevel.DEPUTY_PLATOON_COMMANDER:
+        statement = statement.where(User.squad_id == current_user.squad_id)
+
+    squad_map = {squad.id: squad.name for squad in (await session.scalars(select(Squad))).all()}
+    rows = (await session.execute(statement)).all()
+    return [
+        [
+            _format_dt(start_datetime),
+            title,
+            place or "",
+            full_name,
+            f"@{username}" if username else "",
+            squad_map.get(user_squad_id, ""),
+            ATTENDANCE_STATUS_LABELS.get(status_code, status_code),
+            _format_dt(marked_at),
+        ]
+        for start_datetime, title, place, full_name, username, user_squad_id, status_code, marked_at in rows
+    ]
 
 
 @router.get("/attendance", response_model=ReportSummary)
@@ -139,6 +208,77 @@ async def export_report_send(
         caption="Сводный отчёт ВПК Звезда",
     )
     return {"sent": True}
+
+
+@router.post("/attendance/export.csv/send", status_code=200)
+async def export_attendance_csv_send(
+    squad_id: int | None = None,
+    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_PLATOON_COMMANDER)),
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Generate detailed attendance CSV and send it to the requester via Telegram bot DM."""
+    from ..background import _get_bot
+    from aiogram.types import BufferedInputFile
+
+    rows = await _attendance_export_rows(current_user, session, squad_id)
+    output = io.StringIO()
+    output.write("﻿")
+    writer = csv.writer(output, delimiter=";")
+    writer.writerow(ATTENDANCE_EXPORT_COLUMNS)
+    writer.writerows(rows)
+    bot = _get_bot(settings)
+    await bot.send_document(
+        current_user.telegram_id,
+        BufferedInputFile(output.getvalue().encode("utf-8"), filename="attendance.csv"),
+        caption=f"Посещаемость ВПК Звезда — {len(rows)} отметок",
+    )
+    return {"sent": True, "count": len(rows)}
+
+
+@router.post("/attendance/export.xlsx/send", status_code=200)
+async def export_attendance_xlsx_send(
+    squad_id: int | None = None,
+    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_PLATOON_COMMANDER)),
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Generate detailed attendance XLSX and send it to the requester via Telegram bot DM."""
+    try:
+        import openpyxl
+        from openpyxl.styles import Alignment, Font, PatternFill
+    except ImportError as exc:
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="openpyxl not installed.") from exc
+    from ..background import _get_bot
+    from aiogram.types import BufferedInputFile
+
+    rows = await _attendance_export_rows(current_user, session, squad_id)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Посещаемость"
+    header_fill = PatternFill(fill_type="solid", fgColor="1A2F5A")
+    header_font = Font(bold=True, color="FFFFFF")
+    for col, title in enumerate(ATTENDANCE_EXPORT_COLUMNS, 1):
+        cell = ws.cell(row=1, column=col, value=title)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+    for row_idx, row in enumerate(rows, 2):
+        for col_idx, value in enumerate(row, 1):
+            ws.cell(row=row_idx, column=col_idx, value=value)
+    for col in ws.columns:
+        max_len = max(len(str(cell.value or "")) for cell in col)
+        ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 44)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    bot = _get_bot(settings)
+    await bot.send_document(
+        current_user.telegram_id,
+        BufferedInputFile(buf.read(), filename="attendance.xlsx"),
+        caption=f"Посещаемость ВПК Звезда — {len(rows)} отметок",
+    )
+    return {"sent": True, "count": len(rows)}
 
 
 @router.get("/activity-feed", response_model=list[dict])

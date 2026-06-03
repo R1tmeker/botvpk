@@ -872,6 +872,7 @@ export function useAdminJoinEvents(enabled: boolean) {
       return data;
     },
     enabled,
+    ...FAST_QUERY_OPTIONS,
   });
 }
 
@@ -1490,7 +1491,11 @@ export function useCreateCandidateEvent() {
       const { data } = await api.post<CandidateEvent>("/admin/join/events", payload);
       return data;
     },
-    onSuccess: () => {
+    onSuccess: (event) => {
+      queryClient.setQueryData<CandidateEvent[]>(["admin", "join", "events"], (items) => {
+        const list = items ?? [];
+        return [event, ...list.filter((item) => item.id !== event.id)].sort((a, b) => a.start_datetime.localeCompare(b.start_datetime));
+      });
       queryClient.invalidateQueries({ queryKey: ["admin", "join", "events"] });
       queryClient.invalidateQueries({ queryKey: ["public", "events"] });
     },
@@ -1504,7 +1509,15 @@ export function useUpdateCandidateEvent() {
       const { data } = await api.patch<CandidateEvent>(`/admin/join/events/${id}`, payload);
       return data;
     },
-    onSuccess: () => {
+    onSuccess: (event) => {
+      queryClient.setQueryData<CandidateEvent[]>(["admin", "join", "events"], (items) =>
+        items?.map((item) => (item.id === event.id ? event : item)) ?? items,
+      );
+      queryClient.setQueryData<CandidateEvent[]>(["public", "events"], (items) => {
+        const list = (items ?? []).filter((item) => item.id !== event.id);
+        if (!event.is_active) return list;
+        return [event, ...list].sort((a, b) => a.start_datetime.localeCompare(b.start_datetime));
+      });
       queryClient.invalidateQueries({ queryKey: ["admin", "join", "events"] });
       queryClient.invalidateQueries({ queryKey: ["public", "events"] });
     },
@@ -1613,6 +1626,26 @@ export function useExportReportViaBot() {
       const q = new URLSearchParams();
       if (params?.squad_id) q.set("squad_id", String(params.squad_id));
       await api.post(`/reports/export/send?${q}`);
+    },
+  });
+}
+
+export function useExportAttendanceCSVviaBot() {
+  return useMutation({
+    mutationFn: async (params?: { squad_id?: number | null }) => {
+      const q = new URLSearchParams();
+      if (params?.squad_id) q.set("squad_id", String(params.squad_id));
+      await api.post(`/reports/attendance/export.csv/send?${q}`);
+    },
+  });
+}
+
+export function useExportAttendanceXLSXviaBot() {
+  return useMutation({
+    mutationFn: async (params?: { squad_id?: number | null }) => {
+      const q = new URLSearchParams();
+      if (params?.squad_id) q.set("squad_id", String(params.squad_id));
+      await api.post(`/reports/attendance/export.xlsx/send?${q}`);
     },
   });
 }

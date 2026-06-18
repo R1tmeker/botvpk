@@ -52,12 +52,14 @@ ROLE_LABELS = {
 _CODE_RE = re.compile(r"^\s*(\d{6})\s*$")
 
 
-def main_keyboard() -> str:
+def main_keyboard(site_url: str | None = None) -> str:
     buttons = [
         [{"action": {"type": "text", "label": "📅 Расписание"}, "color": "primary"}],
         [{"action": {"type": "text", "label": "🔔 Уведомления"}, "color": "secondary"}],
         [{"action": {"type": "text", "label": "👤 Профиль"}, "color": "secondary"}],
     ]
+    if site_url:
+        buttons.append([{"action": {"type": "text", "label": "Открыть сайт"}, "color": "primary"}])
     return json.dumps({"one_time": False, "buttons": buttons}, ensure_ascii=False)
 
 
@@ -73,7 +75,13 @@ def empty_keyboard() -> str:
 
 def login_entry_keyboard() -> str:
     return json.dumps(
-        {"one_time": False, "buttons": [[{"action": {"type": "text", "label": "🔑 Войти по паролю"}, "color": "primary"}]]},
+        {
+            "one_time": False,
+            "buttons": [
+                [{"action": {"type": "text", "label": "Войти по паролю"}, "color": "primary"}],
+                [{"action": {"type": "text", "label": "Войти по коду"}, "color": "secondary"}],
+            ],
+        },
         ensure_ascii=False,
     )
 
@@ -238,6 +246,15 @@ def build_bot():
                 await message.answer("Отменено.", keyboard=login_entry_keyboard())
                 return
 
+            if "по коду" in low:
+                _vk_login_state.pop(vk_id, None)
+                await message.answer(
+                    "Получите 6-значный код в приложении ВПК: Профиль → ВКонтакте → Привязать. "
+                    "Затем пришлите код сюда одним сообщением.",
+                    keyboard=login_entry_keyboard(),
+                )
+                return
+
             state = _get_login_state(vk_id)
 
             # Step 2: awaiting password
@@ -247,7 +264,7 @@ def build_bot():
                 if ok:
                     await message.answer(
                         with_site_link(msg + "\n\nСовет: удалите сообщение с паролем из переписки.", site),
-                        keyboard=main_keyboard(),
+                        keyboard=main_keyboard(site),
                     )
                 else:
                     await message.answer(msg + "\nЧтобы попробовать снова — нажмите «Войти по паролю».", keyboard=login_entry_keyboard())
@@ -276,7 +293,7 @@ def build_bot():
                 if result is None:
                     await message.answer("Код неверный или истёк. Получите новый в приложении ВПК.")
                 else:
-                    await message.answer(with_site_link(result, site), keyboard=main_keyboard())
+                    await message.answer(with_site_link(result, site), keyboard=main_keyboard(site))
                 return
 
             await message.answer(link_instructions(settings), keyboard=login_entry_keyboard())
@@ -287,13 +304,18 @@ def build_bot():
             await message.answer(await _notifications_text(user))
         elif "профиль" in low:
             await message.answer(_profile_text(user))
+        elif "сайт" in low:
+            await message.answer(
+                with_site_link("Личный кабинет ВПК:", site),
+                keyboard=main_keyboard(site),
+            )
         else:
             await message.answer(
                 with_site_link(
                     f"С возвращением, {user.full_name}! Выберите раздел:",
-                    settings.site_url or settings.mini_app_url,
+                    site,
                 ),
-                keyboard=main_keyboard(),
+                keyboard=main_keyboard(site),
             )
 
     return bot

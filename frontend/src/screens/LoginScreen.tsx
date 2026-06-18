@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { LogIn, LockKeyhole } from "lucide-react";
+import { Eye, EyeOff, IdCard, LockKeyhole, LogIn, CalendarCheck, Bell, ShieldCheck } from "lucide-react";
 
 import { usePasswordLogin } from "../api/queries";
 import type { AuthResponse } from "../types/api";
 import { toast } from "../components/Toast";
+import styles from "./LoginScreen.module.scss";
 
 type ApiError = { response?: { data?: { detail?: string } } };
 
@@ -15,6 +16,7 @@ function errorDetail(err: unknown): string | null {
 export function LoginScreen({ onSuccess }: { onSuccess: (data: AuthResponse) => void }) {
   const [telegramId, setTelegramId] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const login = usePasswordLogin();
   const canSubmit = telegramId.trim().length > 0 && password.length > 0 && !login.isPending;
 
@@ -37,109 +39,87 @@ export function LoginScreen({ onSuccess }: { onSuccess: (data: AuthResponse) => 
   };
 
   return (
-    <div style={styles.shell}>
-      <section style={styles.card}>
-        <div style={styles.iconWrap}>
-          <LockKeyhole size={28} strokeWidth={2.2} color="#fff" />
+    <div className={styles.shell}>
+      <section className={styles.card}>
+        <aside className={styles.brand}>
+          <svg className={styles.brandStars} viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <g fill="#ffffff">
+              <path d="M60 50l4 12 12 4-12 4-4 12-4-12-12-4 12-4z" opacity="0.5" />
+              <path d="M330 90l5 15 15 5-15 5-5 15-5-15-15-5 15-5z" opacity="0.35" />
+              <path d="M300 320l3 9 9 3-9 3-3 9-3-9-9-3 9-3z" opacity="0.4" />
+              <path d="M90 300l3 9 9 3-9 3-3 9-3-9-9-3 9-3z" opacity="0.25" />
+            </g>
+          </svg>
+          <img className={styles.emblem} src="/assets/zvezda-emblem.jpg" alt="Эмблема ВПК Звезда" />
+          <h1 className={styles.brandTitle}>ВПК «Звезда»</h1>
+          <p className={styles.brandSlogan}>
+            Личный кабинет участника. Расписание, посещаемость, нормативы и уведомления — в одном месте.
+          </p>
+          <ul className={styles.brandPoints}>
+            <li><CalendarCheck size={18} strokeWidth={2.4} /> Расписание и ответы на занятия</li>
+            <li><Bell size={18} strokeWidth={2.4} /> Уведомления командиров</li>
+            <li><ShieldCheck size={18} strokeWidth={2.4} /> Доступ только для состава</li>
+          </ul>
+        </aside>
+
+        <div className={styles.form}>
+          <div className={styles.formHeader}>
+            <h2>Вход на сайт</h2>
+            <p>По Telegram ID и паролю</p>
+          </div>
+
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Telegram ID</span>
+            <div className={styles.inputWrap}>
+              <IdCard className={styles.inputIcon} size={18} strokeWidth={2.2} />
+              <input
+                className={styles.input}
+                inputMode="numeric"
+                autoComplete="username"
+                placeholder="например, 123456789"
+                value={telegramId}
+                onChange={(e) => setTelegramId(e.target.value.replace(/\D/g, ""))}
+              />
+            </div>
+          </label>
+
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Пароль</span>
+            <div className={styles.inputWrap}>
+              <LockKeyhole className={styles.inputIcon} size={18} strokeWidth={2.2} />
+              <input
+                className={`${styles.input} ${styles.hasToggle}`}
+                type={showPassword ? "text" : "password"}
+                autoComplete="current-password"
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && canSubmit) submit();
+                }}
+              />
+              <button
+                type="button"
+                className={styles.toggle}
+                onClick={() => setShowPassword((v) => !v)}
+                aria-label={showPassword ? "Скрыть пароль" : "Показать пароль"}
+              >
+                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
+          </label>
+
+          <button type="button" className={styles.submit} disabled={!canSubmit} onClick={submit}>
+            <LogIn size={18} strokeWidth={2.4} />
+            {login.isPending ? "Входим…" : "Войти"}
+          </button>
+
+          <p className={styles.hint}>
+            Пароль задаётся в приложении ВПК внутри Telegram: Профиль → «Вход на сайте».
+            Доступ только для подтверждённых участников состава.
+          </p>
         </div>
-        <h1 style={styles.title}>ВПК «Звезда»</h1>
-        <p style={styles.subtitle}>Вход на сайт по паролю</p>
-
-        <label style={styles.label}>
-          <span style={styles.labelText}>Telegram ID</span>
-          <input
-            style={styles.input}
-            inputMode="numeric"
-            autoComplete="username"
-            placeholder="например, 123456789"
-            value={telegramId}
-            onChange={(e) => setTelegramId(e.target.value.replace(/\D/g, ""))}
-          />
-        </label>
-
-        <label style={styles.label}>
-          <span style={styles.labelText}>Пароль</span>
-          <input
-            style={styles.input}
-            type="password"
-            autoComplete="current-password"
-            placeholder="••••••••"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && canSubmit) submit();
-            }}
-          />
-        </label>
-
-        <button type="button" style={{ ...styles.button, opacity: canSubmit ? 1 : 0.6 }} disabled={!canSubmit} onClick={submit}>
-          <LogIn size={18} strokeWidth={2.4} />
-          {login.isPending ? "Входим…" : "Войти"}
-        </button>
-
-        <p style={styles.hint}>
-          Пароль задаётся в приложении ВПК внутри Telegram: Профиль → «Вход на сайте».
-          Доступ только для подтверждённых участников состава.
-        </p>
       </section>
     </div>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  shell: {
-    minHeight: "100vh",
-    display: "grid",
-    placeItems: "center",
-    padding: 20,
-    background: "linear-gradient(160deg, #1a2f5a 0%, #2c4a8a 100%)",
-  },
-  card: {
-    width: "100%",
-    maxWidth: 360,
-    background: "#fff",
-    borderRadius: 18,
-    padding: "28px 22px",
-    boxShadow: "0 20px 50px rgba(10,22,50,0.35)",
-    display: "grid",
-    gap: 14,
-  },
-  iconWrap: {
-    width: 56,
-    height: 56,
-    borderRadius: 16,
-    background: "linear-gradient(135deg, #1a2f5a, #2c4a8a)",
-    display: "grid",
-    placeItems: "center",
-    justifySelf: "center",
-  },
-  title: { margin: 0, textAlign: "center", fontSize: 20, fontWeight: 900, color: "#1a2f5a" },
-  subtitle: { margin: 0, textAlign: "center", fontSize: 13, color: "#65708a", marginTop: -8 },
-  label: { display: "grid", gap: 6 },
-  labelText: { fontSize: 11, fontWeight: 800, color: "#65708a", textTransform: "uppercase", letterSpacing: 0.4 },
-  input: {
-    border: "1px solid #d9deea",
-    borderRadius: 10,
-    padding: "11px 13px",
-    fontSize: 16,
-    fontFamily: "inherit",
-    color: "#1a2f5a",
-    outline: "none",
-  },
-  button: {
-    marginTop: 4,
-    border: "none",
-    borderRadius: 10,
-    padding: "12px 16px",
-    fontSize: 15,
-    fontWeight: 800,
-    color: "#fff",
-    background: "linear-gradient(135deg, #1a2f5a, #2c4a8a)",
-    cursor: "pointer",
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-  },
-  hint: { margin: 0, fontSize: 11.5, lineHeight: 1.5, color: "#8a96b0", textAlign: "center" },
-};

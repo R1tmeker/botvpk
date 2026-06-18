@@ -1155,6 +1155,31 @@ export function App({ webApp }: Props) {
     ...(level >= adminNavItem.minLevel ? [adminNavItem] : []),
   ] : [];
 
+  // Website mode (no Telegram): show the full-screen login before the app shell.
+  if (webMode && !hasToken) {
+    return (
+      <>
+        <ToastContainer />
+        {authStatus === "checking" ? (
+          <div className={styles.webSplash}>
+            <span className={styles.webSplashSpinner} aria-label="Загрузка" />
+          </div>
+        ) : (
+          <LoginScreen
+            onSuccess={(data) => {
+              setProfile(data.profile);
+              setAuthStatus("ready");
+              setAuthError(null);
+              if (data.app_timezone) {
+                _appTimezone = data.app_timezone;
+              }
+            }}
+          />
+        )}
+      </>
+    );
+  }
+
   return (
     <>
     <ToastContainer />
@@ -1233,32 +1258,19 @@ export function App({ webApp }: Props) {
           </div>
         )}
         {!isAuthenticating && !hasToken && (
-          webMode && authStatus === "missing_init_data" ? (
-            <LoginScreen
-              onSuccess={(data) => {
-                setProfile(data.profile);
-                setAuthStatus("ready");
-                setAuthError(null);
-                if (data.app_timezone) {
-                  _appTimezone = data.app_timezone;
-                }
-              }}
-            />
-          ) : (
-            <AuthGate
-              status={authStatus}
-              error={authError}
-              initDataLength={initDataLength}
-              telegramUserId={telegramUserId}
-              onAction={() => {
-                if (authStatus === "failed" && webApp.close) {
-                  webApp.close();
-                  return;
-                }
-                setAuthAttempt((value) => value + 1);
-              }}
-            />
-          )
+          <AuthGate
+            status={authStatus}
+            error={authError}
+            initDataLength={initDataLength}
+            telegramUserId={telegramUserId}
+            onAction={() => {
+              if (authStatus === "failed" && webApp.close) {
+                webApp.close();
+                return;
+              }
+              setAuthAttempt((value) => value + 1);
+            }}
+          />
         )}
         {!isAuthenticating && hasToken && activeView === "dashboard" && (
           profile.role_code === "CANDIDATE" ? (

@@ -50,6 +50,95 @@ export function useTelegramAuth() {
   });
 }
 
+export function usePasswordLogin() {
+  return useMutation({
+    mutationFn: async (payload: { telegram_id: number; password: string }) => {
+      const { data } = await api.post<AuthResponse>("/auth/password/login", payload);
+      setAccessToken(data.access_token);
+      return data;
+    },
+  });
+}
+
+export function usePasswordStatus(enabled: boolean) {
+  return useQuery({
+    queryKey: ["auth", "password", "status"],
+    queryFn: async () => {
+      const { data } = await api.get<{ has_password: boolean; password_set_at: string | null }>(
+        "/auth/password/status",
+      );
+      return data;
+    },
+    enabled,
+  });
+}
+
+export function useSetPassword() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: { new_password: string; current_password?: string }) => {
+      const { data } = await api.post<{ has_password: boolean; password_set_at: string | null }>(
+        "/auth/password/set",
+        payload,
+      );
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["auth", "password", "status"] });
+    },
+  });
+}
+
+export function useDeletePassword() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await api.delete<{ has_password: boolean; password_set_at: string | null }>(
+        "/auth/password",
+      );
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["auth", "password", "status"] });
+    },
+  });
+}
+
+type VkStatus = { linked: boolean; vk_id: number | null; bot_url: string | null };
+
+export function useVkStatus(enabled: boolean) {
+  return useQuery({
+    queryKey: ["auth", "vk", "status"],
+    queryFn: async () => {
+      const { data } = await api.get<VkStatus>("/auth/vk/status");
+      return data;
+    },
+    enabled,
+  });
+}
+
+export function useVkLinkCode() {
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await api.post<{ code: string; expires_at: string }>("/auth/vk/link-code");
+      return data;
+    },
+  });
+}
+
+export function useVkUnlink() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await api.delete<VkStatus>("/auth/vk/");
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["auth", "vk", "status"] });
+    },
+  });
+}
+
 export function useMe(enabled: boolean) {
   return useQuery({
     queryKey: ["me"],

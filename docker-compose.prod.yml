@@ -47,6 +47,21 @@ services:
     command: python -m app.bot
     restart: unless-stopped
 
+  vk_bot:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    volumes:
+      - uploads_data:/app/uploads
+    command: python -m app.vk_bot
+    restart: unless-stopped
+
   frontend:
     build:
       context: ./frontend

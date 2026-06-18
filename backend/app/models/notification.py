@@ -23,5 +23,6 @@ class Notification(Base):
     is_pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     send_to_tg: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     tg_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    vk_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File as UploadParam, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File as UploadParam, HTTPException, Request, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,11 +14,21 @@ from ..database import get_db_session
 from ..dependencies.auth import CurrentUser, get_current_user
 from ..models import File as StoredFile
 from ..models import JoinApplication, MenuCard, User
+from ..ratelimit import limiter
 from ..roles import RoleCode, RoleLevel, role_level
-from ..schemas.auth import AuthResponse, MenuCardResponse, TelegramAuthRequest, UserProfile
+from ..schemas.auth import (
+    AuthResponse,
+    MenuCardResponse,
+    PasswordLoginRequest,
+    PasswordSetRequest,
+    PasswordStatusResponse,
+    TelegramAuthRequest,
+    UserProfile,
+)
 from ..schemas.core import UserSelfUpdate
 from ..utils.audit import record_audit
 from ..utils.jwt import create_access_token
+from ..utils.password import hash_password, verify_password
 from ..utils.telegram_auth import TelegramInitDataError, validate_init_data
 
 logger = logging.getLogger(__name__)
@@ -103,6 +113,128 @@ async def auth_telegram(
         settings,
     )
     return AuthResponse(access_token=token, profile=profile, app_timezone=settings.timezone)
+
+
+# ──────────────────────── website password auth ────────────────────────────
+# Telegram remains the primary identity. Password is set from inside the Mini App
+# (where the member is already verified) and only lets confirmed members log in on
+# the plain website. Login = Telegram ID + password.
+
+
+@router.get("/auth/password/status", response_model=PasswordStatusResponse)
+async def password_status(
+    current_user: CurrentUser = Depends(get_current_user),
+) -> PasswordStatusResponse:
+    user = current_user.user
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User profile is required.")
+    return PasswordStatusResponse(has_password=bool(user.password_hash), password_set_at=user.password_set_at)
+
+
+@router.post("/auth/password/set", response_model=PasswordStatusResponse)
+async def set_password(
+    payload: PasswordSetRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> PasswordStatusResponse:
+    user = current_user.user
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User profile is required.")
+    if current_user.role_level < RoleLevel.PARTICIPANT:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Password login is available only to confirmed members.",
+        )
+    # Changing an existing password requires the current one.
+    if user.password_hash and not (
+        payload.current_password and verify_password(payload.current_password, user.password_hash)
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Current password is incorrect.")
+    user.password_hash = hash_password(payload.new_password)
+    user.password_set_at = datetime.now(timezone.utc)
+    user.updated_at = datetime.now(timezone.utc)
+    await record_audit(
+        session,
+        user_id=user.id,
+        action_code="auth.password.set",
+        entity_name="users",
+        entity_id=user.id,
+    )
+    await session.commit()
+    await session.refresh(user)
+    return PasswordStatusResponse(has_password=True, password_set_at=user.password_set_at)
+
+
+@router.delete("/auth/password", response_model=PasswordStatusResponse)
+async def delete_password(
+    current_user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> PasswordStatusResponse:
+    user = current_user.user
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User profile is required.")
+    user.password_hash = None
+    user.password_set_at = None
+    user.updated_at = datetime.now(timezone.utc)
+    await record_audit(
+        session,
+        user_id=user.id,
+        action_code="auth.password.delete",
+        entity_name="users",
+        entity_id=user.id,
+    )
+    await session.commit()
+    return PasswordStatusResponse(has_password=False, password_set_at=None)
+
+
+@router.post("/auth/password/login", response_model=AuthResponse)
+@limiter.limit("5/minute")
+async def password_login(
+    request: Request,
+    payload: PasswordLoginRequest,
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> AuthResponse:
+    # Single generic error for "no such id" and "wrong password" to avoid
+    # leaking which Telegram IDs exist (IDs are enumerable).
+    invalid = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Telegram ID or password."
+    )
+    user = await session.scalar(select(User).where(User.telegram_id == payload.telegram_id))
+    if user is None or not user.password_hash or not verify_password(payload.password, user.password_hash):
+        if user is not None:
+            await record_audit(
+                session,
+                user_id=user.id,
+                action_code="auth.password.login_failed",
+                entity_name="users",
+                entity_id=user.id,
+            )
+            await session.commit()
+        raise invalid
+    if user.status_code != "ACTIVE" or role_level(user.role_code) < RoleLevel.PARTICIPANT:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Website access is available only to confirmed active members.",
+        )
+    token = create_access_token(
+        {
+            "user_id": user.id,
+            "telegram_id": user.telegram_id,
+            "role_code": user.role_code,
+            "squad_id": user.squad_id,
+        },
+        settings,
+    )
+    await record_audit(
+        session,
+        user_id=user.id,
+        action_code="auth.password.login",
+        entity_name="users",
+        entity_id=user.id,
+    )
+    await session.commit()
+    return AuthResponse(access_token=token, profile=_profile_from_user(user), app_timezone=settings.timezone)
 
 
 @router.get("/me", response_model=UserProfile)

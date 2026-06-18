@@ -28,6 +28,7 @@ from .models import (
 )
 from .models.file import File as StoredFile
 from .utils.audit import utcnow
+from .utils.vk import send_vk_message
 
 logger = logging.getLogger(__name__)
 _TG_FILE_ID_RE = re.compile(r"\[TG file_id:\s*([^\]]+)\]")
@@ -66,6 +67,9 @@ def create_scheduler(settings: Settings) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=settings.timezone)
     # Every 30s: flush pending TG notifications
     scheduler.add_job(send_pending_tg_notifications, "interval", seconds=30, args=[settings], max_instances=1)
+    # Every 30s: flush pending VK notifications (if VK bot configured)
+    if settings.vk_bot_enabled and settings.vk_group_token:
+        scheduler.add_job(send_pending_vk_notifications, "interval", seconds=30, args=[settings], max_instances=1)
     # Every 5m: convert NOT_COMING responses → ABSENT attendance after event
     scheduler.add_job(materialize_absent_responses, "interval", minutes=5, max_instances=1)
     # Every 15m: remind commanders to fill attendance 2h after event
@@ -210,6 +214,37 @@ async def send_pending_tg_notifications(settings: Settings) -> None:
                 notification.tg_sent_at = utcnow()
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to send notification id=%s", notification.id)
+        await session.commit()
+
+
+async def send_pending_vk_notifications(settings: Settings) -> None:
+    """Flush notifications to VK for members who linked their VK account."""
+    if not settings.vk_bot_enabled or not settings.vk_group_token:
+        return
+    async with AsyncSessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(Notification, User.vk_id)
+                .join(User, User.id == Notification.user_id)
+                .where(
+                    Notification.send_to_tg.is_(True),
+                    Notification.vk_sent_at.is_(None),
+                    User.vk_id.is_not(None),
+                    User.status_code == "ACTIVE",
+                )
+                .order_by(Notification.created_at)
+                .limit(50)
+            )
+        ).all()
+        if not rows:
+            return
+        for notification, vk_id in rows:
+            try:
+                text = notification.title if not notification.body else f"{notification.title}\n\n{notification.body}"
+                await send_vk_message(settings.vk_group_token, vk_id, text)
+                notification.vk_sent_at = utcnow()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to send VK notification id=%s", notification.id)
         await session.commit()
 
 

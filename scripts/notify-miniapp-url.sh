@@ -111,7 +111,7 @@ if [[ "$FORCE" != "1" && "$CURRENT_URL" == "$LAST_NOTIFIED" ]]; then
   exit 0
 fi
 
-# Update MINI_APP_URL in .env
+# Update the Telegram Mini App URL and the website URL used by the VK bot.
 if grep -qE "^MINI_APP_URL=" "$ENV_FILE"; then
   sed -i "s|^MINI_APP_URL=.*|MINI_APP_URL=${CURRENT_URL}|" "$ENV_FILE"
 else
@@ -119,13 +119,20 @@ else
 fi
 echo "Updated MINI_APP_URL in $ENV_FILE"
 
+if grep -qE "^SITE_URL=" "$ENV_FILE"; then
+  sed -i "s|^SITE_URL=.*|SITE_URL=${CURRENT_URL}|" "$ENV_FILE"
+else
+  echo "SITE_URL=${CURRENT_URL}" >> "$ENV_FILE"
+fi
+echo "Updated SITE_URL in $ENV_FILE"
+
 # Update bot menu button via Telegram API
 curl -fsS -X POST "https://api.telegram.org/bot${BOT_TOKEN}/setChatMenuButton" \
   -H "Content-Type: application/json" \
   -d "{\"menu_button\":{\"type\":\"web_app\",\"text\":\"Открыть приложение\",\"web_app\":{\"url\":\"${CURRENT_URL}\"}}}" \
   >/dev/null && echo "Bot menu button updated" || echo "Warning: failed to update bot menu button" >&2
 
-# Restart bot container so it picks up new MINI_APP_URL from .env
+# Restart channel bots so both Telegram and VK pick up the new URL.
 if command -v docker >/dev/null 2>&1 && [[ -f "$COMPOSE_FILE" ]]; then
   docker compose -f "$COMPOSE_FILE" up -d frontend nginx 2>/dev/null \
     && echo "Frontend and nginx containers ensured" \
@@ -133,6 +140,11 @@ if command -v docker >/dev/null 2>&1 && [[ -f "$COMPOSE_FILE" ]]; then
   docker compose -f "$COMPOSE_FILE" restart bot 2>/dev/null \
     && echo "Bot container restarted" \
     || echo "Warning: failed to restart bot container" >&2
+  if docker compose -f "$COMPOSE_FILE" config --services | grep -qx "vk_bot"; then
+    docker compose -f "$COMPOSE_FILE" restart vk_bot 2>/dev/null \
+      && echo "VK bot container restarted" \
+      || echo "Warning: failed to restart VK bot container" >&2
+  fi
 fi
 
 # Notify admin with a fresh WebApp button. Old Telegram reply keyboards keep the
@@ -141,7 +153,7 @@ MESSAGE="Mini App URL обновлён автоматически.
 
 ${CURRENT_URL}
 
-.env и кнопка бота обновлены.
+.env, сайт VK-бота и кнопка Telegram-бота обновлены.
 
 Если старая кнопка открывает прошлый дизайн, нажми кнопку ниже или отправь /start."
 

@@ -1,0 +1,14 @@
+[Unit]
+Description=botvpk VK bot
+After=network.target
+
+[Service]
+User=REPLACE_USER
+WorkingDirectory=/opt/botvpk/backend
+EnvironmentFile=/opt/botvpk/.env
+ExecStart=/opt/botvpk/.venv/bin/python -m app.vk_bot
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

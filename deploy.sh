@@ -159,6 +159,7 @@ cat > "$APP_DIR/.env" << EOF
 # Telegram
 BOT_TOKEN=${BOT_TOKEN}
 MINI_APP_URL=${MINI_APP_URL}
+SITE_URL=${MINI_APP_URL}
 
 # Database
 DATABASE_URL=postgresql+asyncpg://vpk:${DB_PASS}@db:5432/vpk_zvezda
@@ -179,6 +180,10 @@ MAX_UPLOAD_SIZE_MB=20
 # Optional
 BIRTHDAY_CHAT_ID=
 BIRTHDAY_THREAD_ID=
+VK_BOT_ENABLED=false
+VK_GROUP_TOKEN=
+VK_GROUP_ID=
+VK_BOT_URL=
 EOF
 
 chmod 600 "$APP_DIR/.env"
@@ -336,10 +341,15 @@ for i in {1..45}; do
 done
 
 if [[ -n "$FINAL_URL" ]]; then
-    # Обновляем MINI_APP_URL в .env
+    # Обновляем URL для Telegram Mini App и кнопки сайта в VK.
     sed -i "s|MINI_APP_URL=.*|MINI_APP_URL=${FINAL_URL}|" "$APP_DIR/.env"
+    if grep -qE '^SITE_URL=' "$APP_DIR/.env"; then
+        sed -i "s|SITE_URL=.*|SITE_URL=${FINAL_URL}|" "$APP_DIR/.env"
+    else
+        echo "SITE_URL=${FINAL_URL}" >> "$APP_DIR/.env"
+    fi
     # Перезапускаем backend чтобы подхватил новый URL
-    docker compose restart backend bot 2>/dev/null || true
+    docker compose restart backend bot vk_bot 2>/dev/null || true
     if [[ -x "$APP_DIR/scripts/notify-miniapp-url.sh" ]]; then
         APP_DIR="$APP_DIR" "$APP_DIR/scripts/notify-miniapp-url.sh" "$FINAL_URL" || warn "Не удалось отправить Mini App URL в Telegram."
     fi

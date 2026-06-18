@@ -1,12 +1,38 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
 
 class TelegramAuthRequest(BaseModel):
     init_data: str = Field(min_length=1)
+
+
+class PasswordSetRequest(BaseModel):
+    new_password: str = Field(min_length=8, max_length=128)
+    current_password: str | None = Field(default=None, max_length=128)
+
+
+class PasswordLoginRequest(BaseModel):
+    telegram_id: int
+    password: str = Field(min_length=1, max_length=128)
+
+
+class PasswordStatusResponse(BaseModel):
+    has_password: bool
+    password_set_at: datetime | None = None
+
+
+class VkLinkCodeResponse(BaseModel):
+    code: str
+    expires_at: datetime
+
+
+class VkStatusResponse(BaseModel):
+    linked: bool
+    vk_id: int | None = None
+    bot_url: str | None = None
 
 
 class UserProfile(BaseModel):

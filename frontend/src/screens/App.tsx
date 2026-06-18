@@ -14,6 +14,7 @@ import {
   Flag,
   Flame,
   Home,
+  LogOut,
   Megaphone,
   MessageSquareWarning,
   RefreshCw,
@@ -78,6 +79,12 @@ import {
   useUpdateDashboardSettings,
   useUpdateMe,
   useUploadAvatar,
+  usePasswordStatus,
+  useSetPassword,
+  useDeletePassword,
+  useVkStatus,
+  useVkLinkCode,
+  useVkUnlink,
   useUploadFile,
   useUsers,
   useAdminAcceptApplication,
@@ -133,7 +140,8 @@ import {
   type ApplicationHistoryItem,
   type EventResponseItem,
 } from "../api/queries";
-import { api } from "../api/client";
+import { api, clearAccessToken, getStoredToken } from "../api/client";
+import { LoginScreen } from "./LoginScreen";
 import type {
   Appeal,
   AppealMessage,
@@ -934,7 +942,8 @@ export function App({ webApp }: Props) {
   const [prevView, setPrevView] = useState<ViewKey | null>(null);
   const [milestoneStreak, setMilestoneStreak] = useState<number | null>(null);
   const prevStreakRef = useRef<number>(0);
-  const hasToken = authStatus === "ready" && Boolean(auth.data?.access_token);
+  const webMode = !(webApp.initData?.trim());
+  const hasToken = authStatus === "ready" && (webMode || Boolean(auth.data?.access_token));
   const telegramUserId = webApp.initDataUnsafe?.user?.id ?? null;
   const initDataLength = webApp.initData?.length ?? 0;
   const isAuthenticating = authStatus === "checking" || auth.isPending;
@@ -1008,9 +1017,31 @@ export function App({ webApp }: Props) {
   useEffect(() => {
     const initData = webApp.initData?.trim() ?? "";
     if (!initData) {
-      setAuthStatus("missing_init_data");
+      // Website mode (not opened from Telegram): try to restore a saved password session.
+      const stored = getStoredToken();
+      if (!stored) {
+        setAuthStatus("missing_init_data");
+        setAuthError(null);
+        return;
+      }
+      setAuthStatus("checking");
       setAuthError(null);
-      return;
+      let cancelled = false;
+      api
+        .get<UserProfile>("/me")
+        .then(({ data }) => {
+          if (cancelled) return;
+          setProfile(data);
+          setAuthStatus("ready");
+        })
+        .catch(() => {
+          if (cancelled) return;
+          clearAccessToken();
+          setAuthStatus("missing_init_data");
+        });
+      return () => {
+        cancelled = true;
+      };
     }
     setAuthStatus("checking");
     setAuthError(null);
@@ -1202,19 +1233,32 @@ export function App({ webApp }: Props) {
           </div>
         )}
         {!isAuthenticating && !hasToken && (
-          <AuthGate
-            status={authStatus}
-            error={authError}
-            initDataLength={initDataLength}
-            telegramUserId={telegramUserId}
-            onAction={() => {
-              if (authStatus === "failed" && webApp.close) {
-                webApp.close();
-                return;
-              }
-              setAuthAttempt((value) => value + 1);
-            }}
-          />
+          webMode && authStatus === "missing_init_data" ? (
+            <LoginScreen
+              onSuccess={(data) => {
+                setProfile(data.profile);
+                setAuthStatus("ready");
+                setAuthError(null);
+                if (data.app_timezone) {
+                  _appTimezone = data.app_timezone;
+                }
+              }}
+            />
+          ) : (
+            <AuthGate
+              status={authStatus}
+              error={authError}
+              initDataLength={initDataLength}
+              telegramUserId={telegramUserId}
+              onAction={() => {
+                if (authStatus === "failed" && webApp.close) {
+                  webApp.close();
+                  return;
+                }
+                setAuthAttempt((value) => value + 1);
+              }}
+            />
+          )
         )}
         {!isAuthenticating && hasToken && activeView === "dashboard" && (
           profile.role_code === "CANDIDATE" ? (
@@ -1439,6 +1483,12 @@ export function App({ webApp }: Props) {
             onProfileUpdate={(p) => setProfile(p)}
             onAvatarUpload={(file) => uploadAvatar.mutateAsync(file)}
             isAvatarUploading={uploadAvatar.isPending}
+            webMode={webMode}
+            telegramMode={!webMode}
+            onLogout={() => {
+              clearAccessToken();
+              window.location.reload();
+            }}
           />
         )}
 
@@ -3921,6 +3971,9 @@ function ProfileView({
   onAvatarUpload,
   isAvatarUploading,
   onProfileUpdate,
+  webMode = false,
+  telegramMode = true,
+  onLogout,
 }: {
   profile: UserProfile;
   attendanceStats?: ReportSummary;
@@ -3931,6 +3984,9 @@ function ProfileView({
   onAvatarUpload: (file: File) => Promise<UserProfile>;
   isAvatarUploading: boolean;
   onProfileUpdate: (p: UserProfile) => void;
+  webMode?: boolean;
+  telegramMode?: boolean;
+  onLogout?: () => void;
 }) {
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const [editing, setEditing] = useState(false);
@@ -4161,6 +4217,173 @@ function ProfileView({
       )}
       {allUsers.length > 0 && (
         <ProfileRosterTabs profile={profile} allUsers={allUsers} squads={squads} />
+      )}
+      {telegramMode && profile.id !== null && roleLevels[profile.role_code] >= 3 && (
+        <WebAccessSection />
+      )}
+      {telegramMode && profile.id !== null && roleLevels[profile.role_code] >= 3 && (
+        <VkLinkSection />
+      )}
+      {webMode && onLogout && (
+        <button type="button" className={styles.logoutButton} onClick={onLogout}>
+          <LogOut size={16} strokeWidth={2.2} /> Выйти из аккаунта
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* ─────────── WebAccessSection (password for website login) ─────────── */
+function WebAccessSection() {
+  const status = usePasswordStatus(true);
+  const setPassword = useSetPassword();
+  const deletePassword = useDeletePassword();
+  const [open, setOpen] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const hasPassword = status.data?.has_password ?? false;
+
+  const submit = () => {
+    if (newPassword.length < 8) {
+      toast("Пароль должен быть не короче 8 символов", "error");
+      return;
+    }
+    setPassword.mutate(
+      { new_password: newPassword, current_password: hasPassword ? currentPassword : undefined },
+      {
+        onSuccess: () => {
+          toast(hasPassword ? "Пароль изменён" : "Пароль установлен", "success");
+          setOpen(false);
+          setNewPassword("");
+          setCurrentPassword("");
+        },
+        onError: () => toast("Не удалось сохранить пароль", "error"),
+      },
+    );
+  };
+
+  return (
+    <div className={styles.webAccessCard}>
+      <div className={styles.webAccessHeader}>
+        <div>
+          <strong>Вход на сайте</strong>
+          <small>{hasPassword ? "Пароль установлен — можно входить на сайте по Telegram ID" : "Задайте пароль, чтобы входить на сайте без Telegram"}</small>
+        </div>
+        <span className={styles.webAccessDot} data-on={hasPassword} />
+      </div>
+      {!open ? (
+        <div className={styles.webAccessActions}>
+          <button type="button" onClick={() => setOpen(true)}>
+            {hasPassword ? "Сменить пароль" : "Задать пароль"}
+          </button>
+          {hasPassword && (
+            <button
+              type="button"
+              className={styles.webAccessDanger}
+              onClick={() =>
+                deletePassword.mutate(undefined, {
+                  onSuccess: () => toast("Вход по паролю отключён", "success"),
+                  onError: () => toast("Не удалось отключить", "error"),
+                })
+              }
+            >
+              Отключить
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className={styles.webAccessForm}>
+          {hasPassword && (
+            <input
+              type="password"
+              placeholder="Текущий пароль"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+            />
+          )}
+          <input
+            type="password"
+            placeholder="Новый пароль (минимум 8 символов)"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+          />
+          <div className={styles.webAccessActions}>
+            <button type="button" onClick={submit} disabled={setPassword.isPending}>
+              {setPassword.isPending ? "Сохраняем…" : "Сохранить"}
+            </button>
+            <button type="button" className={styles.webAccessGhost} onClick={() => setOpen(false)}>
+              Отмена
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─────────── VkLinkSection (link VK account) ─────────── */
+function VkLinkSection() {
+  const status = useVkStatus(true);
+  const linkCode = useVkLinkCode();
+  const unlink = useVkUnlink();
+  const [code, setCode] = useState<string | null>(null);
+  const linked = status.data?.linked ?? false;
+  const botUrl = status.data?.bot_url ?? null;
+
+  const requestCode = () => {
+    linkCode.mutate(undefined, {
+      onSuccess: (data) => setCode(data.code),
+      onError: () => toast("Не удалось получить код", "error"),
+    });
+  };
+
+  return (
+    <div className={styles.webAccessCard}>
+      <div className={styles.webAccessHeader}>
+        <div>
+          <strong>ВКонтакте</strong>
+          <small>
+            {linked
+              ? "Аккаунт привязан — уведомления приходят и в ВК"
+              : "Привяжите ВК, чтобы пользоваться ботом и получать уведомления там"}
+          </small>
+        </div>
+        <span className={styles.webAccessDot} data-on={linked} />
+      </div>
+      {linked ? (
+        <div className={styles.webAccessActions}>
+          <button
+            type="button"
+            className={styles.webAccessDanger}
+            onClick={() =>
+              unlink.mutate(undefined, {
+                onSuccess: () => toast("ВК отвязан", "success"),
+                onError: () => toast("Не удалось отвязать", "error"),
+              })
+            }
+          >
+            Отвязать ВК
+          </button>
+        </div>
+      ) : code ? (
+        <div className={styles.vkCodeBox}>
+          <span className={styles.vkCodeValue}>{code}</span>
+          <small>
+            Отправьте этот код боту ВКонтакте в течение 10 минут.
+            {botUrl ? "" : " Найдите сообщество ВПК в ВК и напишите ему."}
+          </small>
+          {botUrl && (
+            <a className={styles.vkBotLink} href={botUrl} target="_blank" rel="noopener noreferrer">
+              Открыть бота ВК
+            </a>
+          )}
+        </div>
+      ) : (
+        <div className={styles.webAccessActions}>
+          <button type="button" onClick={requestCode} disabled={linkCode.isPending}>
+            {linkCode.isPending ? "Готовим код…" : "Привязать ВК"}
+          </button>
+        </div>
       )}
     </div>
   );

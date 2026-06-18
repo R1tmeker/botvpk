@@ -16,6 +16,7 @@ from . import (
     squads,
     submissions,
     users,
+    vk,
 )
 from .admin import audit as admin_audit
 from .admin import applications as admin_applications
@@ -28,6 +29,7 @@ from .admin import users as admin_users
 
 API_ROUTERS = [
     auth.router,
+    vk.router,
     public.router,
     join.router,
     schedule.router,

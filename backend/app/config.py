@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     max_upload_size_mb: int = Field(200, alias="MAX_UPLOAD_SIZE_MB")
     dryrun: bool = Field(False, alias="DRYRUN")
     super_admin_id: int | None = Field(None, validation_alias=AliasChoices("SUPER_ADMIN_ID", "SUPER_ADMIN_TG_ID"))
+    vk_bot_enabled: bool = Field(False, alias="VK_BOT_ENABLED")
+    vk_group_token: str | None = Field(None, alias="VK_GROUP_TOKEN")
+    vk_group_id: int | None = Field(None, alias="VK_GROUP_ID")
+    vk_bot_url: str | None = Field(None, alias="VK_BOT_URL")
+    site_url: str | None = Field(None, alias="SITE_URL")
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -4,21 +4,19 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from slowapi.util import get_remote_address
 from starlette.responses import JSONResponse
 
 from .background import create_scheduler
 from .config import get_settings
 from .database import AsyncSessionLocal
+from .ratelimit import limiter
 from .routers import API_ROUTERS
 from .seeds import ensure_seed_data
 
 
 settings = get_settings()
-limiter = Limiter(key_func=get_remote_address, default_limits=["120/minute"])
 
 
 @asynccontextmanager

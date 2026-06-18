@@ -1,6 +1,7 @@
 from .application import ApplicationStatusHistory, CandidateEvent, CandidateEventResponse, JoinApplication
 from .attendance import Attendance, AttendanceGrade, AttendanceHistory
 from .audit import AuditLog
+from .channel_link import ChannelLinkCode
 from .file import File
 from .learning import LearningCourse, LearningMaterial, LearningProgress
 from .normative import Normative, NormativeSubmission, NormativeSubmissionFile, NormativeTarget
@@ -24,6 +25,7 @@ __all__ = [
     "AttendanceHistory",
     "AuditLog",
     "BotChat",
+    "ChannelLinkCode",
     "CandidateEvent",
     "CandidateEventResponse",
     "EventRecipient",

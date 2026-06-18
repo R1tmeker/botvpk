@@ -51,6 +51,8 @@ async def get_current_user(
         user = await session.scalar(select(User).where(User.id == user_id))
         if user is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User from token not found.")
+        if user.status_code != "ACTIVE":
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User account is inactive.")
     return CurrentUser(
         user=user,
         user_id=user.id if user else None,

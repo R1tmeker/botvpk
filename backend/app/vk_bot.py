@@ -52,15 +52,19 @@ ROLE_LABELS = {
 _CODE_RE = re.compile(r"^\s*(\d{6})\s*$")
 
 
-def main_keyboard(site_url: str | None) -> str:
+def main_keyboard() -> str:
     buttons = [
         [{"action": {"type": "text", "label": "📅 Расписание"}, "color": "primary"}],
         [{"action": {"type": "text", "label": "🔔 Уведомления"}, "color": "secondary"}],
         [{"action": {"type": "text", "label": "👤 Профиль"}, "color": "secondary"}],
     ]
-    if site_url:
-        buttons.append([{"action": {"type": "open_link", "link": site_url, "label": "🌐 Открыть сайт"}}])
     return json.dumps({"one_time": False, "buttons": buttons}, ensure_ascii=False)
+
+
+def with_site_link(text: str, site_url: str | None) -> str:
+    if not site_url:
+        return text
+    return f"{text}\n\nСайт: {site_url}"
 
 
 def empty_keyboard() -> str:
@@ -242,8 +246,8 @@ def build_bot():
                 _vk_login_state.pop(vk_id, None)
                 if ok:
                     await message.answer(
-                        msg + "\n\nСовет: удалите сообщение с паролем из переписки.",
-                        keyboard=main_keyboard(site),
+                        with_site_link(msg + "\n\nСовет: удалите сообщение с паролем из переписки.", site),
+                        keyboard=main_keyboard(),
                     )
                 else:
                     await message.answer(msg + "\nЧтобы попробовать снова — нажмите «Войти по паролю».", keyboard=login_entry_keyboard())
@@ -272,7 +276,7 @@ def build_bot():
                 if result is None:
                     await message.answer("Код неверный или истёк. Получите новый в приложении ВПК.")
                 else:
-                    await message.answer(result, keyboard=main_keyboard(site))
+                    await message.answer(with_site_link(result, site), keyboard=main_keyboard())
                 return
 
             await message.answer(link_instructions(settings), keyboard=login_entry_keyboard())
@@ -285,8 +289,11 @@ def build_bot():
             await message.answer(_profile_text(user))
         else:
             await message.answer(
-                f"С возвращением, {user.full_name}! Выберите раздел:",
-                keyboard=main_keyboard(settings.site_url or settings.mini_app_url),
+                with_site_link(
+                    f"С возвращением, {user.full_name}! Выберите раздел:",
+                    settings.site_url or settings.mini_app_url,
+                ),
+                keyboard=main_keyboard(),
             )
 
     return bot

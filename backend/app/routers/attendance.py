@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
@@ -17,7 +15,6 @@ from ..schemas.core import (
     AttendanceMarkRequest,
     AttendanceRead,
     AttendanceUpdate,
-    MessageResponse,
     ReportSummary,
 )
 from ..utils.audit import model_snapshot, record_audit, utcnow
@@ -120,11 +117,19 @@ async def sync_automatic_grade(
 
 @router.get("/my", response_model=list[AttendanceRead])
 async def my_attendance(
+    limit: int = 100,
+    offset: int = 0,
     current_user: CurrentUser = Depends(require_role(RoleLevel.PARTICIPANT)),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[Attendance]:
     user_id = require_profile(current_user)
-    statement = select(Attendance).where(Attendance.user_id == user_id).order_by(Attendance.updated_at.desc().nullslast())
+    statement = (
+        select(Attendance)
+        .where(Attendance.user_id == user_id)
+        .order_by(Attendance.updated_at.desc().nullslast())
+        .offset(max(0, offset))
+        .limit(min(max(1, limit), 500))
+    )
     return list((await session.scalars(statement)).all())
 
 
@@ -219,6 +224,8 @@ async def squad_attendance_stats(
 @router.get("/events/{event_id}", response_model=list[AttendanceRead])
 async def event_attendance(
     event_id: int,
+    limit: int = 200,
+    offset: int = 0,
     current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_SQUAD_COMMANDER)),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[Attendance]:
@@ -236,6 +243,7 @@ async def event_attendance(
             .where(Attendance.event_id == event.id, User.squad_id == current_user.squad_id)
             .order_by(Attendance.user_id)
         )
+    statement = statement.offset(max(0, offset)).limit(min(max(1, limit), 500))
     return list((await session.scalars(statement)).all())
 
 

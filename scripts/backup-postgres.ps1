@@ -4,6 +4,7 @@ param(
   [string]$DbName = "vpk_zvezda",
   [string]$DbUser = "vpk",
   [string]$BackupDir = "backups",
+  [string]$OffsiteDir = $env:BACKUP_OFFSITE_DIR,
   [int]$KeepLast = 14
 )
 
@@ -23,12 +24,24 @@ try {
   docker compose -f $ComposeFile cp "${Service}:$containerFile" $localFile
   docker compose -f $ComposeFile exec -T $Service rm -f $containerFile
 
+  if ($OffsiteDir) {
+    $offsitePath = (Resolve-Path -LiteralPath $OffsiteDir -ErrorAction SilentlyContinue)
+    if (-not $offsitePath) {
+      New-Item -ItemType Directory -Force -Path $OffsiteDir | Out-Null
+      $offsitePath = Resolve-Path -LiteralPath $OffsiteDir
+    }
+    Copy-Item -LiteralPath $localFile -Destination $offsitePath.Path -Force
+  }
+
   Get-ChildItem -Path $backupPath -Filter "vpk-zvezda-*.dump" |
     Sort-Object LastWriteTime -Descending |
     Select-Object -Skip $KeepLast |
     Remove-Item -Force
 
   Write-Host "Backup saved: $localFile"
+  if ($OffsiteDir) {
+    Write-Host "Offsite copy saved to: $OffsiteDir"
+  }
 }
 finally {
   Pop-Location

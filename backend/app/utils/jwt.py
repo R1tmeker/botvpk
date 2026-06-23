@@ -12,6 +12,7 @@ def create_access_token(payload: dict[str, Any], settings: Settings) -> str:
     now = datetime.now(timezone.utc)
     claims = {
         **payload,
+        "jti": payload.get("jti") or f"{payload.get('user_id', 'public')}:{int(now.timestamp() * 1000)}",
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=settings.jwt_expire_minutes)).timestamp()),
     }

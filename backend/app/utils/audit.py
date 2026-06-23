@@ -3,13 +3,13 @@ from __future__ import annotations
 from datetime import date, datetime, time, timezone
 from typing import Any
 
-
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import AuditLog
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 async def record_audit(

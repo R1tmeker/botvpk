@@ -4,14 +4,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import WebApp from "@twa-dev/sdk";
 
 import { App } from "./screens/App";
+import { applyInitialTheme } from "./theme";
 import "./styles/global.scss";
 
 WebApp.ready();
 WebApp.expand();
 
-// Force light theme always — remove before React renders to avoid flash
-document.documentElement.removeAttribute("data-theme");
-document.documentElement.setAttribute("data-theme", "light");
+applyInitialTheme((WebApp as { colorScheme?: string | null }).colorScheme);
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -31,3 +30,11 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     </QueryClientProvider>
   </React.StrictMode>,
 );
+
+if ("serviceWorker" in navigator && import.meta.env.PROD) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {
+      // PWA is an enhancement; the app must keep working if registration fails.
+    });
+  });
+}

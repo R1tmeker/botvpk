@@ -1,0 +1,10 @@
+[Unit]
+Description=VPK Zvezda PostgreSQL backup
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/botvpk
+EnvironmentFile=-/opt/botvpk/.env
+ExecStart=/usr/bin/pwsh -NoProfile -ExecutionPolicy Bypass -File /opt/botvpk/scripts/backup-postgres.ps1 -ComposeFile docker-compose.prod.yml -BackupDir backups -KeepLast 14

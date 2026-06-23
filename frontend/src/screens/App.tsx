@@ -79,12 +79,6 @@ import {
   useUpdateDashboardSettings,
   useUpdateMe,
   useUploadAvatar,
-  usePasswordStatus,
-  useSetPassword,
-  useDeletePassword,
-  useVkStatus,
-  useVkLinkCode,
-  useVkUnlink,
   useUploadFile,
   useUsers,
   useAdminAcceptApplication,
@@ -142,6 +136,18 @@ import {
 } from "../api/queries";
 import { api, clearAccessToken, getStoredToken } from "../api/client";
 import { LoginScreen } from "./LoginScreen";
+import { ThemeSection, TwoFactorSection, VkLinkSection, WebAccessSection, WebPushSection } from "./profile/ProfileIntegrations";
+import {
+  applyPhoneMask,
+  formatDate,
+  formatDateFull,
+  formatPhoneDisplay,
+  formatUnreadCount,
+  getAppTimezone,
+  phoneInputToRaw,
+  setAppTimezone,
+  toDateTimeLocal,
+} from "../utils/format";
 import type {
   Appeal,
   AppealMessage,
@@ -174,8 +180,8 @@ import {
   BarChart,
   CalendarHeatmap,
   GradeDistribution,
-  StatNumber,
-} from "../components/Charts";
+} from "../components/LazyCharts";
+import { StatNumber } from "../components/StatNumber";
 import { ToastContainer, toast } from "../components/Toast";
 import { PromoCard, PromoStrip, AdminPromoCard, PromoEditForm } from "../components/PromoCard";
 import { MilestoneToast } from "../components/Confetti";
@@ -695,72 +701,6 @@ function menuCard(code: string, title: string, description: string, icon: string
   };
 }
 
-function formatPhoneDisplay(raw: string | null | undefined): string {
-  if (!raw) return "—";
-  const digits = raw.replace(/\D/g, "");
-  const local = digits.startsWith("7") || digits.startsWith("8") ? digits.slice(1) : digits;
-  if (local.length !== 10) return raw;
-  return `+7 ${local.slice(0, 3)} ${local.slice(3, 6)} ${local.slice(6, 8)} ${local.slice(8, 10)}`;
-}
-
-function phoneInputToRaw(display: string): string {
-  const digits = display.replace(/\D/g, "");
-  const local = digits.startsWith("7") || digits.startsWith("8") ? digits.slice(1) : digits;
-  return local.length > 0 ? "+7" + local.slice(0, 10) : "";
-}
-
-function applyPhoneMask(value: string): string {
-  const digits = value.replace(/\D/g, "");
-  const local = digits.startsWith("7") || digits.startsWith("8") ? digits.slice(1) : digits;
-  const d = local.slice(0, 10);
-  let result = "+7";
-  if (d.length > 0) result += " " + d.slice(0, 3);
-  if (d.length > 3) result += " " + d.slice(3, 6);
-  if (d.length > 6) result += " " + d.slice(6, 8);
-  if (d.length > 8) result += " " + d.slice(8, 10);
-  return result;
-}
-
-// Set after auth to use server-configured timezone instead of browser-local
-let _appTimezone = "Asia/Novosibirsk";
-
-function formatDate(value: string | null) {
-  if (!value) return "без даты";
-  return new Intl.DateTimeFormat("ru-RU", {
-    day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
-    timeZone: _appTimezone,
-  }).format(new Date(value));
-}
-
-function toDateTimeLocal(value: string | null) {
-  if (!value) return "";
-  const d = new Date(value);
-  // Format in the server's configured timezone so datetime-local inputs show correct local times
-  const parts = new Intl.DateTimeFormat("sv-SE", {
-    year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit",
-    timeZone: _appTimezone,
-    hour12: false,
-  }).formatToParts(d);
-  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "00";
-  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
-}
-
-function formatDateFull(value: string | null) {
-  if (!value) return "—";
-  return new Intl.DateTimeFormat("ru-RU", {
-    day: "2-digit", month: "long", year: "numeric",
-    timeZone: _appTimezone,
-  }).format(new Date(value));
-}
-
-function formatUnreadCount(count: number) {
-  const mod10 = count % 10;
-  const mod100 = count % 100;
-  const word = mod10 === 1 && mod100 !== 11 ? "новое" : "новых";
-  return `${count} ${word}`;
-}
-
 type NavItem = {
   view: ViewKey;
   iconCode: string;
@@ -948,10 +888,6 @@ export function App({ webApp }: Props) {
   const initDataLength = webApp.initData?.length ?? 0;
   const isAuthenticating = authStatus === "checking" || auth.isPending;
 
-  // Force light theme always
-  useEffect(() => {
-    document.documentElement.removeAttribute("data-theme");
-  }, []);
   const level = roleLevels[profile.role_code];
   const publicMode = hasToken && level < 3;
   const internalMode = hasToken && level >= 3;
@@ -1051,7 +987,7 @@ export function App({ webApp }: Props) {
         setAuthStatus("ready");
         setAuthError(null);
         if (data.app_timezone) {
-          _appTimezone = data.app_timezone;
+          setAppTimezone(data.app_timezone);
         }
       },
       onError: (error) => {
@@ -1171,7 +1107,7 @@ export function App({ webApp }: Props) {
               setAuthStatus("ready");
               setAuthError(null);
               if (data.app_timezone) {
-                _appTimezone = data.app_timezone;
+                setAppTimezone(data.app_timezone);
               }
             }}
           />
@@ -2526,7 +2462,7 @@ function AttendanceView({
   // Convert to local app timezone so calendar cells match displayed dates
   const eventDateMap = new Map(schedule.map((e) => [e.id, e.start_datetime]));
   const toLocalDate = (iso: string) =>
-    new Intl.DateTimeFormat("sv-SE", { timeZone: _appTimezone }).format(new Date(iso));
+    new Intl.DateTimeFormat("sv-SE", { timeZone: getAppTimezone() }).format(new Date(iso));
   const heatData = records
     .map((r) => {
       const dateStr = r.marked_at ?? eventDateMap.get(r.event_id) ?? null;
@@ -2539,7 +2475,7 @@ function AttendanceView({
   const monthCounts: Record<string, number> = {};
   for (const r of records) {
     if (!r.marked_at) continue;
-    const month = new Intl.DateTimeFormat("ru-RU", { month: "short", timeZone: _appTimezone }).format(new Date(r.marked_at));
+    const month = new Intl.DateTimeFormat("ru-RU", { month: "short", timeZone: getAppTimezone() }).format(new Date(r.marked_at));
     if (r.status_code === "PRESENT") monthCounts[month] = (monthCounts[month] ?? 0) + 1;
   }
   const barData = Object.entries(monthCounts).slice(-6).map(([label, value]) => ({ label, value, color: "#27ae60" }));
@@ -4070,6 +4006,16 @@ function ProfileView({
     }
   };
 
+  const openAvatarPicker = () => {
+    if (!isAvatarUploading) {
+      avatarInputRef.current?.click();
+    }
+  };
+
+  const copyTelegramId = () => {
+    navigator.clipboard.writeText(String(profile.telegram_id)).then(() => toast("Telegram ID скопирован", "info")).catch(() => {});
+  };
+
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
@@ -4079,7 +4025,19 @@ function ProfileView({
         </button>
       </div>
       <div className={styles.profileCard}>
-        <div className={styles.profileAvatarUpload} onClick={() => !isAvatarUploading && avatarInputRef.current?.click()}>
+        <div
+          className={styles.profileAvatarUpload}
+          onClick={openAvatarPicker}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              openAvatarPicker();
+            }
+          }}
+          role="button"
+          tabIndex={isAvatarUploading ? -1 : 0}
+          aria-label={avatar ? "Сменить фото профиля" : "Загрузить фото профиля"}
+        >
           <span className={styles.profileAvatar}>
             {avatar ? <img src={avatar} alt="" onError={() => { setAvatarFailed(true); setLocalAvatarPreview(null); }} /> : profile.full_name.charAt(0).toUpperCase()}
           </span>
@@ -4185,9 +4143,16 @@ function ProfileView({
             <div
               className={styles.profileRow}
               style={{ cursor: "pointer" }}
-              onClick={() => {
-                navigator.clipboard.writeText(String(profile.telegram_id)).then(() => toast("Telegram ID скопирован", "info")).catch(() => {});
+              onClick={copyTelegramId}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  copyTelegramId();
+                }
               }}
+              role="button"
+              tabIndex={0}
+              aria-label="Скопировать Telegram ID"
             >
               <dt>Telegram ID</dt>
               <dd style={{ color: "#1a2f5a", textDecoration: "underline dotted" }}>
@@ -4230,8 +4195,15 @@ function ProfileView({
       {allUsers.length > 0 && (
         <ProfileRosterTabs profile={profile} allUsers={allUsers} squads={squads} />
       )}
+      <ThemeSection />
       {telegramMode && profile.id !== null && roleLevels[profile.role_code] >= 3 && (
         <WebAccessSection />
+      )}
+      {profile.id !== null && roleLevels[profile.role_code] >= 4 && (
+        <TwoFactorSection />
+      )}
+      {profile.id !== null && roleLevels[profile.role_code] >= 3 && (
+        <WebPushSection />
       )}
       {telegramMode && profile.id !== null && roleLevels[profile.role_code] >= 3 && (
         <VkLinkSection />
@@ -4240,162 +4212,6 @@ function ProfileView({
         <button type="button" className={styles.logoutButton} onClick={onLogout}>
           <LogOut size={16} strokeWidth={2.2} /> Выйти из аккаунта
         </button>
-      )}
-    </div>
-  );
-}
-
-/* ─────────── WebAccessSection (password for website login) ─────────── */
-function WebAccessSection() {
-  const status = usePasswordStatus(true);
-  const setPassword = useSetPassword();
-  const deletePassword = useDeletePassword();
-  const [open, setOpen] = useState(false);
-  const [newPassword, setNewPassword] = useState("");
-  const [currentPassword, setCurrentPassword] = useState("");
-  const hasPassword = status.data?.has_password ?? false;
-
-  const submit = () => {
-    if (newPassword.length < 8) {
-      toast("Пароль должен быть не короче 8 символов", "error");
-      return;
-    }
-    setPassword.mutate(
-      { new_password: newPassword, current_password: hasPassword ? currentPassword : undefined },
-      {
-        onSuccess: () => {
-          toast(hasPassword ? "Пароль изменён" : "Пароль установлен", "success");
-          setOpen(false);
-          setNewPassword("");
-          setCurrentPassword("");
-        },
-        onError: () => toast("Не удалось сохранить пароль", "error"),
-      },
-    );
-  };
-
-  return (
-    <div className={styles.webAccessCard}>
-      <div className={styles.webAccessHeader}>
-        <div>
-          <strong>Вход на сайте</strong>
-          <small>{hasPassword ? "Пароль установлен — можно входить на сайте по Telegram ID" : "Задайте пароль, чтобы входить на сайте без Telegram"}</small>
-        </div>
-        <span className={styles.webAccessDot} data-on={hasPassword} />
-      </div>
-      {!open ? (
-        <div className={styles.webAccessActions}>
-          <button type="button" onClick={() => setOpen(true)}>
-            {hasPassword ? "Сменить пароль" : "Задать пароль"}
-          </button>
-          {hasPassword && (
-            <button
-              type="button"
-              className={styles.webAccessDanger}
-              onClick={() =>
-                deletePassword.mutate(undefined, {
-                  onSuccess: () => toast("Вход по паролю отключён", "success"),
-                  onError: () => toast("Не удалось отключить", "error"),
-                })
-              }
-            >
-              Отключить
-            </button>
-          )}
-        </div>
-      ) : (
-        <div className={styles.webAccessForm}>
-          {hasPassword && (
-            <input
-              type="password"
-              placeholder="Текущий пароль"
-              value={currentPassword}
-              onChange={(e) => setCurrentPassword(e.target.value)}
-            />
-          )}
-          <input
-            type="password"
-            placeholder="Новый пароль (минимум 8 символов)"
-            value={newPassword}
-            onChange={(e) => setNewPassword(e.target.value)}
-          />
-          <div className={styles.webAccessActions}>
-            <button type="button" onClick={submit} disabled={setPassword.isPending}>
-              {setPassword.isPending ? "Сохраняем…" : "Сохранить"}
-            </button>
-            <button type="button" className={styles.webAccessGhost} onClick={() => setOpen(false)}>
-              Отмена
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ─────────── VkLinkSection (link VK account) ─────────── */
-function VkLinkSection() {
-  const status = useVkStatus(true);
-  const linkCode = useVkLinkCode();
-  const unlink = useVkUnlink();
-  const [code, setCode] = useState<string | null>(null);
-  const linked = status.data?.linked ?? false;
-  const botUrl = status.data?.bot_url ?? null;
-
-  const requestCode = () => {
-    linkCode.mutate(undefined, {
-      onSuccess: (data) => setCode(data.code),
-      onError: () => toast("Не удалось получить код", "error"),
-    });
-  };
-
-  return (
-    <div className={styles.webAccessCard}>
-      <div className={styles.webAccessHeader}>
-        <div>
-          <strong>ВКонтакте</strong>
-          <small>
-            {linked
-              ? "Аккаунт привязан — уведомления приходят и в ВК"
-              : "Привяжите ВК, чтобы пользоваться ботом и получать уведомления там"}
-          </small>
-        </div>
-        <span className={styles.webAccessDot} data-on={linked} />
-      </div>
-      {linked ? (
-        <div className={styles.webAccessActions}>
-          <button
-            type="button"
-            className={styles.webAccessDanger}
-            onClick={() =>
-              unlink.mutate(undefined, {
-                onSuccess: () => toast("ВК отвязан", "success"),
-                onError: () => toast("Не удалось отвязать", "error"),
-              })
-            }
-          >
-            Отвязать ВК
-          </button>
-        </div>
-      ) : code ? (
-        <div className={styles.vkCodeBox}>
-          <span className={styles.vkCodeValue}>{code}</span>
-          <small>
-            Отправьте этот код боту ВКонтакте в течение 10 минут.
-            {botUrl ? "" : " Найдите сообщество ВПК в ВК и напишите ему."}
-          </small>
-          {botUrl && (
-            <a className={styles.vkBotLink} href={botUrl} target="_blank" rel="noopener noreferrer">
-              Открыть бота ВК
-            </a>
-          )}
-        </div>
-      ) : (
-        <div className={styles.webAccessActions}>
-          <button type="button" onClick={requestCode} disabled={linkCode.isPending}>
-            {linkCode.isPending ? "Готовим код…" : "Привязать ВК"}
-          </button>
-        </div>
       )}
     </div>
   );

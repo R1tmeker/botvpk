@@ -14,9 +14,11 @@ from .database import AsyncSessionLocal
 from .ratelimit import limiter
 from .routers import API_ROUTERS
 from .seeds import ensure_seed_data
+from .services.observability import init_sentry
 
 
 settings = get_settings()
+init_sentry(settings, service_name="backend")
 
 
 @asynccontextmanager

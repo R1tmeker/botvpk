@@ -12,6 +12,29 @@ Required values:
 
 Mini App must be opened from Telegram over HTTPS. Local `http://localhost:*` URLs are only for development.
 
+## Stable Cloudflare Tunnel
+
+For production prefer a named Cloudflare tunnel with a fixed DNS route instead of the quick tunnel in `systemd/vpk-tunnel.service`.
+
+```bash
+cloudflared tunnel create botvpk
+cloudflared tunnel route dns botvpk your-domain.example.com
+sudo cp systemd/vpk-named-tunnel.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now vpk-named-tunnel.service
+```
+
+Example `/etc/cloudflared/config.yml`:
+
+```yaml
+tunnel: botvpk
+credentials-file: /etc/cloudflared/botvpk.json
+ingress:
+  - hostname: your-domain.example.com
+    service: http://127.0.0.1:8081
+  - service: http_status:404
+```
+
 ## Daily Database Backups
 
 Create a backup manually:
@@ -41,7 +64,15 @@ Linux cron example:
 15 3 * * * pwsh -NoProfile -File /opt/botvpk/scripts/backup-postgres.ps1 >> /opt/botvpk/logs/backup.log 2>&1
 ```
 
-Backups are written to `backups/`, which is ignored by git. The script keeps the latest 14 dumps by default.
+Systemd timer option:
+
+```bash
+sudo cp systemd/botvpk-backup.service systemd/botvpk-backup.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now botvpk-backup.timer
+```
+
+Backups are written to `backups/`, which is ignored by git. The script keeps the latest 14 dumps by default. Set `BACKUP_OFFSITE_DIR=/mnt/backup/botvpk` (or another mounted S3/WebDAV/rclone target) to copy every dump off the application disk.
 
 ## Restore Check
 

@@ -25,8 +25,11 @@ from .models import (
     Setting,
     Squad,
     User,
+    WebPushSubscription,
 )
 from .models.file import File as StoredFile
+from .services.delivery import call_telegram_with_rate_limit, vk_rate_limit_pause
+from .services.web_push import send_web_push_notification, web_push_available
 from .utils.audit import utcnow
 from .utils.vk import send_vk_message
 
@@ -70,6 +73,8 @@ def create_scheduler(settings: Settings) -> AsyncIOScheduler:
     # Every 30s: flush pending VK notifications (if VK bot configured)
     if settings.vk_bot_enabled and settings.vk_group_token:
         scheduler.add_job(send_pending_vk_notifications, "interval", seconds=30, args=[settings], max_instances=1)
+    if web_push_available(settings):
+        scheduler.add_job(send_pending_web_push_notifications, "interval", seconds=30, args=[settings], max_instances=1)
     # Every 5m: convert NOT_COMING responses → ABSENT attendance after event
     scheduler.add_job(materialize_absent_responses, "interval", minutes=5, max_instances=1)
     # Every 15m: remind commanders to fill attendance 2h after event
@@ -135,6 +140,18 @@ def _build_notification_keyboard(notification: Notification, settings: Settings)
     if notification.type_code == "NEW_APPLICATION" and settings.mini_app_url:
         return InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="Открыть приложение", web_app=WebAppInfo(url=settings.mini_app_url)),
+        ]])
+    if notification.type_code == "ATTENDANCE" and notification.entity_id:
+        return InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="Отметить явку", callback_data=f"attendance:{notification.entity_id}:0"),
+        ]])
+    if notification.type_code == "APPEAL" and settings.mini_app_url:
+        return InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="Открыть обращение", web_app=WebAppInfo(url=settings.mini_app_url)),
+        ]])
+    if notification.type_code == "NORMATIVE" and settings.mini_app_url:
+        return InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="Открыть нормативы", web_app=WebAppInfo(url=settings.mini_app_url)),
         ]])
     if notification.type_code in ("APPLICATION", "NORMATIVE") and settings.mini_app_url:
         return InlineKeyboardMarkup(inline_keyboard=[[
@@ -203,7 +220,13 @@ async def send_pending_tg_notifications(settings: Settings) -> None:
             try:
                 text = notification.title if not notification.body else f"{notification.title}\n\n{notification.body}"
                 keyboard = _build_notification_keyboard(notification, settings)
-                await bot.send_message(telegram_id, text, reply_markup=keyboard)
+                await call_telegram_with_rate_limit(
+                    lambda telegram_id=telegram_id, text=text, keyboard=keyboard: bot.send_message(
+                        telegram_id,
+                        text,
+                        reply_markup=keyboard,
+                    )
+                )
                 # Send normative submission files immediately to commanders and with review results to participants.
                 if (
                     notification.type_code == "NORMATIVE"
@@ -242,9 +265,44 @@ async def send_pending_vk_notifications(settings: Settings) -> None:
             try:
                 text = notification.title if not notification.body else f"{notification.title}\n\n{notification.body}"
                 await send_vk_message(settings.vk_group_token, vk_id, text)
+                await vk_rate_limit_pause()
                 notification.vk_sent_at = utcnow()
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to send VK notification id=%s", notification.id)
+        await session.commit()
+
+
+async def send_pending_web_push_notifications(settings: Settings) -> None:
+    """Flush notifications to active browser push subscriptions."""
+    if not web_push_available(settings):
+        return
+    async with AsyncSessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(Notification, WebPushSubscription)
+                .join(User, User.id == Notification.user_id)
+                .join(WebPushSubscription, WebPushSubscription.user_id == Notification.user_id)
+                .where(
+                    Notification.web_push_sent_at.is_(None),
+                    WebPushSubscription.is_active.is_(True),
+                    User.status_code == "ACTIVE",
+                )
+                .order_by(Notification.created_at)
+                .limit(100)
+            )
+        ).all()
+        if not rows:
+            return
+        sent_notification_ids: set[int] = set()
+        for notification, subscription in rows:
+            sent = await send_web_push_notification(settings, subscription, notification)
+            if sent:
+                sent_notification_ids.add(notification.id)
+        if sent_notification_ids:
+            for notification_id in sent_notification_ids:
+                notification = await session.get(Notification, notification_id)
+                if notification:
+                    notification.web_push_sent_at = utcnow()
         await session.commit()
 
 
@@ -429,7 +487,6 @@ async def send_morning_briefing(settings: Settings) -> None:
     today_local_end = today_local_start + timedelta(days=1)
     today_start = today_local_start.astimezone(timezone.utc).replace(tzinfo=None)
     today_end = today_local_end.astimezone(timezone.utc).replace(tzinfo=None)
-    now = utcnow()
 
     async with AsyncSessionLocal() as session:
         events = list(
@@ -504,8 +561,6 @@ async def send_morning_briefing(settings: Settings) -> None:
             # Commander extra: response summary (using pre-loaded responses)
             if user.role_code in COMMANDER_ROLE_CODES:
                 for event in user_events:
-                    event_responses = [r for r in all_responses if r.event_id == event.id]
-                    responded_user_ids = {r.user_id for r in event_responses}
                     squad_users = [
                         u for u in users
                         if u.role_code in CONFIRMED_ROLE_CODES

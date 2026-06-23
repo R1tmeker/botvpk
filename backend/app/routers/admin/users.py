@@ -15,6 +15,7 @@ from ...dependencies.auth import CurrentUser, require_role
 from ...models import Squad, User
 from ...roles import RoleLevel, ROLE_LEVELS
 from ...schemas.core import UserRead, UserUpdate
+from ...services.auth_security import bump_token_version
 from ...utils.audit import model_snapshot, record_audit
 
 router = APIRouter(prefix="/admin/users", tags=["admin:users"])
@@ -139,12 +140,15 @@ async def admin_users(
     status_code: str | None = None,
     search: str | None = None,
     exclude_public: bool = True,
+    limit: int = 200,
+    offset: int = 0,
     current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_SQUAD_COMMANDER)),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[User]:
     statement = _build_users_query(current_user, squad_id, role_code, status_code, search, exclude_public)
     if statement is None:
         return []
+    statement = statement.offset(max(0, offset)).limit(min(max(1, limit), 500))
     return list((await session.scalars(statement)).all())
 
 
@@ -333,8 +337,12 @@ async def admin_update_user(
                 detail="Cannot assign a role equal to or higher than your own.",
             )
     old = model_snapshot(user, list(updates))
+    old_status = user.status_code
+    old_telegram_id = user.telegram_id
     for key, value in updates.items():
         setattr(user, key, value)
+    if user.status_code != old_status or user.telegram_id != old_telegram_id:
+        bump_token_version(user)
     await sync_user_squad_leadership(session, user)
     user.updated_at = datetime.now(timezone.utc)
     await record_audit(
@@ -367,6 +375,7 @@ async def deactivate_user(
     old_status = user.status_code
     user.status_code = "ARCHIVED"
     user.updated_at = datetime.now(timezone.utc)
+    bump_token_version(user)
     await record_audit(
         session,
         user_id=current_user.user_id,

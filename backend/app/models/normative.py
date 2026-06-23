@@ -41,6 +41,8 @@ class NormativeSubmission(Base):
     __table_args__ = (
         Index("idx_normative_submissions_user", "user_id"),
         Index("idx_normative_submissions_status", "status_code"),
+        Index("idx_normative_submissions_user_submitted", "user_id", "submitted_at"),
+        Index("idx_normative_submissions_status_submitted", "status_code", "submitted_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

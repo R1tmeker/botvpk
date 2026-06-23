@@ -1,0 +1,10 @@
+[Unit]
+Description=Run VPK Zvezda PostgreSQL backup daily
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+Persistent=true
+Unit=botvpk-backup.service
+
+[Install]
+WantedBy=timers.target

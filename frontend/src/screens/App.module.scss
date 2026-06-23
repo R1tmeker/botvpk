@@ -2034,6 +2034,7 @@
   gap: 8px;
   justify-self: center;
   cursor: pointer;
+  border-radius: 12px;
 
   input {
     position: absolute;
@@ -2644,7 +2645,7 @@ button[data-active="true"] .navIcon {
   margin-bottom: 8px;
 }
 
-/* ── Dark Mode — disabled, always light ─────── */
+/* ── Dark Mode ──────────────────────────────── */
 [data-theme="dark"]:not([data-theme="light"]) {
   --text: #e8edf5;
   --page: #1a1f2e;
@@ -2652,7 +2653,8 @@ button[data-active="true"] .navIcon {
   body { background: linear-gradient(180deg, #0d1526 0 270px, #1a1f2e 270px 100%); }
 
   .panel, .row, .metric, .miniList, .promoStrip, .customizer,
-  .profileCard, .activityFeed, .streakBadge, .memberRow, .messageBubble {
+  .profileCard, .activityFeed, .streakBadge, .memberRow, .messageBubble,
+  .webAccessCard, .eventDescription, .eventMetaGrid div, .joinCta {
     background: #232a3b;
     border-color: #2e3a4e;
     color: #e8edf5;
@@ -2718,10 +2720,45 @@ button[data-active="true"] .navIcon {
   }
 
   .formBlock input, .formBlock textarea, .formBlock select,
-  .messageInput input {
+  .messageInput input, .webAccessForm input {
     background: #2a3244;
     border-color: #3a4a60;
     color: #e8edf5;
+  }
+
+  .profileRow dt,
+  .webAccessHeader strong,
+  .eventMetaGrid strong,
+  .eventBackButton {
+    color: #e8edf5;
+  }
+
+  .profileRow dd,
+  .webAccessHeader small,
+  .vkCodeBox small,
+  .activityItem small {
+    color: #9ba8c2;
+  }
+
+  .themeToggle button {
+    background: #2a3244;
+    border-color: #3a4a60;
+    color: #c8d4e8;
+
+    &[data-active="true"] {
+      background: #dce8ff;
+      border-color: #dce8ff;
+      color: #0d1526;
+    }
+  }
+
+  .vkCodeBox {
+    background: #20283a;
+    border-color: #3a4a60;
+  }
+
+  .vkCodeValue {
+    color: #dce8ff;
   }
 
   .fieldLabel > span {
@@ -3535,6 +3572,28 @@ button[data-active="true"] .navIcon {
     color: #fff;
     background: linear-gradient(135deg, #1a2f5a, #2c4a8a);
     cursor: pointer;
+  }
+}
+
+.themeToggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+
+  button {
+    min-height: 38px;
+    border: 1px solid #d9deea;
+    border-radius: 10px;
+    background: #f6f8fc;
+    color: #65708a;
+    font-size: 13px;
+    font-weight: 900;
+
+    &[data-active="true"] {
+      border-color: #1a2f5a;
+      background: #1a2f5a;
+      color: #fff;
+    }
   }
 }
 

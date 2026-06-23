@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db_session
 from ..dependencies.auth import CurrentUser, can_manage_squad, require_role
 from ..models import Normative, NormativeSubmission, NormativeSubmissionFile, Notification, User
-from ..roles import ROLE_LEVELS, RoleLevel
+from ..roles import RoleLevel
 from ..schemas.core import (
     MessageResponse,
     NormativeCreate,
@@ -19,6 +18,7 @@ from ..schemas.core import (
     NormativeSubmitRequest,
     NormativeUpdate,
 )
+from ..services.normatives import submit_normative as submit_normative_service
 from ..utils.audit import model_snapshot, record_audit, utcnow
 
 router = APIRouter(prefix="/normatives", tags=["normatives"])
@@ -73,7 +73,7 @@ async def attach_submission_files(session: AsyncSession, submissions: list[Norma
         ids = by_submission.get(submission.id, [])
         if not ids and submission.file_id is not None:
             ids = [submission.file_id]
-        setattr(submission, "file_ids", ids)
+        submission.file_ids = ids
     return submissions
 
 
@@ -97,9 +97,9 @@ async def attach_submission_context(session: AsyncSession, submissions: list[Nor
     normative_titles = {normative_id: title for normative_id, title in normative_rows}
 
     for submission in submissions:
-        setattr(submission, "user_full_name", user_names.get(submission.user_id))
-        setattr(submission, "normative_title", normative_titles.get(submission.normative_id))
-        setattr(submission, "reviewer_full_name", user_names.get(submission.reviewed_by_id) if submission.reviewed_by_id else None)
+        submission.user_full_name = user_names.get(submission.user_id)
+        submission.normative_title = normative_titles.get(submission.normative_id)
+        submission.reviewer_full_name = user_names.get(submission.reviewed_by_id) if submission.reviewed_by_id else None
     return submissions
 
 
@@ -120,6 +120,8 @@ async def list_normatives(
 
 @router.get("/submissions/my", response_model=list[NormativeSubmissionRead])
 async def my_submissions(
+    limit: int = 100,
+    offset: int = 0,
     current_user: CurrentUser = Depends(require_role(RoleLevel.CANDIDATE)),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[NormativeSubmission]:
@@ -128,6 +130,8 @@ async def my_submissions(
         select(NormativeSubmission)
         .where(NormativeSubmission.user_id == user_id)
         .order_by(NormativeSubmission.submitted_at.desc())
+        .offset(max(0, offset))
+        .limit(min(max(1, limit), 500))
     )
     return await attach_submission_context(session, list((await session.scalars(statement)).all()))
 
@@ -135,6 +139,8 @@ async def my_submissions(
 @router.get("/submissions/pending", response_model=list[NormativeSubmissionRead])
 async def pending_submissions(
     squad_id: int | None = None,
+    limit: int = 100,
+    offset: int = 0,
     current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_SQUAD_COMMANDER)),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[NormativeSubmission]:
@@ -150,6 +156,7 @@ async def pending_submissions(
         statement = statement.where(User.squad_id == squad_id)
     elif current_user.role_level < RoleLevel.DEPUTY_PLATOON_COMMANDER:
         statement = statement.where(User.squad_id == current_user.squad_id)
+    statement = statement.offset(max(0, offset)).limit(min(max(1, limit), 500))
     return await attach_submission_context(session, list((await session.scalars(statement)).all()))
 
 
@@ -157,6 +164,8 @@ async def pending_submissions(
 async def submission_history(
     status_code: str | None = None,
     squad_id: int | None = None,
+    limit: int = 100,
+    offset: int = 0,
     current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_SQUAD_COMMANDER)),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[NormativeSubmission]:
@@ -175,6 +184,7 @@ async def submission_history(
         statement = statement.where(User.squad_id == squad_id)
     elif current_user.role_level < RoleLevel.DEPUTY_PLATOON_COMMANDER:
         statement = statement.where(User.squad_id == current_user.squad_id)
+    statement = statement.offset(max(0, offset)).limit(min(max(1, limit), 500))
     return await attach_submission_context(session, list((await session.scalars(statement)).all()))
 
 
@@ -261,57 +271,21 @@ async def submit_normative(
     normative = await get_normative_or_404(session, normative_id)
     if not normative_visible(normative, current_user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot submit this normative.")
-    submission = await session.scalar(
-        select(NormativeSubmission).where(
-            NormativeSubmission.normative_id == normative_id,
-            NormativeSubmission.user_id == user_id,
-        )
-    )
-    if submission is None:
-        submission = NormativeSubmission(normative_id=normative_id, user_id=user_id)
-        session.add(submission)
-    old = model_snapshot(submission, ["status_code", "file_id", "comment"]) if submission.id else None
+    submitter = await session.get(User, user_id)
+    if submitter is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
     file_ids = payload.file_ids if payload.file_ids is not None else ([] if payload.file_id is None else [payload.file_id])
     file_ids = list(dict.fromkeys(file_ids))
-    submission.status_code = "SUBMITTED"
-    submission.file_id = file_ids[0] if file_ids else None
-    submission.comment = payload.comment
-    submission.submitted_at = utcnow()
-    submission.updated_at = utcnow()
-    await session.flush()
-    await session.execute(delete(NormativeSubmissionFile).where(NormativeSubmissionFile.submission_id == submission.id))
-    for file_id in file_ids:
-        session.add(NormativeSubmissionFile(submission_id=submission.id, file_id=file_id))
-    await record_audit(
+    submission = await submit_normative_service(
         session,
-        user_id=user_id,
-        action_code="normative_submission.submit",
-        entity_name="normative_submissions",
-        entity_id=submission.id,
-        old_value=old,
-        new_value=payload.model_dump(mode="json"),
+        normative=normative,
+        submitter=submitter,
+        status_code="SUBMITTED",
+        comment=payload.comment,
+        file_ids=file_ids,
+        audit_action_code="normative_submission.submit",
+        audit_value=payload.model_dump(mode="json"),
     )
-    submitter = await session.get(User, user_id)
-    submitter_name = submitter.full_name if submitter else f"Пользователь #{user_id}"
-    commander_role_codes = [rc for rc, lvl in ROLE_LEVELS.items() if lvl >= RoleLevel.DEPUTY_SQUAD_COMMANDER]
-    commanders = list((await session.scalars(
-        select(User).where(
-            User.status_code == "ACTIVE",
-            User.role_code.in_(commander_role_codes),
-        )
-    )).all())
-    for commander in commanders:
-        session.add(
-            Notification(
-                user_id=commander.id,
-                type_code="NORMATIVE",
-                title=f"Новая сдача: {normative.title}",
-                body=f"{submitter_name} сдал норматив «{normative.title}» на проверку.",
-                entity_name="normative_submissions",
-                entity_id=submission.id,
-                send_to_tg=True,
-            )
-        )
     await session.commit()
     await session.refresh(submission)
     await attach_submission_context(session, [submission])

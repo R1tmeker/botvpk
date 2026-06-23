@@ -17,11 +17,32 @@ class PasswordSetRequest(BaseModel):
 class PasswordLoginRequest(BaseModel):
     telegram_id: int
     password: str = Field(min_length=1, max_length=128)
+    totp_code: str | None = Field(default=None, min_length=6, max_length=8)
+
+
+class PasswordResetRequest(BaseModel):
+    telegram_id: int
+    code: str = Field(min_length=6, max_length=16)
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 class PasswordStatusResponse(BaseModel):
     has_password: bool
     password_set_at: datetime | None = None
+
+
+class TwoFactorStatusResponse(BaseModel):
+    available: bool
+    enabled: bool
+
+
+class TwoFactorSetupResponse(BaseModel):
+    secret: str
+    provisioning_uri: str
+
+
+class TwoFactorCodeRequest(BaseModel):
+    code: str = Field(min_length=6, max_length=8)
 
 
 class VkLinkCodeResponse(BaseModel):

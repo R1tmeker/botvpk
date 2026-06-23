@@ -1,16 +1,24 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
 from datetime import datetime, timezone
 
+from redis.asyncio import Redis
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select, update
 
 from .config import get_settings
 from .database import AsyncSessionLocal
-from .models import AbsenceReason, EventResponse, Notification, ScheduleEvent, User
+from .models import AbsenceReason, Appeal, EventResponse, Notification, Normative, ScheduleEvent, User
 from .roles import RoleLevel, role_level
+from .services.auth_security import password_lockout_state, register_failed_password_login, register_successful_password_login
+from .services.events import save_event_response as save_event_response_service
+from .services.heartbeat import start_heartbeat_thread
+from .services.normatives import submit_normative as submit_normative_service
+from .services.observability import init_sentry
 from .utils.audit import record_audit
 from .utils.channel_link import redeem_link_code
 from .utils.password import verify_password
@@ -21,37 +29,92 @@ logger = logging.getLogger(__name__)
 # Lost on restart — acceptable for a quick two-message login.
 _vk_login_state: dict[int, dict] = {}
 _vk_event_state: dict[int, dict] = {}
+_redis_client: Redis | None = None
 _LOGIN_STATE_TTL_SECONDS = 600
 
 
-def _get_login_state(vk_id: int) -> dict | None:
-    state = _vk_login_state.get(vk_id)
+def _state_key(kind: str, vk_id: int) -> str:
+    return f"botvpk:vk:{kind}:{vk_id}"
+
+
+def _get_redis() -> Redis | None:
+    global _redis_client
+    settings = get_settings()
+    if not settings.redis_url:
+        return None
+    if _redis_client is None:
+        _redis_client = Redis.from_url(settings.redis_url, decode_responses=True)
+    return _redis_client
+
+
+async def _get_state(kind: str, vk_id: int) -> dict | None:
+    redis = _get_redis()
+    if redis is not None:
+        raw = await redis.get(_state_key(kind, vk_id))
+        if not raw:
+            return None
+        try:
+            value = json.loads(raw)
+        except ValueError:
+            await redis.delete(_state_key(kind, vk_id))
+            return None
+        return value if isinstance(value, dict) else None
+
+    storage = _vk_login_state if kind == "login" else _vk_event_state
+    state = storage.get(vk_id)
     if not state:
         return None
     age = (datetime.now(timezone.utc) - state["ts"]).total_seconds()
     if age > _LOGIN_STATE_TTL_SECONDS:
-        _vk_login_state.pop(vk_id, None)
+        storage.pop(vk_id, None)
         return None
     return state
 
 
-def _set_login_state(vk_id: int, **data) -> None:
-    _vk_login_state[vk_id] = {**data, "ts": datetime.now(timezone.utc)}
+async def _set_state(kind: str, vk_id: int, **data) -> None:
+    redis = _get_redis()
+    if redis is not None:
+        await redis.setex(
+            _state_key(kind, vk_id),
+            _LOGIN_STATE_TTL_SECONDS,
+            json.dumps(data, ensure_ascii=False, default=str),
+        )
+        return
+    storage = _vk_login_state if kind == "login" else _vk_event_state
+    storage[vk_id] = {**data, "ts": datetime.now(timezone.utc)}
 
 
-def _get_event_state(vk_id: int) -> dict | None:
-    state = _vk_event_state.get(vk_id)
-    if not state:
-        return None
-    age = (datetime.now(timezone.utc) - state["ts"]).total_seconds()
-    if age > _LOGIN_STATE_TTL_SECONDS:
-        _vk_event_state.pop(vk_id, None)
-        return None
-    return state
+async def _clear_state(kind: str, vk_id: int) -> None:
+    redis = _get_redis()
+    if redis is not None:
+        await redis.delete(_state_key(kind, vk_id))
+        return
+    storage = _vk_login_state if kind == "login" else _vk_event_state
+    storage.pop(vk_id, None)
 
 
-def _set_event_state(vk_id: int, **data) -> None:
-    _vk_event_state[vk_id] = {**data, "ts": datetime.now(timezone.utc)}
+async def _get_login_state(vk_id: int) -> dict | None:
+    return await _get_state("login", vk_id)
+
+
+async def _set_login_state(vk_id: int, **data) -> None:
+    await _set_state("login", vk_id, **data)
+
+
+async def _clear_login_state(vk_id: int) -> None:
+    await _clear_state("login", vk_id)
+
+
+async def _get_event_state(vk_id: int) -> dict | None:
+    return await _get_state("event", vk_id)
+
+
+async def _set_event_state(vk_id: int, **data) -> None:
+    await _set_state("event", vk_id, **data)
+
+
+async def _clear_event_state(vk_id: int) -> None:
+    await _clear_state("event", vk_id)
 
 ROLE_LABELS = {
     "PUBLIC_USER": "Новый пользователь",
@@ -86,6 +149,8 @@ def main_keyboard(site_url: str | None = None) -> str:
         [_text_button("Расписание", "primary")],
         [_text_button("Уведомления")],
         [_text_button("Профиль")],
+        [_text_button("Обращение")],
+        [_text_button("Отвязать")],
     ]
     if site_url:
         buttons.append([_text_button("Открыть сайт", "primary")])
@@ -173,6 +238,38 @@ def absence_reasons_keyboard(event_id: int, reasons: list[AbsenceReason]) -> str
     return json.dumps({"one_time": False, "buttons": buttons}, ensure_ascii=False)
 
 
+def appeal_urgency_keyboard() -> str:
+    return json.dumps(
+        {
+            "one_time": False,
+            "buttons": [
+                [
+                    _text_button("Обычная", "secondary", {"action": "appeal_urgency", "urgency": "NORMAL"}),
+                    _text_button("Срочная", "negative", {"action": "appeal_urgency", "urgency": "HIGH"}),
+                ],
+                [_text_button("Очень срочно", "negative", {"action": "appeal_urgency", "urgency": "URGENT"})],
+                [_text_button("Отмена", "negative")],
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+
+def normative_choice_keyboard(normatives: list[Normative]) -> str:
+    buttons = [
+        [
+            _text_button(
+                normative.title[:40],
+                "secondary",
+                {"action": "norm_submit", "normative_id": normative.id},
+            )
+        ]
+        for normative in normatives[:8]
+    ]
+    buttons.append([_text_button("Отмена", "negative")])
+    return json.dumps({"one_time": False, "buttons": buttons}, ensure_ascii=False)
+
+
 def _message_payload(raw_payload) -> dict:
     if isinstance(raw_payload, dict):
         return raw_payload
@@ -183,6 +280,19 @@ def _message_payload(raw_payload) -> dict:
             return {}
         return value if isinstance(value, dict) else {}
     return {}
+
+
+def _serialize_attachments(message) -> str:
+    attachments = getattr(message, "attachments", None) or []
+    if not attachments:
+        return ""
+    values: list[str] = []
+    for attachment in attachments:
+        attachment_type = getattr(attachment, "type", None)
+        if isinstance(attachment, dict):
+            attachment_type = attachment.get("type", attachment_type)
+        values.append(f"{attachment_type or 'attachment'}: {attachment}")
+    return "\n".join(values)[:3000]
 
 
 async def _schedule_overview(user: User) -> tuple[str, list[tuple[int, ScheduleEvent]]]:
@@ -271,24 +381,27 @@ async def _save_event_response(
     absence_reason_id: int | None = None,
     custom_reason: str | None = None,
 ) -> None:
-    response = await session.scalar(
+    existing = await session.scalar(
         select(EventResponse).where(EventResponse.event_id == event.id, EventResponse.user_id == user.id)
     )
-    old_value = None
-    if response is None:
-        response = EventResponse(event_id=event.id, user_id=user.id)
-        session.add(response)
-    else:
-        old_value = {
-            "response_code": response.response_code,
-            "absence_reason_id": response.absence_reason_id,
-            "custom_reason": response.custom_reason,
+    old_value = (
+        {
+            "response_code": existing.response_code,
+            "absence_reason_id": existing.absence_reason_id,
+            "custom_reason": existing.custom_reason,
         }
-    response.response_code = response_code
-    response.absence_reason_id = absence_reason_id
-    response.custom_reason = custom_reason
-    response.responded_at = datetime.now(timezone.utc)
-    response.source_code = "VK"
+        if existing is not None
+        else None
+    )
+    await save_event_response_service(
+        session,
+        event_id=event.id,
+        user_id=user.id,
+        response_code=response_code,
+        absence_reason_id=absence_reason_id,
+        custom_reason=custom_reason,
+        source_code="VK",
+    )
     await record_audit(
         session,
         user_id=user.id,
@@ -337,7 +450,7 @@ async def _handle_event_response(message, user: User, payload: dict, site_url: s
                     keyboard=absence_reasons_keyboard(event.id, reasons),
                 )
             else:
-                _set_event_state(
+                await _set_event_state(
                     message.from_id,
                     step="awaiting_absence_comment",
                     event_id=event.id,
@@ -375,7 +488,7 @@ async def _handle_absence_reason(message, user: User, payload: dict, site_url: s
             await message.answer("Эта причина больше недоступна. Выберите ответ заново.")
             return
         if reason.requires_comment:
-            _set_event_state(
+            await _set_event_state(
                 message.from_id,
                 step="awaiting_absence_comment",
                 event_id=event.id,
@@ -407,14 +520,14 @@ async def _save_absence_comment(message, user: User, state: dict, comment: str, 
     async with AsyncSessionLocal() as session:
         event, error = await _event_for_response(session, user, int(state["event_id"]))
         if error or event is None:
-            _vk_event_state.pop(message.from_id, None)
+            await _clear_event_state(message.from_id)
             await message.answer(error or "Занятие недоступно.")
             return
         reason_id = state.get("reason_id")
         if reason_id is not None:
             reason = await session.get(AbsenceReason, int(reason_id))
             if reason is None or not reason.is_active:
-                _vk_event_state.pop(message.from_id, None)
+                await _clear_event_state(message.from_id)
                 await message.answer("Эта причина больше недоступна. Выберите ответ заново.")
                 return
         await _save_event_response(
@@ -426,7 +539,7 @@ async def _save_absence_comment(message, user: User, state: dict, comment: str, 
             custom_reason=comment,
         )
         await session.commit()
-    _vk_event_state.pop(message.from_id, None)
+    await _clear_event_state(message.from_id)
     await _send_schedule(
         message,
         user,
@@ -468,6 +581,194 @@ def _profile_text(user: User) -> str:
     )
 
 
+async def _start_appeal(message, user: User) -> None:
+    await _set_event_state(message.from_id, step="appeal_subject")
+    await message.answer("Напишите тему обращения одним сообщением.", keyboard=empty_keyboard())
+
+
+async def _handle_appeal_state(message, user: User, state: dict, text: str, site_url: str | None) -> bool:
+    step = state.get("step")
+    if step == "appeal_subject":
+        subject = text.strip()
+        if len(subject) < 3:
+            await message.answer("Тема слишком короткая. Напишите чуть подробнее.")
+            return True
+        await _set_event_state(message.from_id, step="appeal_description", subject=subject)
+        await message.answer("Теперь опишите ситуацию. Это сообщение уйдёт командирам.")
+        return True
+
+    if step == "appeal_description":
+        description = text.strip()
+        if len(description) < 5:
+            await message.answer("Описание слишком короткое. Добавьте деталей.")
+            return True
+        await _set_event_state(
+            message.from_id,
+            step="appeal_urgency",
+            subject=state.get("subject", "Обращение"),
+            description=description,
+        )
+        await message.answer("Выберите срочность.", keyboard=appeal_urgency_keyboard())
+        return True
+
+    if step == "appeal_urgency":
+        urgency = "HIGH" if "сроч" in text.casefold() else "NORMAL"
+        await _create_appeal_from_vk(message, user, state, urgency, site_url)
+        return True
+
+    return False
+
+
+async def _handle_appeal_urgency_payload(message, user: User, payload: dict, site_url: str | None) -> None:
+    state = await _get_event_state(message.from_id)
+    if not state or state.get("step") != "appeal_urgency":
+        await message.answer("Начните обращение кнопкой «Обращение».", keyboard=main_keyboard(site_url))
+        return
+    urgency = str(payload.get("urgency") or "NORMAL")
+    if urgency not in {"LOW", "NORMAL", "HIGH", "URGENT"}:
+        urgency = "NORMAL"
+    await _create_appeal_from_vk(message, user, state, urgency, site_url)
+
+
+async def _create_appeal_from_vk(message, user: User, state: dict, urgency: str, site_url: str | None) -> None:
+    async with AsyncSessionLocal() as session:
+        appeal = Appeal(
+            author_user_id=user.id,
+            is_anonymous=False,
+            subject=str(state.get("subject") or "Обращение")[:255],
+            category_code="OTHER",
+            description=str(state.get("description") or ""),
+            urgency_code=urgency,
+            status_code="CREATED",
+        )
+        session.add(appeal)
+        await session.flush()
+        await record_audit(
+            session,
+            user_id=user.id,
+            action_code="appeal.create_vk",
+            entity_name="appeals",
+            entity_id=appeal.id,
+            new_value={"source": "vk", "urgency_code": urgency},
+        )
+        commanders = list(
+            (
+                await session.scalars(
+                    select(User).where(
+                        User.status_code == "ACTIVE",
+                        User.role_code.in_(("DEPUTY_PLATOON_COMMANDER", "PLATOON_COMMANDER", "ADMIN", "SUPER_ADMIN")),
+                    )
+                )
+            ).all()
+        )
+        for commander in commanders:
+            session.add(
+                Notification(
+                    user_id=commander.id,
+                    type_code="APPEAL",
+                    title=f"Новое обращение: {appeal.subject}",
+                    body=f"{user.full_name} отправил обращение через VK. Срочность: {urgency}.",
+                    entity_name="appeals",
+                    entity_id=appeal.id,
+                    send_to_tg=True,
+                )
+            )
+        await session.commit()
+    await _clear_event_state(message.from_id)
+    await message.answer(with_site_link("Обращение отправлено. Ответ придёт в уведомления.", site_url), keyboard=main_keyboard(site_url))
+
+
+async def _start_normative_submission_from_vk(message, user: User, site_url: str | None) -> bool:
+    attachment_text = _serialize_attachments(message)
+    if not attachment_text:
+        return False
+    async with AsyncSessionLocal() as session:
+        normatives = list(
+            (
+                await session.scalars(
+                    select(Normative)
+                    .where(
+                        Normative.is_active.is_(True),
+                        (Normative.squad_id.is_(None)) | (Normative.squad_id == user.squad_id),
+                    )
+                    .order_by(Normative.deadline_at.nullslast(), Normative.id)
+                    .limit(8)
+                )
+            ).all()
+        )
+    if not normatives:
+        await message.answer("Вложение получил, но активных нормативов для сдачи сейчас нет.", keyboard=main_keyboard(site_url))
+        return True
+    await _set_event_state(
+        message.from_id,
+        step="normative_attachment",
+        attachment_text=attachment_text,
+    )
+    await message.answer(
+        "Это сдача норматива? Выберите норматив для вложения.",
+        keyboard=normative_choice_keyboard(normatives),
+    )
+    return True
+
+
+async def _handle_normative_submit_payload(message, user: User, payload: dict, site_url: str | None) -> None:
+    state = await _get_event_state(message.from_id)
+    if not state or state.get("step") != "normative_attachment":
+        await message.answer("Пришлите вложение ещё раз и выберите норматив.", keyboard=main_keyboard(site_url))
+        return
+    try:
+        normative_id = int(payload["normative_id"])
+    except (KeyError, TypeError, ValueError):
+        await message.answer("Не удалось определить норматив.", keyboard=main_keyboard(site_url))
+        return
+
+    async with AsyncSessionLocal() as session:
+        normative = await session.get(Normative, normative_id)
+        if not normative or not normative.is_active:
+            await message.answer("Норматив больше недоступен.", keyboard=main_keyboard(site_url))
+            await _clear_event_state(message.from_id)
+            return
+        submission = await submit_normative_service(
+            session,
+            normative=normative,
+            submitter=user,
+            status_code="PENDING",
+            comment=f"[VK attachment]\n{state.get('attachment_text', '')}",
+            file_ids=None,
+            audit_action_code="normative_submission.submit_via_vk",
+            audit_value={"normative_id": normative.id, "source": "vk"},
+            notification_body=f"{user.full_name} прислал вложение в VK по нормативу «{normative.title}».",
+            notification_scope="submitter_squad",
+        )
+        await session.commit()
+        await session.refresh(submission)
+        normative_title = normative.title
+    await _clear_event_state(message.from_id)
+    await message.answer(f"Сдача по нормативу «{normative_title}» отправлена командиру.", keyboard=main_keyboard(site_url))
+
+
+async def _unlink_vk(message, user: User) -> None:
+    async with AsyncSessionLocal() as session:
+        db_user = await session.get(User, user.id)
+        if db_user is None:
+            await message.answer("Аккаунт не найден. Обратитесь к командиру.", keyboard=login_entry_keyboard())
+            return
+        old_vk = db_user.vk_id
+        db_user.vk_id = None
+        db_user.updated_at = datetime.now(timezone.utc)
+        await record_audit(
+            session,
+            user_id=db_user.id,
+            action_code="vk.unlink_bot",
+            entity_name="users",
+            entity_id=db_user.id,
+            old_value={"vk_id": old_vk},
+        )
+        await session.commit()
+    await _clear_event_state(message.from_id)
+    await message.answer("VK отвязан. Чтобы подключить снова, используйте код или вход по паролю.", keyboard=login_entry_keyboard())
+
+
 async def _try_link(vk_id: int, code: str) -> str | None:
     """Returns greeting on success, error string on failure, None if code invalid."""
     async with AsyncSessionLocal() as session:
@@ -486,6 +787,12 @@ async def _try_link(vk_id: int, code: str) -> str | None:
         if role_level(user.role_code) < RoleLevel.PARTICIPANT:
             await session.rollback()
             return "Привязка доступна только подтверждённым участникам состава."
+        if user.vk_id == vk_id:
+            await session.rollback()
+            return f"Аккаунт уже привязан, {user.full_name}."
+        if user.vk_id is not None and user.vk_id != vk_id:
+            await session.rollback()
+            return "Этот профиль уже привязан к другому аккаунту ВКонтакте."
         user.vk_id = vk_id
         now = datetime.now(timezone.utc)
         user.updated_at = now
@@ -494,7 +801,11 @@ async def _try_link(vk_id: int, code: str) -> str | None:
             .where(Notification.user_id == user.id, Notification.vk_sent_at.is_(None))
             .values(vk_sent_at=now)
         )
-        await session.commit()
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            return "Этот ВКонтакте уже привязан к другому аккаунту."
         return f"Готово, {user.full_name}! Аккаунт привязан. Теперь вы будете получать уведомления здесь."
 
 
@@ -503,14 +814,28 @@ async def _try_password_link(vk_id: int, telegram_id: int, password: str) -> tup
     async with AsyncSessionLocal() as session:
         user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
         # Generic failure message — do not reveal which Telegram IDs exist.
+        if user is not None:
+            lockout = password_lockout_state(user)
+            if lockout.locked:
+                return False, "Слишком много неудачных попыток входа. Попробуйте позже."
         if user is None or not user.password_hash or not verify_password(password, user.password_hash):
+            if user is not None:
+                await register_failed_password_login(session, user)
+                await session.commit()
             return False, "Неверный Telegram ID или пароль."
         if user.status_code != "ACTIVE" or role_level(user.role_code) < RoleLevel.PARTICIPANT:
             return False, "Доступ только для подтверждённых участников состава."
         existing = await session.scalar(select(User).where(User.vk_id == vk_id))
         if existing is not None and existing.id != user.id:
             return False, "Этот ВКонтакте уже привязан к другому аккаунту."
+        if user.vk_id == vk_id:
+            register_successful_password_login(user)
+            await session.commit()
+            return True, f"Аккаунт уже привязан, {user.full_name}."
+        if user.vk_id is not None and user.vk_id != vk_id:
+            return False, "Этот профиль уже привязан к другому аккаунту ВКонтакте."
         user.vk_id = vk_id
+        register_successful_password_login(user)
         now = datetime.now(timezone.utc)
         user.updated_at = now
         await session.execute(
@@ -518,7 +843,11 @@ async def _try_password_link(vk_id: int, telegram_id: int, password: str) -> tup
             .where(Notification.user_id == user.id, Notification.vk_sent_at.is_(None))
             .values(vk_sent_at=now)
         )
-        await session.commit()
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            return False, "Этот ВКонтакте уже привязан к другому аккаунту."
         return True, f"Готово, {user.full_name}! Аккаунт привязан."
 
 
@@ -559,12 +888,12 @@ def build_bot():
         # Not linked yet — password login dialog, link code, or instructions.
         if user is None:
             if low in {"отмена", "cancel", "/cancel", "стоп"}:
-                _vk_login_state.pop(vk_id, None)
+                await _clear_login_state(vk_id)
                 await message.answer("Отменено.", keyboard=login_entry_keyboard())
                 return
 
             if "по коду" in low:
-                _vk_login_state.pop(vk_id, None)
+                await _clear_login_state(vk_id)
                 await message.answer(
                     "Получите 6-значный код в приложении ВПК: Профиль → ВКонтакте → Привязать. "
                     "Затем пришлите код сюда одним сообщением.",
@@ -572,12 +901,12 @@ def build_bot():
                 )
                 return
 
-            state = _get_login_state(vk_id)
+            state = await _get_login_state(vk_id)
 
             # Step 2: awaiting password
             if state and state.get("step") == "awaiting_password":
                 ok, msg = await _try_password_link(vk_id, state["telegram_id"], text)
-                _vk_login_state.pop(vk_id, None)
+                await _clear_login_state(vk_id)
                 if ok:
                     await message.answer(
                         with_site_link(msg + "\n\nСовет: удалите сообщение с паролем из переписки.", site),
@@ -593,13 +922,13 @@ def build_bot():
                 if not digits:
                     await message.answer("Введите ваш Telegram ID цифрами (или «отмена»).")
                     return
-                _set_login_state(vk_id, step="awaiting_password", telegram_id=int(digits))
+                await _set_login_state(vk_id, step="awaiting_password", telegram_id=int(digits))
                 await message.answer("Теперь пришлите пароль (тот, что задали в приложении ВПК):")
                 return
 
             # Start password login flow
             if "парол" in low or "войти" in low or low in {"начать", "start", "старт"}:
-                _set_login_state(vk_id, step="awaiting_login")
+                await _set_login_state(vk_id, step="awaiting_login")
                 await message.answer("Введите ваш Telegram ID (это логин):")
                 return
 
@@ -623,7 +952,7 @@ def build_bot():
         payload = _message_payload(message.payload)
         action = payload.get("action")
         if low in {"отмена", "cancel", "/cancel", "стоп"}:
-            _vk_event_state.pop(vk_id, None)
+            await _clear_event_state(vk_id)
             await message.answer("Действие отменено.", keyboard=main_keyboard(site))
             return
         if action == "event_response":
@@ -632,18 +961,31 @@ def build_bot():
         if action == "absence_reason":
             await _handle_absence_reason(message, user, payload, site)
             return
+        if action == "appeal_urgency":
+            await _handle_appeal_urgency_payload(message, user, payload, site)
+            return
+        if action == "norm_submit":
+            await _handle_normative_submit_payload(message, user, payload, site)
+            return
 
-        event_state = _get_event_state(vk_id)
-        menu_commands = {"расписание", "уведомления", "профиль", "открыть сайт", "меню"}
+        event_state = await _get_event_state(vk_id)
+        menu_commands = {"расписание", "уведомления", "профиль", "открыть сайт", "меню", "обращение", "отвязать"}
         if event_state and event_state.get("step") == "awaiting_absence_comment":
             if low in menu_commands:
-                _vk_event_state.pop(vk_id, None)
+                await _clear_event_state(vk_id)
             elif text:
                 await _save_absence_comment(message, user, event_state, text, site)
                 return
             else:
                 await message.answer("Напишите причину текстом или нажмите «Отмена».")
                 return
+        if event_state and str(event_state.get("step", "")).startswith("appeal_"):
+            handled = await _handle_appeal_state(message, user, event_state, text, site)
+            if handled:
+                return
+
+        if await _start_normative_submission_from_vk(message, user, site):
+            return
 
         if "расписан" in low:
             await _send_schedule(message, user, site)
@@ -651,6 +993,10 @@ def build_bot():
             await message.answer(await _notifications_text(user), keyboard=main_keyboard(site))
         elif "профиль" in low:
             await message.answer(_profile_text(user), keyboard=main_keyboard(site))
+        elif "обращ" in low:
+            await _start_appeal(message, user)
+        elif "отвяз" in low:
+            await _unlink_vk(message, user)
         elif "сайт" in low:
             await message.answer(
                 with_site_link("Личный кабинет ВПК:", site),
@@ -677,10 +1023,10 @@ async def _idle() -> None:
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     settings = get_settings()
+    init_sentry(settings, service_name="vk_bot")
+    start_heartbeat_thread(settings.vk_bot_heartbeat_path)
     if not settings.vk_bot_enabled or not settings.vk_group_token:
         # Stay alive without polling so the container does not restart-loop when VK is off.
-        import asyncio
-
         logger.info("VK bot disabled or token missing; idling.")
         asyncio.run(_idle())
         return

@@ -241,6 +241,25 @@
   &:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; }
 }
 
+.linkButton {
+  border: none;
+  background: transparent;
+  color: #2c4a8a;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  padding: 4px 8px;
+  justify-self: center;
+  border-radius: 8px;
+
+  &:hover,
+  &:focus-visible {
+    background: #eef2f9;
+    outline: none;
+  }
+}
+
 .hint {
   margin: 4px 0 0;
   font-size: 12px;

@@ -7,10 +7,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db_session
-from ..dependencies.auth import CurrentUser, can_manage_squad, get_current_user, require_role
+from ..dependencies.auth import CurrentUser, can_manage_squad, require_role
 from ..models import User
 from ..roles import RoleLevel, ROLE_LEVELS
 from ..schemas.core import UserCreate, UserRead, UserUpdate
+from ..services.auth_security import bump_token_version
 from ..utils.audit import model_snapshot, record_audit
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -21,6 +22,8 @@ async def users(
     squad_id: int | None = None,
     role_code: str | None = None,
     status_code: str | None = None,
+    limit: int = 200,
+    offset: int = 0,
     current_user: CurrentUser = Depends(require_role(RoleLevel.PARTICIPANT)),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[User]:
@@ -33,6 +36,7 @@ async def users(
         statement = statement.where(User.status_code == status_code)
     else:
         statement = statement.where(User.status_code != "ARCHIVED")
+    statement = statement.offset(max(0, offset)).limit(min(max(1, limit), 500))
     return list((await session.scalars(statement)).all())
 
 
@@ -96,8 +100,12 @@ async def update_user(
         if user.squad_id is not None and not can_manage_squad(current_user, user.squad_id):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot manage this user.")
     old = model_snapshot(user, list(updates))
+    old_status = user.status_code
+    old_telegram_id = user.telegram_id
     for key, value in updates.items():
         setattr(user, key, value)
+    if user.status_code != old_status or user.telegram_id != old_telegram_id:
+        bump_token_version(user)
     user.updated_at = datetime.now(timezone.utc)
     await record_audit(
         session,

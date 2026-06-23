@@ -13,6 +13,7 @@ from .schedule import AbsenceReason, EventRecipient, EventResponse, ScheduleEven
 from .settings import BotChat, Setting
 from .squad import Squad
 from .user import User
+from .web_push import WebPushSubscription
 
 __all__ = [
     "AbsenceReason",
@@ -48,4 +49,5 @@ __all__ = [
     "Squad",
     "User",
     "UserDashboardSetting",
+    "WebPushSubscription",
 ]

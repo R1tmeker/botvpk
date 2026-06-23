@@ -52,9 +52,65 @@ export function useTelegramAuth() {
 
 export function usePasswordLogin() {
   return useMutation({
-    mutationFn: async (payload: { telegram_id: number; password: string }) => {
+    mutationFn: async (payload: { telegram_id: number; password: string; totp_code?: string }) => {
       const { data } = await api.post<AuthResponse>("/auth/password/login", payload);
       setAccessToken(data.access_token);
+      return data;
+    },
+  });
+}
+
+type TwoFactorStatus = { available: boolean; enabled: boolean };
+
+export function useTwoFactorStatus(enabled: boolean) {
+  return useQuery({
+    queryKey: ["auth", "2fa", "status"],
+    queryFn: async () => {
+      const { data } = await api.get<TwoFactorStatus>("/auth/2fa/status");
+      return data;
+    },
+    enabled,
+  });
+}
+
+export function useTwoFactorSetup() {
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await api.post<{ secret: string; provisioning_uri: string }>("/auth/2fa/setup");
+      return data;
+    },
+  });
+}
+
+export function useTwoFactorEnable() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (code: string) => {
+      const { data } = await api.post<TwoFactorStatus>("/auth/2fa/enable", { code });
+      return data;
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["auth", "2fa", "status"] }),
+  });
+}
+
+export function useTwoFactorDisable() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (code: string) => {
+      const { data } = await api.post<TwoFactorStatus>("/auth/2fa/disable", { code });
+      return data;
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["auth", "2fa", "status"] }),
+  });
+}
+
+export function usePasswordReset() {
+  return useMutation({
+    mutationFn: async (payload: { telegram_id: number; code: string; new_password: string }) => {
+      const { data } = await api.post<{ has_password: boolean; password_set_at: string | null }>(
+        "/auth/password/reset",
+        payload,
+      );
       return data;
     },
   });
@@ -135,6 +191,39 @@ export function useVkUnlink() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["auth", "vk", "status"] });
+    },
+  });
+}
+
+type WebPushKeyResponse = { available: boolean; public_key: string | null };
+
+export function useWebPushPublicKey(enabled: boolean) {
+  return useQuery({
+    queryKey: ["web-push", "public-key"],
+    queryFn: async () => {
+      const { data } = await api.get<WebPushKeyResponse>("/web-push/public-key");
+      return data;
+    },
+    enabled,
+  });
+}
+
+export function useWebPushSubscribe() {
+  return useMutation({
+    mutationFn: async (subscription: PushSubscriptionJSON) => {
+      const { data } = await api.post<{ subscribed: boolean }>("/web-push/subscriptions", subscription);
+      return data;
+    },
+  });
+}
+
+export function useWebPushUnsubscribe() {
+  return useMutation({
+    mutationFn: async (endpoint: string) => {
+      const { data } = await api.delete<{ unsubscribed: boolean }>("/web-push/subscriptions", {
+        data: { endpoint },
+      });
+      return data;
     },
   });
 }
@@ -239,11 +328,13 @@ export function useSchedule(enabled: boolean) {
   });
 }
 
-export function useMyAttendance(enabled: boolean) {
+export function useMyAttendance(enabled: boolean, limit = 100, offset = 0) {
   return useQuery({
-    queryKey: ["attendance", "my"],
+    queryKey: ["attendance", "my", limit, offset],
     queryFn: async () => {
-      const { data } = await api.get<AttendanceRecord[]>("/attendance/my");
+      const { data } = await api.get<AttendanceRecord[]>("/attendance/my", {
+        params: { limit, offset },
+      });
       return data;
     },
     enabled,
@@ -273,11 +364,13 @@ export function useNormatives(enabled: boolean, includeInactive = false) {
   });
 }
 
-export function useMyNormativeSubmissions(enabled: boolean) {
+export function useMyNormativeSubmissions(enabled: boolean, limit = 100, offset = 0) {
   return useQuery({
-    queryKey: ["normatives", "submissions", "my"],
+    queryKey: ["normatives", "submissions", "my", limit, offset],
     queryFn: async () => {
-      const { data } = await api.get<NormativeSubmission[]>("/submissions/my");
+      const { data } = await api.get<NormativeSubmission[]>("/submissions/my", {
+        params: { limit, offset },
+      });
       return data;
     },
     enabled,
@@ -285,11 +378,13 @@ export function useMyNormativeSubmissions(enabled: boolean) {
   });
 }
 
-export function usePendingNormativeSubmissions(enabled: boolean) {
+export function usePendingNormativeSubmissions(enabled: boolean, limit = 100, offset = 0) {
   return useQuery({
-    queryKey: ["normatives", "submissions", "pending"],
+    queryKey: ["normatives", "submissions", "pending", limit, offset],
     queryFn: async () => {
-      const { data } = await api.get<NormativeSubmission[]>("/submissions/pending");
+      const { data } = await api.get<NormativeSubmission[]>("/submissions/pending", {
+        params: { limit, offset },
+      });
       return data;
     },
     enabled,
@@ -297,12 +392,16 @@ export function usePendingNormativeSubmissions(enabled: boolean) {
   });
 }
 
-export function useNormativeSubmissionsHistory(enabled: boolean, statusCode = "ALL") {
+export function useNormativeSubmissionsHistory(enabled: boolean, statusCode = "ALL", limit = 100, offset = 0) {
   return useQuery({
-    queryKey: ["normatives", "submissions", "history", statusCode],
+    queryKey: ["normatives", "submissions", "history", statusCode, limit, offset],
     queryFn: async () => {
       const { data } = await api.get<NormativeSubmission[]>("/submissions/history", {
-        params: statusCode && statusCode !== "ALL" ? { status_code: statusCode } : undefined,
+        params: {
+          limit,
+          offset,
+          ...(statusCode && statusCode !== "ALL" ? { status_code: statusCode } : {}),
+        },
       });
       return data;
     },
@@ -1149,11 +1248,13 @@ export function useAdminRejectApplication() {
   });
 }
 
-export function useAttendanceEvent(eventId: number | null, enabled: boolean) {
+export function useAttendanceEvent(eventId: number | null, enabled: boolean, limit = 200, offset = 0) {
   return useQuery({
-    queryKey: ["attendance", "event", eventId],
+    queryKey: ["attendance", "event", eventId, limit, offset],
     queryFn: async () => {
-      const { data } = await api.get<AttendanceRecord[]>(`/attendance/events/${eventId}`);
+      const { data } = await api.get<AttendanceRecord[]>(`/attendance/events/${eventId}`, {
+        params: { limit, offset },
+      });
       return data;
     },
     enabled: enabled && eventId !== null,

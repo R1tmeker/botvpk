@@ -14,6 +14,7 @@ class Attendance(Base):
         UniqueConstraint("event_id", "user_id"),
         Index("idx_attendance_event", "event_id"),
         Index("idx_attendance_user", "user_id"),
+        Index("idx_attendance_user_updated", "user_id", "updated_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

@@ -53,6 +53,9 @@ async def get_current_user(
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User from token not found.")
         if user.status_code != "ACTIVE":
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User account is inactive.")
+        token_version = int(payload.get("token_version", 0) or 0)
+        if token_version != (user.token_version or 0):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has been revoked.")
     return CurrentUser(
         user=user,
         user_id=user.id if user else None,

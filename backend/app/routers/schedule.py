@@ -22,6 +22,7 @@ from ..schemas.core import (
     ScheduleTemplateRead,
     ScheduleTemplateUpdate,
 )
+from ..services.events import save_event_response
 from ..utils.audit import model_snapshot, record_audit, utcnow
 
 router = APIRouter(prefix="/schedule", tags=["schedule"])
@@ -159,26 +160,16 @@ async def respond_event(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Absence reason not found.")
             if reason.requires_comment and not payload.custom_reason:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Custom reason is required.")
-    response = await session.scalar(
-        select(EventResponse).where(EventResponse.event_id == event_id, EventResponse.user_id == current_user.user_id)
+    await save_event_response(
+        session,
+        event_id=event_id,
+        user_id=current_user.user_id,
+        response_code=payload.response_code,
+        absence_reason_id=payload.absence_reason_id,
+        custom_reason=payload.custom_reason,
+        source_code="MINI_APP",
+        responded_at=now,
     )
-    if response:
-        response.response_code = payload.response_code
-        response.absence_reason_id = payload.absence_reason_id
-        response.custom_reason = payload.custom_reason
-        response.responded_at = now
-        response.source_code = "MINI_APP"
-    else:
-        session.add(
-            EventResponse(
-                event_id=event_id,
-                user_id=current_user.user_id,
-                response_code=payload.response_code,
-                absence_reason_id=payload.absence_reason_id,
-                custom_reason=payload.custom_reason,
-                source_code="MINI_APP",
-            )
-        )
     await record_audit(
         session,
         user_id=current_user.user_id,

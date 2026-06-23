@@ -57,3 +57,29 @@ async def redeem_link_code(session: AsyncSession, code: str, channel: str = "VK"
         return None
     row.used_at = now
     return row.user_id
+
+
+async def redeem_link_code_for_user(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    code: str,
+    channel: str,
+) -> bool:
+    """Consume a valid code for a specific user and channel."""
+    now = datetime.now(timezone.utc)
+    row = await session.scalar(
+        select(ChannelLinkCode)
+        .where(
+            ChannelLinkCode.user_id == user_id,
+            ChannelLinkCode.channel == channel,
+            ChannelLinkCode.code == code.strip(),
+            ChannelLinkCode.used_at.is_(None),
+            ChannelLinkCode.expires_at > now,
+        )
+        .order_by(ChannelLinkCode.id.desc())
+    )
+    if row is None:
+        return False
+    row.used_at = now
+    return True

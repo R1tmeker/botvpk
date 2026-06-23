@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
 
 import httpx
 
@@ -20,26 +19,16 @@ from ..models import User
 from ..roles import RoleLevel
 from .normatives import normative_visible as _normative_visible
 from ..schemas.core import FileRead
+from ..services.uploads import GENERAL_UPLOAD_MIME_TYPES, UploadValidationError, build_upload_path, prepare_upload
 from ..utils.audit import record_audit
 
 router = APIRouter(prefix="/files", tags=["files"])
-
-ALLOWED_MIME_PREFIXES = ("image/", "video/")
-ALLOWED_MIME_TYPES = {
-    "application/pdf",
-}
 
 
 def require_profile(current_user: CurrentUser) -> int:
     if current_user.user_id is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User profile is required.")
     return current_user.user_id
-
-
-def is_allowed_mime(mime_type: str | None) -> bool:
-    if not mime_type:
-        return False
-    return mime_type in ALLOWED_MIME_TYPES or mime_type.startswith(ALLOWED_MIME_PREFIXES)
 
 
 @router.get("/avatars/{file_id}")
@@ -67,7 +56,7 @@ async def download_avatar(
         path,
         media_type=stored.mime_type,
         filename=stored.original_name or path.name,
-        headers={"Cache-Control": "no-store, max-age=0"},
+        headers={"Cache-Control": "public, max-age=86400"},
     )
 
 
@@ -79,22 +68,30 @@ async def upload_file(
     settings: Settings = Depends(get_settings),
 ) -> StoredFile:
     user_id = require_profile(current_user)
-    if not is_allowed_mime(upload.content_type):
-        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Unsupported file type.")
     content = await upload.read()
-    if len(content) > settings.max_upload_size_bytes:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File is too large.")
+    try:
+        prepared = prepare_upload(
+            content,
+            max_size_bytes=settings.max_upload_size_bytes,
+            allowed_mime_types=GENERAL_UPLOAD_MIME_TYPES,
+            image_max_side=1920,
+            reencode_images=True,
+        )
+    except UploadValidationError as exc:
+        status_code = (
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+            if "слишком большой" in str(exc).casefold()
+            else status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
+        )
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     now = datetime.now(timezone.utc)
-    upload_dir = settings.uploads_dir / str(now.year) / f"{now.month:02d}"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    suffix = Path(upload.filename or "").suffix.lower()[:20]
-    target = upload_dir / f"{uuid4().hex}{suffix}"
-    target.write_bytes(content)
+    target = build_upload_path(settings.uploads_dir, str(now.year), f"{now.month:02d}", extension=prepared.extension)
+    target.write_bytes(prepared.content)
     stored = StoredFile(
         file_path=str(target),
         original_name=upload.filename,
-        mime_type=upload.content_type,
-        size_bytes=len(content),
+        mime_type=prepared.mime_type,
+        size_bytes=prepared.size_bytes,
         uploaded_by_id=user_id,
     )
     session.add(stored)
@@ -105,7 +102,7 @@ async def upload_file(
         action_code="file.upload",
         entity_name="files",
         entity_id=stored.id,
-        new_value={"original_name": upload.filename, "mime_type": upload.content_type, "size_bytes": len(content)},
+        new_value={"original_name": upload.filename, "mime_type": prepared.mime_type, "size_bytes": prepared.size_bytes},
     )
     await session.commit()
     await session.refresh(stored)
@@ -121,7 +118,7 @@ async def send_file_to_tg(
 ) -> dict:
     """Send a stored file to the requesting user via Telegram bot DM."""
     from pathlib import Path
-    from aiogram.types import FSInputFile, BufferedInputFile
+    from aiogram.types import FSInputFile
     from ..background import _get_bot
 
     stored = await session.get(StoredFile, file_id)

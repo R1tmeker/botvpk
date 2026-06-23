@@ -20,9 +20,15 @@ class Settings(BaseSettings):
     api_cors_origins: str = Field("", alias="API_CORS_ORIGINS")
     mini_app_url: str | None = Field(None, alias="MINI_APP_URL")
     bot_username: str | None = Field(None, alias="BOT_USERNAME")
-    telegram_init_data_max_age_seconds: int = Field(0, alias="TELEGRAM_INIT_DATA_MAX_AGE_SECONDS")
+    telegram_init_data_max_age_seconds: int = Field(86400, alias="TELEGRAM_INIT_DATA_MAX_AGE_SECONDS")
     uploads_dir: Path = Field(Path("uploads"), alias="UPLOADS_DIR")
     max_upload_size_mb: int = Field(200, alias="MAX_UPLOAD_SIZE_MB")
+    redis_url: str | None = Field(None, alias="REDIS_URL")
+    sentry_dsn: str | None = Field(None, alias="SENTRY_DSN")
+    sentry_traces_sample_rate: float = Field(0.05, alias="SENTRY_TRACES_SAMPLE_RATE")
+    release_version: str | None = Field(None, alias="RELEASE_VERSION")
+    bot_heartbeat_path: Path = Field(Path("/tmp/botvpk-bot.heartbeat"), alias="BOT_HEARTBEAT_PATH")
+    vk_bot_heartbeat_path: Path = Field(Path("/tmp/botvpk-vk-bot.heartbeat"), alias="VK_BOT_HEARTBEAT_PATH")
     dryrun: bool = Field(False, alias="DRYRUN")
     super_admin_id: int | None = Field(None, validation_alias=AliasChoices("SUPER_ADMIN_ID", "SUPER_ADMIN_TG_ID"))
     vk_bot_enabled: bool = Field(False, alias="VK_BOT_ENABLED")
@@ -30,6 +36,9 @@ class Settings(BaseSettings):
     vk_group_id: int | None = Field(None, alias="VK_GROUP_ID")
     vk_bot_url: str | None = Field(None, alias="VK_BOT_URL")
     site_url: str | None = Field(None, alias="SITE_URL")
+    web_push_vapid_public_key: str | None = Field(None, alias="WEB_PUSH_VAPID_PUBLIC_KEY")
+    web_push_vapid_private_key: str | None = Field(None, alias="WEB_PUSH_VAPID_PRIVATE_KEY")
+    web_push_vapid_sub: str = Field("mailto:admin@example.com", alias="WEB_PUSH_VAPID_SUB")
 
     model_config = SettingsConfigDict(
         env_file=".env",

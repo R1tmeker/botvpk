@@ -1,0 +1,14 @@
+[Unit]
+Description=Cloudflare Named Tunnel for botvpk
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/botvpk-tunnel
+ExecStart=/usr/bin/cloudflared tunnel --config ${CLOUDFLARED_CONFIG:-/etc/cloudflared/config.yml} run ${CLOUDFLARED_TUNNEL_NAME:-botvpk}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

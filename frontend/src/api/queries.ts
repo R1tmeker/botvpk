@@ -1788,6 +1788,23 @@ export function useExportUsersXLSX() {
   });
 }
 
+export function useExportAttendanceMatrix() {
+  return useMutation({
+    mutationFn: async (params?: { squad_id?: number | null; month?: string }) => {
+      const q = new URLSearchParams();
+      if (params?.squad_id) q.set("squad_id", String(params.squad_id));
+      if (params?.month) q.set("month", params.month);
+      const response = await api.get(`/reports/attendance/matrix.xlsx?${q}`, { responseType: "blob" });
+      const url = URL.createObjectURL(new Blob([response.data as BlobPart]));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `attendance-${params?.month ?? "month"}.xlsx`;
+      link.click();
+      URL.revokeObjectURL(url);
+    },
+  });
+}
+
 export function useExportCSVviaBot() {
   return useMutation({
     mutationFn: async (params: { squad_id?: number | null; search?: string }) => {

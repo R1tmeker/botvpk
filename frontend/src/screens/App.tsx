@@ -125,6 +125,7 @@ import {
   useExportCSVviaBot,
   useExportAttendanceCSVviaBot,
   useExportAttendanceXLSXviaBot,
+  useExportAttendanceMatrix,
   useExportXLSXviaBot,
   useExportReportViaBot,
   useGetFileBlob,
@@ -2406,6 +2407,7 @@ function AttendanceView({
   const [draftAttendance, setDraftAttendance] = useState<Record<number, string>>({});
   const exportAttendanceCSV = useExportAttendanceCSVviaBot();
   const exportAttendanceXLSX = useExportAttendanceXLSXviaBot();
+  const exportAttendanceMatrix = useExportAttendanceMatrix();
   const manageableEvents = schedule.filter((event) => event.status_code !== "CANCELLED");
   const selectedEvent = manageableEvents.find((event) => event.id === selectedEventId) ?? null;
   const hasSelectedEvent = selectedEvent !== null;
@@ -2517,6 +2519,23 @@ function AttendanceView({
             })}
           >
             {exportAttendanceXLSX.isPending ? "Отправляем..." : "Excel в бот"}
+          </button>
+          <button
+            type="button"
+            disabled={exportAttendanceMatrix.isPending}
+            onClick={() => {
+              const now = new Date();
+              const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+              exportAttendanceMatrix.mutate(
+                { squad_id: managerSquadId ?? undefined, month },
+                {
+                  onSuccess: () => toast("Табель скачан", "success"),
+                  onError: () => toast("Не удалось скачать табель", "error"),
+                },
+              );
+            }}
+          >
+            {exportAttendanceMatrix.isPending ? "Готовим..." : "Табель (Excel)"}
           </button>
         </div>
       )}

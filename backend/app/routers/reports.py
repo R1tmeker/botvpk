@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -13,7 +13,7 @@ from ..config import Settings, get_settings
 from ..database import get_db_session
 from ..dependencies.auth import CurrentUser, require_role
 from ..models import Appeal, Attendance, AttendanceGrade, EventResponse, JoinApplication, NormativeSubmission, ScheduleEvent, Squad, User
-from ..roles import RoleLevel
+from ..roles import CONFIRMED_ROLES, RoleLevel
 from ..schemas.core import ReportSummary
 
 router = APIRouter(prefix="/reports", tags=["reports"])
@@ -38,6 +38,27 @@ ATTENDANCE_STATUS_LABELS = {
     "RELEASED": "Освобождён",
     "NOT_MARKED": "Не отмечен",
 }
+
+# Short labels shown inside the attendance matrix cells (табель).
+MATRIX_STATUS_SHORT = {
+    "PRESENT": "Был",
+    "ABSENT": "Не был",
+    "LATE": "Опоздал",
+    "EXCUSED": "Уваж.",
+    "SICK": "Болел",
+    "RELEASED": "Освоб.",
+}
+# When several events fall on one day, the status with the highest priority wins.
+MATRIX_STATUS_PRIORITY = {
+    "PRESENT": 6,
+    "LATE": 5,
+    "EXCUSED": 4,
+    "SICK": 3,
+    "RELEASED": 2,
+    "ABSENT": 1,
+    "NOT_MARKED": 0,
+}
+MATRIX_DROPDOWN = "Был,Не был,Опоздал,Уваж.,Болел,Освоб."
 
 
 def _format_dt(value: datetime | None) -> str:
@@ -368,3 +389,179 @@ async def activity_feed(
     # Sort by created_at desc and limit
     feed.sort(key=lambda x: x["created_at"], reverse=True)
     return feed[:limit]
+
+
+@router.get("/attendance/matrix.xlsx")
+async def export_attendance_matrix(
+    squad_id: int | None = None,
+    month: str | None = None,
+    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_SQUAD_COMMANDER)),
+    session: AsyncSession = Depends(get_db_session),
+) -> StreamingResponse:
+    """Attendance timesheet: rows = members grouped by squad, columns = days that had events.
+
+    Filled cells come from the system; empty ones carry a dropdown so commanders can
+    fill them by hand in Excel (Был / Не был / Опоздал / Уваж. / Болел / Освоб.).
+    """
+    try:
+        import openpyxl
+        from openpyxl.formatting.rule import CellIsRule
+        from openpyxl.styles import Alignment, Font, PatternFill
+        from openpyxl.utils import get_column_letter
+        from openpyxl.worksheet.datavalidation import DataValidation
+    except ImportError as exc:
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="openpyxl not installed.") from exc
+
+    # Period = a calendar month (default: current).
+    today = date.today()
+    if month:
+        try:
+            year_str, month_str = month.split("-", 1)
+            period_start = date(int(year_str), int(month_str), 1)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="month must be YYYY-MM.") from exc
+    else:
+        period_start = today.replace(day=1)
+    period_end = (period_start.replace(day=28) + timedelta(days=4)).replace(day=1)  # first day of next month
+    start_dt = datetime(period_start.year, period_start.month, period_start.day, tzinfo=timezone.utc)
+    end_dt = datetime(period_end.year, period_end.month, period_end.day, tzinfo=timezone.utc)
+
+    # Squad scope: below platoon-deputy a commander only sees their own squad.
+    restricted = current_user.role_level < RoleLevel.DEPUTY_PLATOON_COMMANDER
+    scope_squad_id = squad_id if squad_id is not None else (current_user.squad_id if restricted else None)
+
+    # Events in the period (only days with events become columns).
+    ev_stmt = select(ScheduleEvent.id, ScheduleEvent.start_datetime).where(
+        ScheduleEvent.start_datetime >= start_dt,
+        ScheduleEvent.start_datetime < end_dt,
+        ScheduleEvent.status_code != "CANCELLED",
+    )
+    if scope_squad_id is not None:
+        ev_stmt = ev_stmt.where((ScheduleEvent.squad_id.is_(None)) | (ScheduleEvent.squad_id == scope_squad_id))
+    ev_rows = (await session.execute(ev_stmt)).all()
+    event_date = {eid: dt.date() for eid, dt in ev_rows}
+    dates = sorted(set(event_date.values()))
+
+    # Aggregate one status per (user, day).
+    status_map: dict[tuple[int, date], str] = {}
+    if event_date:
+        att_rows = (
+            await session.execute(
+                select(Attendance.user_id, Attendance.event_id, Attendance.status_code).where(
+                    Attendance.event_id.in_(list(event_date.keys()))
+                )
+            )
+        ).all()
+        for uid, eid, sc in att_rows:
+            day = event_date.get(eid)
+            if day is None:
+                continue
+            key = (uid, day)
+            prev = status_map.get(key)
+            if prev is None or MATRIX_STATUS_PRIORITY.get(sc, 0) > MATRIX_STATUS_PRIORITY.get(prev, 0):
+                status_map[key] = sc
+
+    # Members grouped by squad (squads first, "no squad" last), then by name.
+    u_stmt = (
+        select(User)
+        .where(User.status_code == "ACTIVE", User.role_code.in_(CONFIRMED_ROLES))
+        .order_by(User.squad_id.nullslast(), User.full_name)
+    )
+    if scope_squad_id is not None:
+        u_stmt = u_stmt.where(User.squad_id == scope_squad_id)
+    users = list((await session.scalars(u_stmt)).all())
+
+    squads = {s.id: s for s in (await session.scalars(select(Squad))).all()}
+    squad_leads: dict[int, str] = {}
+    for squad in squads.values():
+        if squad.commander_user_id:
+            squad_leads[squad.commander_user_id] = "командир"
+        if squad.deputy_user_id:
+            squad_leads.setdefault(squad.deputy_user_id, "зам")
+
+    groups: dict[int | None, list[User]] = {}
+    for user in users:
+        groups.setdefault(user.squad_id, []).append(user)
+
+    # ── build workbook ──
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Посещаемость"
+    name_font = Font(bold=True)
+    header_fill = PatternFill(fill_type="solid", fgColor="1A2F5A")
+    header_font = Font(bold=True, color="FFFFFF")
+    title_font = Font(bold=True, size=12, color="1A2F5A")
+    center = Alignment(horizontal="center", vertical="center")
+    note_font = Font(italic=True, color="808080", size=9)
+
+    first_col = 3  # A=ФИО, B=примечание, C…=даты
+    date_labels = [d.strftime("%d.%m.%Y") for d in dates]
+    last_col = first_col + len(dates) - 1
+
+    dv = None
+    if dates:
+        dv = DataValidation(type="list", formula1=f'"{MATRIX_DROPDOWN}"', allow_blank=True)
+        ws.add_data_validation(dv)
+
+    row = 1
+    member_ranges: list[str] = []
+    for squad_key, members in groups.items():
+        squad_name = squads[squad_key].name if squad_key in squads else "Без отделения"
+        title_cell = ws.cell(row=row, column=1, value=f"{squad_name} - {len(members)} чел")
+        title_cell.font = title_font
+        for i, label in enumerate(date_labels):
+            c = ws.cell(row=row, column=first_col + i, value=label)
+            c.font = header_font
+            c.fill = header_fill
+            c.alignment = center
+        row += 1
+        block_start = row
+        for member in members:
+            name_cell = ws.cell(row=row, column=1, value=member.full_name)
+            name_cell.font = name_font
+            lead = squad_leads.get(member.id)
+            if lead:
+                note = ws.cell(row=row, column=2, value=lead)
+                note.font = note_font
+            for i, day in enumerate(dates):
+                label = MATRIX_STATUS_SHORT.get(status_map.get((member.id, day), ""), "")
+                cell = ws.cell(row=row, column=first_col + i, value=label or None)
+                cell.alignment = center
+            row += 1
+        if members and dates:
+            rng = f"{get_column_letter(first_col)}{block_start}:{get_column_letter(last_col)}{row - 1}"
+            dv.add(rng)
+            member_ranges.append(rng)
+        row += 1  # blank row between squads
+
+    # Conditional formatting: colour the status words (also works for hand-picked values).
+    cf_rules = [
+        ("Был", "C6EFCE", "006100"),
+        ("Не был", "FFC7CE", "9C0006"),
+        ("Опоздал", "FFEB9C", "9C6500"),
+        ("Уваж.", "DDEBF7", "1F4E78"),
+        ("Болел", "DDEBF7", "1F4E78"),
+        ("Освоб.", "DDEBF7", "1F4E78"),
+    ]
+    for rng in member_ranges:
+        for word, bg, fg in cf_rules:
+            ws.conditional_formatting.add(
+                rng,
+                CellIsRule(operator="equal", formula=[f'"{word}"'], fill=PatternFill(fill_type="solid", fgColor=bg), font=Font(color=fg, bold=True)),
+            )
+
+    ws.column_dimensions["A"].width = 36
+    ws.column_dimensions["B"].width = 10
+    for i in range(len(dates)):
+        ws.column_dimensions[get_column_letter(first_col + i)].width = 12
+    ws.freeze_panes = "C1"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"attendance-{period_start.strftime('%Y-%m')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

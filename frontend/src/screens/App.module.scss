@@ -3685,3 +3685,510 @@ button[data-active="true"] .navIcon {
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
+
+/* ── Visual hardening: dark theme and narrow screens ───────────── */
+.shell,
+.shell * {
+  min-width: 0;
+}
+
+.shell {
+  overflow-x: clip;
+}
+
+.panel,
+.row,
+.menuCard,
+.helpStrip,
+.profileCard,
+.activityFeed,
+.miniList,
+.promoStrip,
+.customizer,
+.chartsSection,
+.adminTabGroups,
+.memberRow,
+.metric,
+.nextItem,
+.requirements span,
+.steps div,
+.weekBadge,
+.birthdayPreview,
+.rosterTableWrap,
+.reportStat,
+.streakBadge,
+.normReadOnly,
+.modalSheet,
+.drawerSheet,
+.webAccessCard,
+.vkCodeBox,
+.pipelineStageTab,
+.pipelineRow,
+.pipelineEmpty,
+.authGateMeta div,
+.eventMetaGrid div,
+.eventDescription,
+.joinCta {
+  max-width: 100%;
+}
+
+.panel,
+.row,
+.menuCard,
+.helpStrip,
+.profileCard,
+.activityFeed,
+.miniList,
+.promoStrip,
+.customizer,
+.chartsSection,
+.adminTabGroups,
+.memberRow,
+.metric,
+.nextItem,
+.requirements span,
+.steps div,
+.weekBadge,
+.birthdayPreview,
+.reportStat,
+.streakBadge,
+.normReadOnly,
+.webAccessCard,
+.vkCodeBox,
+.pipelineRow,
+.pipelineEmpty,
+.eventDescription,
+.joinCta,
+.modalBody,
+.drawerSheet {
+  overflow-wrap: anywhere;
+}
+
+.panelHeader,
+.sectionHeader,
+.activityHeader,
+.drawerHeader,
+.webAccessHeader,
+.adminCardHead,
+.pipelineRow,
+.fileAttached,
+.filePreviewActions {
+  min-width: 0;
+}
+
+.drawerSheet,
+.modalSheet {
+  width: min(100%, 430px);
+  max-width: 100vw;
+  margin-inline: auto;
+}
+
+.drawerHeader,
+.panelHeader,
+.sectionHeader,
+.activityHeader,
+.adminToolbar {
+  flex-wrap: wrap;
+}
+
+.exportDropdown {
+  max-width: 100%;
+
+  &[open] {
+    z-index: 25;
+  }
+
+  > div {
+    max-width: calc(100vw - 32px);
+  }
+}
+
+@media (max-width: 420px) {
+  .shell {
+    width: 100%;
+    padding-inline: 10px;
+  }
+
+  .panel,
+  .profileCard,
+  .chartsSection,
+  .webAccessCard {
+    padding: 14px;
+  }
+
+  .statusPanel {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+
+    dl {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      min-width: 0;
+    }
+  }
+
+  .joinCta,
+  .adminToolbar,
+  .authGateMeta div,
+  .detailRow,
+  .profileRow,
+  .eventMetaGrid,
+  .reportOverview,
+  .statsGrid4,
+  .announcementChannels,
+  .tokenBar {
+    grid-template-columns: 1fr;
+  }
+
+  .helpStrip {
+    grid-template-columns: 34px minmax(0, 1fr);
+
+    .helpStripBadge {
+      grid-column: 2;
+      justify-self: start;
+      white-space: normal;
+      text-align: left;
+    }
+  }
+
+  .actions {
+    grid-template-columns: 1fr;
+  }
+
+  .dragList > div {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+
+    label {
+      grid-column: 1 / -1;
+    }
+  }
+
+  .drawerHeader {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+
+    .drawerStageBadge {
+      justify-self: start;
+      white-space: normal;
+      text-align: left;
+    }
+  }
+
+  .pipelineRow {
+    flex-wrap: wrap;
+  }
+
+  .pipelineRowMeta {
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .rosterTable {
+    &[data-compact="true"] {
+      min-width: 100%;
+    }
+
+    th,
+    td {
+      padding-inline: 7px;
+      font-size: 11px;
+      white-space: normal;
+    }
+  }
+
+  .exportDropdown > div {
+    right: auto;
+    left: 0;
+  }
+}
+
+@media (max-width: 360px) {
+  .menuGrid,
+  .metrics,
+  .commandSummary,
+  .statsGrid2,
+  .announcementTopGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .adminTabGroups section {
+    grid-template-columns: 1fr;
+  }
+
+  .tabs,
+  .filterChips,
+  .pipelineStages {
+    margin-inline: -4px;
+    padding-inline: 4px;
+  }
+
+  .statusPanel h1 {
+    font-size: 22px;
+  }
+}
+
+[data-theme="dark"] {
+  .panel,
+  .row,
+  .menuCard,
+  .helpStrip,
+  .profileCard,
+  .activityFeed,
+  .miniList,
+  .promoStrip,
+  .customizer,
+  .chartsSection,
+  .adminTabGroups,
+  .memberRow,
+  .metric,
+  .nextItem,
+  .requirements span,
+  .steps div,
+  .weekBadge,
+  .birthdayPreview,
+  .rosterTableWrap,
+  .reportStat,
+  .streakBadge,
+  .normReadOnly,
+  .modalSheet,
+  .drawerSheet,
+  .webAccessCard,
+  .vkCodeBox,
+  .pipelineStageTab,
+  .pipelineRow,
+  .pipelineEmpty,
+  .authGateMeta div,
+  .eventMetaGrid div,
+  .eventDescription,
+  .joinCta {
+    border-color: var(--border-soft);
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: none;
+  }
+
+  .panel,
+  .chartsSection,
+  .webAccessCard,
+  .modalSheet,
+  .drawerSheet {
+    background: var(--surface-soft);
+  }
+
+  .helpStrip,
+  .menuCard[data-code="appeals"] {
+    border-color: rgba(255, 107, 95, 0.36);
+    background: linear-gradient(90deg, rgba(255, 107, 95, 0.08), rgba(35, 42, 59, 0.98));
+  }
+
+  .authGate h2,
+  .panelHeader h2,
+  .sectionHeader strong,
+  .activityHeader span,
+  .menuCard span,
+  .helpStripText strong,
+  .metricBlue strong,
+  .nextItem strong,
+  .requirements span,
+  .steps span,
+  .weekBadge b,
+  .miniList strong,
+  .promoStrip strong,
+  .customizer summary,
+  .formTitle,
+  .birthdayPreview p,
+  .memberRow strong,
+  .profileRow dd,
+  .editProfileBtn,
+  .empty,
+  .chartSectionTitle,
+  .normProgressItem strong,
+  .pipelineRowInfo strong,
+  .drawerName,
+  .detailValue,
+  .webAccessHeader strong,
+  .vkCodeValue,
+  .eventBackButton,
+  .eventMetaGrid strong,
+  .joinCta strong,
+  .linkButton {
+    color: var(--text) !important;
+  }
+
+  .authGate p,
+  .panelHeader span,
+  .sectionHeader span,
+  .menuCard small,
+  .helpStripText small,
+  .nextItem span,
+  .nextItem small,
+  .miniList span,
+  .promoStrip span,
+  .fieldLabel > span,
+  .settingsGroupTitle,
+  .birthdayPreview span,
+  .checkboxLine,
+  .memberRow span,
+  .profileRow dt,
+  .webAccessHeader small,
+  .vkCodeBox small,
+  .drawerUsername,
+  .detailLabel,
+  .eventDescription span,
+  .eventDescription p,
+  .joinCta span,
+  .modalBody p,
+  .activityItem small,
+  .reportStat span,
+  .pipelineRowInfo span,
+  .pipelineDate,
+  .commandStrip small {
+    color: var(--text-faint) !important;
+  }
+
+  .activityItem span,
+  .modalBody p strong,
+  .reportStat strong,
+  .rosterTable,
+  .rosterTable td,
+  .reportTable td {
+    color: var(--text-soft) !important;
+  }
+
+  .tabs button,
+  .chip,
+  .collapseBtn,
+  .editProfileBtn,
+  .dragMoveBtn,
+  .adminAccessPill,
+  .adminTabGroups button,
+  .filePreviewActions button,
+  .secondaryFileButton,
+  .webAccessGhost,
+  .avatarUploadButton,
+  .themeToggle button,
+  .authGateActions button,
+  .exportDropdown button,
+  .pipelineStageTab,
+  .btnComingOutline,
+  .btnNotComingOutline,
+  .btnMaybeOutline {
+    border-color: var(--border);
+    background: var(--surface-strong) !important;
+    color: var(--text-soft) !important;
+  }
+
+  .tabs button[data-active="true"],
+  .chip[data-active="true"],
+  .adminTabGroups button[data-active="true"],
+  .themeToggle button[data-active="true"],
+  .primaryButton,
+  .iconAction,
+  .exportDropdown summary,
+  .pipelineStageTab[data-active="true"] {
+    border-color: #dce8ff !important;
+    background: #dce8ff !important;
+    color: #0d1526 !important;
+  }
+
+  input,
+  textarea,
+  select,
+  .formBlock input,
+  .formBlock textarea,
+  .formBlock select,
+  .searchBar input,
+  .messageInput input,
+  .memberRow input,
+  .memberRow select,
+  .memberControls input,
+  .adminControlRow select,
+  .applicationActions input,
+  .applicationActions select,
+  .birthdayTemplate textarea,
+  .drawerInput,
+  .drawerSelect,
+  .submissionCommentRow input,
+  .webAccessForm input {
+    border-color: var(--border) !important;
+    background: #151c2d !important;
+    color: var(--text) !important;
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: #77849d;
+  }
+
+  .checkboxLine input {
+    border-color: var(--border);
+    background: var(--surface-strong);
+
+    &:checked {
+      border-color: #dce8ff;
+      background: #dce8ff;
+
+      &::after {
+        border-color: #0d1526;
+      }
+    }
+  }
+
+  .nav {
+    background: rgba(21, 28, 45, 0.97);
+    border-color: var(--border-soft);
+  }
+
+  .nav button[data-active="true"] {
+    background: rgba(220, 232, 255, 0.12);
+    color: #f4f7ff;
+  }
+
+  button[data-active="true"] .navIcon,
+  .navIcon {
+    color: currentColor;
+  }
+
+  .rosterTableWrap,
+  .reportTableWrapper {
+    background: var(--surface);
+    border-color: var(--border-soft);
+  }
+
+  .rosterTable td,
+  .reportTable td,
+  .activityItem,
+  .profileRow,
+  .detailRow,
+  .modalHeader,
+  .sectionHeader {
+    border-color: var(--border-soft);
+  }
+
+  .rosterTable th,
+  .reportTable th,
+  .squadHeader,
+  .weekBadge b {
+    background: #dce8ff;
+    color: #0d1526;
+  }
+
+  .exportDropdown > div,
+  .dragList > div,
+  .fileAttached {
+    border-color: var(--border);
+    background: var(--surface);
+  }
+
+  .drawerHandle,
+  .pipelineTable {
+    background: var(--border-soft);
+  }
+
+  .skeleton,
+  .skeletonCard {
+    border-color: var(--border-soft);
+    background: linear-gradient(90deg, #232a3b 25%, #2e3a4e 50%, #232a3b 75%);
+    background-size: 800px 100%;
+  }
+}

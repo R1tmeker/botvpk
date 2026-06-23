@@ -242,4 +242,18 @@
   .adminCardActions button { background: #2a3244; border-color: #3a4a60; color: #c8d4e8; &:hover { background: #334060; } }
   .editFields label { color: #8a96b0; input, textarea, select { background: #2a3244; border-color: #3a4a60; color: #e8edf5; } }
   .editCancelBtn { background: #2a3244; border-color: #3a4a60; color: #8a96b0; }
+
+  .card:not([style*="linear-gradient"]) {
+    background: #232a3b !important;
+    border-color: #2e3a4e !important;
+    color: #e8edf5 !important;
+  }
+
+  .cardTitle {
+    color: #e8edf5 !important;
+  }
+
+  .cardText {
+    color: #9ba8c2 !important;
+  }
 }

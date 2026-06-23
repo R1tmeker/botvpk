@@ -206,13 +206,20 @@
 
 /* ── Dark mode ──────────────────────────────────── */
 [data-theme="dark"] {
-  .donutCenter { background: #fff; }
-  .donutLabel { color: #1a2f5a; }
-  .donutSublabel { color: #8a96b0; }
+  .donut { background: #2e3a4e; }
+  .donutCenter {
+    background: #151c2d;
+    box-shadow:
+      inset 0 0 0 1px #344057,
+      0 8px 22px rgba(0, 0, 0, 0.22);
+  }
+  .donutLabel { color: var(--text); }
+  .donutSublabel { color: var(--text-faint); }
 
   .legendItem { color: #e8edf5; strong { color: #e8edf5; } }
   .barValue { fill: #e8edf5; }
-  .barLabel { fill: #6b7a96; }
+  .barLabel { fill: #9ba8c2; }
+  .heatmapLegend { color: #9ba8c2; }
   .heatmapTitle { color: #e8edf5; }
 
   .progressTrack { background: #2e3a4e; }
@@ -221,6 +228,7 @@
     background: #232a3b;
     border-color: #2e3a4e;
 
-    span { color: #6b7a96; }
+    strong { color: var(--text) !important; }
+    span { color: #9ba8c2; }
   }
 }

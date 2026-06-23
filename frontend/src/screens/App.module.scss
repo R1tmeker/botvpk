@@ -2398,7 +2398,8 @@ button[data-active="true"] .navIcon {
   border: 1px solid #e0e5ef;
   border-radius: 10px;
   background: #fff;
-  padding: 9px 10px;
+  padding: 10px 11px;
+  overflow: hidden;
 
   span {
     display: block;
@@ -2412,7 +2413,7 @@ button[data-active="true"] .navIcon {
     display: block;
     margin-top: 3px;
     color: #1a2f5a;
-    font-size: 14px;
+    font-size: clamp(13px, 3.5vw, 15px);
     font-weight: 950;
     line-height: 1.15;
     overflow-wrap: anywhere;
@@ -2423,17 +2424,21 @@ button[data-active="true"] .navIcon {
   width: 100%;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  border: 1px solid #e0e5ef;
+  border-radius: 12px;
+  background: #fff;
 }
 
 .reportTable {
   width: 100%;
+  min-width: 420px;
   border-collapse: collapse;
   font-size: 12px;
-  margin-top: 8px;
+  margin: 0;
 
   th {
     text-align: left;
-    padding: 6px 8px;
+    padding: 9px 10px;
     background: #1a2f5a;
     color: #fff;
     font-size: 11px;
@@ -2444,10 +2449,12 @@ button[data-active="true"] .navIcon {
   }
 
   td {
-    padding: 6px 8px;
+    padding: 9px 10px;
     border-bottom: 1px solid #e8ebf2;
     color: #1a2f5a;
     font-weight: 700;
+    vertical-align: top;
+    overflow-wrap: anywhere;
   }
 
   tr:last-child td { border-bottom: none; }
@@ -4190,5 +4197,74 @@ button[data-active="true"] .navIcon {
     border-color: var(--border-soft);
     background: linear-gradient(90deg, #232a3b 25%, #2e3a4e 50%, #232a3b 75%);
     background-size: 800px 100%;
+  }
+
+  .shell [style*="color: #1a2f5a"],
+  .shell [style*="color:#1a2f5a"],
+  .shell [style*="color: rgb(26, 47, 90)"],
+  .shell [style*="color:rgb(26, 47, 90)"] {
+    color: var(--text) !important;
+  }
+
+  .shell [style*="color: #42506a"],
+  .shell [style*="color:#42506a"],
+  .shell [style*="color: #44516b"],
+  .shell [style*="color:#44516b"],
+  .shell [style*="color: #64708b"],
+  .shell [style*="color:#64708b"],
+  .shell [style*="color: #65708a"],
+  .shell [style*="color:#65708a"],
+  .shell [style*="color: #8a96b0"],
+  .shell [style*="color:#8a96b0"],
+  .shell [style*="color: rgb(66, 80, 106)"],
+  .shell [style*="color: rgb(68, 81, 107)"],
+  .shell [style*="color: rgb(100, 112, 139)"],
+  .shell [style*="color: rgb(101, 112, 138)"],
+  .shell [style*="color: rgb(138, 150, 176)"] {
+    color: var(--text-faint) !important;
+  }
+
+  .reportOverview {
+    gap: 8px;
+  }
+
+  .reportStat {
+    background:
+      linear-gradient(180deg, rgba(220, 232, 255, 0.04), rgba(220, 232, 255, 0)),
+      var(--surface) !important;
+    border-color: var(--border) !important;
+
+    span {
+      color: var(--text-faint) !important;
+    }
+
+    strong {
+      color: var(--text) !important;
+    }
+  }
+
+  .reportTableWrapper {
+    background: var(--surface) !important;
+    border-color: var(--border) !important;
+  }
+
+  .reportTable {
+    color: var(--text-soft) !important;
+
+    th {
+      background: #dce8ff !important;
+      color: #0d1526 !important;
+      border-bottom: 1px solid var(--border);
+    }
+
+    td {
+      color: var(--text-soft) !important;
+      border-color: var(--border-soft) !important;
+    }
+  }
+
+  .statsGrid2 > * {
+    background: var(--surface) !important;
+    border-color: var(--border) !important;
   }
 }

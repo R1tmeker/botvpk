@@ -4,7 +4,7 @@ import styles from "./Charts.module.scss";
 export function StatNumber({
   value,
   label,
-  color = "#1a2f5a",
+  color = "var(--text)",
   suffix = "",
 }: {
   value: number;

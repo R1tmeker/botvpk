@@ -97,7 +97,7 @@ export type BarDatum = { label: string; value: number; color?: string };
 export function BarChart({
   data,
   height = 120,
-  barColor = "#1a2f5a",
+  barColor = "#3498db",
   showValues = true,
 }: {
   data: BarDatum[];
@@ -324,7 +324,7 @@ export function GradeDistribution({ grades }: { grades: Record<string, number> }
 }
 
 /* ─────────────── StatNumber ─────────────────── */
-export function StatNumber({ value, label, color = "#1a2f5a", suffix = "" }: { value: number; label: string; color?: string; suffix?: string }) {
+export function StatNumber({ value, label, color = "var(--text)", suffix = "" }: { value: number; label: string; color?: string; suffix?: string }) {
   const anim = useCountUp(value, 900);
   return (
     <div className={styles.statNumber}>

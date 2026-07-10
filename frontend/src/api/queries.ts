@@ -1,50 +1,201 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 
-import { api, setAccessToken } from "./client";
+import { api, apiBaseUrl } from "./client";
+import { loadOfflineValue, saveOfflineValue } from "../offline/storage";
 import type {
   Announcement,
+  ActionItem,
   Appeal,
   AppealMessage,
   AuditLog,
   AttendanceRecord,
   AuthResponse,
   CandidateEvent,
+  CalendarSubscription,
   DashboardSetting,
+  DashboardBootstrap,
+  ImportPreview,
   JoinApplication,
   LearningCourse,
   MenuCard,
   Normative,
   NormativeSubmission,
   Notification,
+  NotificationPreference,
   PromoBlock,
   PublicContent,
   ReportSummary,
   ScheduleEvent,
   ScheduleTemplate,
+  SearchResult,
   LearningMaterial,
   Squad,
   UserProfile,
   UserRecord,
+  UserProgress,
 } from "../types/api";
 
 const LIVE_QUERY_OPTIONS = {
-  refetchInterval: 8000,
-  refetchIntervalInBackground: true,
-  refetchOnMount: "always",
+  refetchInterval: () => typeof document !== "undefined" && document.visibilityState === "visible" ? 60_000 : false,
+  refetchIntervalInBackground: false,
+  refetchOnMount: true,
   refetchOnReconnect: true,
   refetchOnWindowFocus: true,
 } as const;
 
 const FAST_QUERY_OPTIONS = {
   ...LIVE_QUERY_OPTIONS,
-  refetchInterval: 5000,
 } as const;
+
+export function useRealtimeInvalidation(enabled: boolean) {
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (!enabled || typeof EventSource === "undefined") return;
+    const source = new EventSource(`${apiBaseUrl.replace(/\/$/, "")}/events/stream`, { withCredentials: true });
+    source.addEventListener("invalidate", (event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent<string>).data) as { query_keys?: string[] };
+        for (const key of payload.query_keys ?? []) {
+          queryClient.invalidateQueries({ queryKey: [key] });
+        }
+      } catch {
+        queryClient.invalidateQueries();
+      }
+    });
+    return () => source.close();
+  }, [enabled, queryClient]);
+}
+
+export function useActionItems(enabled: boolean) {
+  return useQuery({
+    queryKey: ["dashboard", "action-items"],
+    queryFn: async () => {
+      const { data } = await api.get<ActionItem[]>("/dashboard/action-items");
+      return data;
+    },
+    enabled,
+    ...LIVE_QUERY_OPTIONS,
+  });
+}
+
+export function useDashboardBootstrap(enabled: boolean) {
+  return useQuery({
+    queryKey: ["dashboard", "bootstrap"],
+    queryFn: async () => {
+      const { data } = await api.get<DashboardBootstrap>("/dashboard/bootstrap");
+      return data;
+    },
+    enabled,
+    ...LIVE_QUERY_OPTIONS,
+  });
+}
+
+export function useNotificationPreferences(enabled: boolean) {
+  return useQuery({
+    queryKey: ["me", "notification-preferences"],
+    queryFn: async () => {
+      const { data } = await api.get<NotificationPreference[]>("/me/notification-preferences");
+      return data;
+    },
+    enabled,
+  });
+}
+
+export function useUpdateNotificationPreferences() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (items: NotificationPreference[]) => {
+      const { data } = await api.put<NotificationPreference[]>("/me/notification-preferences", { items });
+      return data;
+    },
+    onSuccess: (data) => queryClient.setQueryData(["me", "notification-preferences"], data),
+  });
+}
+
+export function useCreateCalendarSubscription() {
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await api.post<CalendarSubscription>("/calendar/subscription");
+      return data;
+    },
+  });
+}
+
+export function useRevokeCalendarSubscription() {
+  return useMutation({ mutationFn: async () => api.delete("/calendar/subscription") });
+}
+
+export function useGlobalSearch(query: string, enabled = true) {
+  return useQuery({
+    queryKey: ["search", query],
+    queryFn: async () => {
+      const { data } = await api.get<SearchResult[]>("/search", { params: { q: query } });
+      return data;
+    },
+    enabled: enabled && query.trim().length >= 2,
+    staleTime: 30_000,
+  });
+}
+
+export function useProgress(enabled: boolean) {
+  return useQuery({
+    queryKey: ["progress", "me"],
+    queryFn: async () => {
+      const { data } = await api.get<UserProgress>("/me/progress");
+      return data;
+    },
+    enabled,
+  });
+}
+
+export function useAdminImportPreview() {
+  return useMutation({
+    mutationFn: async (file: File) => {
+      const form = new FormData();
+      form.append("upload", file);
+      const { data } = await api.post<ImportPreview>("/admin/imports/preview", form);
+      return data;
+    },
+  });
+}
+
+export function useAdminImportCommit() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (previewId: string) => {
+      const { data } = await api.post<{ created: number; updated: number; audit_batch_id: number }>(
+        `/admin/imports/${previewId}/commit`,
+      );
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "audit"] });
+    },
+  });
+}
+
+export function useAdminAuditUndo() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (auditId: number) => {
+      const { data } = await api.post<{ audit_id: number; undo_audit_id: number; affected: number; detail: string }>(
+        `/admin/audit/${auditId}/undo`,
+      );
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "audit"] });
+    },
+  });
+}
 
 export function useTelegramAuth() {
   return useMutation({
     mutationFn: async (initData: string) => {
       const { data } = await api.post<AuthResponse>("/auth/telegram", { init_data: initData });
-      setAccessToken(data.access_token);
       return data;
     },
   });
@@ -54,7 +205,35 @@ export function usePasswordLogin() {
   return useMutation({
     mutationFn: async (payload: { telegram_id: number; password: string; totp_code?: string }) => {
       const { data } = await api.post<AuthResponse>("/auth/password/login", payload);
-      setAccessToken(data.access_token);
+      return data;
+    },
+  });
+}
+
+export function useSession() {
+  return useQuery({
+    queryKey: ["auth", "session"],
+    queryFn: async () => {
+      const { data } = await api.get<AuthResponse>("/auth/session");
+      return data;
+    },
+    retry: false,
+    staleTime: 60_000,
+  });
+}
+
+export function useLogout() {
+  return useMutation({
+    mutationFn: async () => {
+      await api.post("/auth/logout");
+    },
+  });
+}
+
+export function useStepUp() {
+  return useMutation({
+    mutationFn: async (payload: { password?: string; totp_code?: string; init_data?: string }) => {
+      const { data } = await api.post<{ step_up: boolean }>("/auth/step-up", payload);
       return data;
     },
   });
@@ -312,16 +491,23 @@ export function useJoinEvents(enabled: boolean) {
   });
 }
 
-export function useSchedule(enabled: boolean) {
+export function useSchedule(enabled: boolean, userId?: number | null) {
   return useQuery({
     queryKey: ["schedule"],
     queryFn: async () => {
       const fromDt = new Date();
       fromDt.setHours(0, 0, 0, 0);
-      const { data } = await api.get<ScheduleEvent[]>("/schedule", {
-        params: { from_dt: fromDt.toISOString() },
-      });
-      return data;
+      try {
+        const { data } = await api.get<ScheduleEvent[]>("/schedule", {
+          params: { from_dt: fromDt.toISOString() },
+        });
+        if (userId) void saveOfflineValue(`cache:schedule:${userId}`, data);
+        return data;
+      } catch (error) {
+        const cached = userId ? await loadOfflineValue<ScheduleEvent[]>(`cache:schedule:${userId}`) : null;
+        if (cached) return cached;
+        throw error;
+      }
     },
     enabled,
     ...FAST_QUERY_OPTIONS,
@@ -470,12 +656,19 @@ export function useNormativesReport(enabled: boolean) {
   });
 }
 
-export function useLearningMaterials(enabled: boolean) {
+export function useLearningMaterials(enabled: boolean, userId?: number | null) {
   return useQuery({
     queryKey: ["learning", "materials"],
     queryFn: async () => {
-      const { data } = await api.get<LearningMaterial[]>("/learning/materials");
-      return data;
+      try {
+        const { data } = await api.get<LearningMaterial[]>("/learning/materials");
+        if (userId) void saveOfflineValue(`cache:learning:${userId}`, data);
+        return data;
+      } catch (error) {
+        const cached = userId ? await loadOfflineValue<LearningMaterial[]>(`cache:learning:${userId}`) : null;
+        if (cached) return cached;
+        throw error;
+      }
     },
     enabled,
   });
@@ -854,6 +1047,7 @@ export function useUpdateDashboardSettings() {
     onSuccess: (data) => {
       queryClient.setQueryData(["dashboard", "settings"], data);
       queryClient.invalidateQueries({ queryKey: ["dashboard", "settings"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard", "bootstrap"] });
     },
   });
 }
@@ -868,6 +1062,7 @@ export function useResetDashboardSettings() {
     onSuccess: () => {
       queryClient.setQueryData(["dashboard", "settings"], []);
       queryClient.invalidateQueries({ queryKey: ["dashboard", "settings"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard", "bootstrap"] });
     },
   });
 }
@@ -1027,7 +1222,7 @@ export function useUploadFile() {
 export function useUpdateMe() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (payload: Partial<{ full_name: string; phone: string; city: string; education_place: string; birth_date: string }>) => {
+    mutationFn: async (payload: Partial<{ full_name: string; phone: string; city: string; education_place: string; birth_date: string; if_unmodified_since: string | null }>) => {
       const { data } = await api.patch<UserProfile>("/me", payload);
       return data;
     },
@@ -1086,6 +1281,7 @@ export function useCreatePromoBlock() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin", "promo"] });
       queryClient.invalidateQueries({ queryKey: ["promo", "active"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard", "bootstrap"] });
     },
   });
 }
@@ -1112,6 +1308,7 @@ export function useUpdatePromoBlock() {
       });
       queryClient.invalidateQueries({ queryKey: ["admin", "promo"] });
       queryClient.invalidateQueries({ queryKey: ["promo", "active"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard", "bootstrap"] });
     },
   });
 }
@@ -1132,6 +1329,7 @@ export function useDeletePromoBlock() {
       );
       queryClient.invalidateQueries({ queryKey: ["admin", "promo"] });
       queryClient.invalidateQueries({ queryKey: ["promo", "active"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard", "bootstrap"] });
     },
   });
 }
@@ -1265,7 +1463,7 @@ export function useMarkAttendance() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ eventId, entries }: { eventId: number; entries: Array<{ user_id: number; status_code: string; absence_reason_id?: number | null; comment?: string }> }) => {
-      const { data } = await api.post(`/attendance/events/${eventId}/mark`, { items: entries });
+      const { data } = await api.post(`/attendance/events/${eventId}/bulk`, { items: entries });
       return data;
     },
     onSuccess: (_data, variables) => {
@@ -1273,6 +1471,24 @@ export function useMarkAttendance() {
       queryClient.invalidateQueries({ queryKey: ["attendance", "my"] });
       queryClient.invalidateQueries({ queryKey: ["attendance", "stats", "my"] });
       queryClient.invalidateQueries({ queryKey: ["reports", "attendance"] });
+    },
+  });
+}
+
+export function useSelfCheckIn() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (eventId: number) => {
+      const { data } = await api.post<AttendanceRecord>(`/schedule/events/${eventId}/self-checkin`);
+      return data;
+    },
+    onSuccess: (attendance) => {
+      queryClient.setQueryData<AttendanceRecord[]>(["attendance", "my", 100, 0], (items) => {
+        const current = items ?? [];
+        return [attendance, ...current.filter((item) => item.id !== attendance.id)];
+      });
+      queryClient.invalidateQueries({ queryKey: ["attendance"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
     },
   });
 }
@@ -1353,6 +1569,10 @@ type ScheduleEventPayload = {
   squad_id?: number | null;
   event_type_code?: string;
   requires_response?: boolean;
+  self_checkin_enabled?: boolean;
+  self_checkin_opens_at?: string | null;
+  self_checkin_closes_at?: string | null;
+  late_after_minutes?: number;
   description?: string | null;
   status_code?: string;
 };

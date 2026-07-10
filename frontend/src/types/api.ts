@@ -23,6 +23,7 @@ export type UserProfile = {
   phone: string | null;
   city: string | null;
   education_place: string | null;
+  version?: string | null;
 };
 
 export type UserRecord = UserProfile & {
@@ -32,8 +33,7 @@ export type UserRecord = UserProfile & {
 };
 
 export type AuthResponse = {
-  access_token: string;
-  token_type: "bearer";
+  authenticated: boolean;
   profile: UserProfile;
   app_timezone: string;
 };
@@ -64,6 +64,10 @@ export type ScheduleEvent = {
   squad_id: number | null;
   status_code: string;
   requires_response: boolean;
+  self_checkin_enabled: boolean;
+  self_checkin_opens_at: string | null;
+  self_checkin_closes_at: string | null;
+  late_after_minutes: number;
   is_overridden: boolean;
   response_deadline_at: string | null;
   grading_type: string;
@@ -139,6 +143,7 @@ export type AttendanceRecord = {
   status_code: string;
   custom_reason: string | null;
   marked_at: string | null;
+  source_code: "SELF" | "COMMANDER" | "BOT" | string;
   updated_at: string | null;
 };
 
@@ -194,6 +199,59 @@ export type NormativeSubmission = {
   reviewed_at: string | null;
   submitted_at: string;
   updated_at: string | null;
+};
+
+export type ActionItem = {
+  code: string;
+  title: string;
+  description: string;
+  severity: "info" | "warning" | "critical";
+  count: number;
+  due_at: string | null;
+  deep_link: string;
+  bulk_actions: string[];
+};
+
+export type NotificationPreference = {
+  category_code: string;
+  telegram_enabled: boolean;
+  vk_enabled: boolean;
+  web_push_enabled: boolean;
+  in_app_enabled: boolean;
+  quiet_hours_enabled: boolean;
+  quiet_hours_start: string | null;
+  quiet_hours_end: string | null;
+};
+
+export type CalendarSubscription = {
+  url: string;
+  created_at: string;
+};
+
+export type SearchResult = {
+  type: "person" | "event" | "normative" | "material" | "appeal";
+  id: number;
+  title: string;
+  description: string | null;
+  deep_link: string;
+};
+
+export type AchievementProgress = {
+  code: string;
+  title: string;
+  current_value: number;
+  target_value: number;
+  unlocked_at: string | null;
+  is_public: boolean;
+};
+
+export type UserProgress = {
+  attendance_percent: number;
+  attendance_total: number;
+  normatives_accepted: number;
+  current_streak: number;
+  periods: Array<{ period: string; attended: number; total: number; normatives_accepted: number }>;
+  achievements: AchievementProgress[];
 };
 
 export type Announcement = {
@@ -304,6 +362,12 @@ export type DashboardSetting = {
   updated_at: string;
 };
 
+export type DashboardBootstrap = {
+  settings: DashboardSetting[];
+  promo: PromoBlock[];
+  action_items: ActionItem[];
+};
+
 export type Squad = {
   id: number;
   name: string;
@@ -322,5 +386,25 @@ export type AuditLog = {
   old_value: unknown;
   new_value: unknown;
   comment: string | null;
+  undone_at?: string | null;
+  undone_by_id?: number | null;
+  undo_audit_id?: number | null;
   created_at: string;
+};
+
+export type ImportPreview = {
+  preview_id: string;
+  total_rows: number;
+  create_count: number;
+  update_count: number;
+  unchanged_count: number;
+  errors: Array<{ row: number; message: string }>;
+  changes: Array<{
+    row: number;
+    action: "CREATE" | "UPDATE" | "UNCHANGED";
+    identity: string;
+    before: Record<string, unknown> | null;
+    after: Record<string, unknown>;
+  }>;
+  expires_at: string;
 };

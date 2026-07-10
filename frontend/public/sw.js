@@ -1,4 +1,4 @@
-const CACHE_NAME = "botvpk-shell-v1";
+const CACHE_NAME = "botvpk-shell-__BOTVPK_RELEASE__";
 const SHELL_URLS = ["/", "/manifest.webmanifest", "/assets/zvezda-emblem.jpg"];
 
 self.addEventListener("install", (event) => {
@@ -55,8 +55,8 @@ self.addEventListener("push", (event) => {
   const title = payload.title || "ВПК Звезда";
   const options = {
     body: payload.body || "",
-    icon: "/assets/zvezda-emblem.jpg",
-    badge: "/assets/zvezda-emblem.jpg",
+    icon: "/assets/icons/pwa-192.png",
+    badge: "/assets/icons/pwa-192.png",
     data: { url: payload.url || "/", notification_id: payload.notification_id },
   };
   event.waitUntil(self.registration.showNotification(title, options));

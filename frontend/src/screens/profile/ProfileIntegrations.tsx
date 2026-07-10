@@ -2,8 +2,11 @@ import { useEffect, useState } from "react";
 
 import {
   useDeletePassword,
+  useCreateCalendarSubscription,
+  useNotificationPreferences,
   usePasswordStatus,
   useSetPassword,
+  useStepUp,
   useTwoFactorDisable,
   useTwoFactorEnable,
   useTwoFactorSetup,
@@ -11,10 +14,14 @@ import {
   useVkLinkCode,
   useVkStatus,
   useVkUnlink,
+  useRevokeCalendarSubscription,
+  useUpdateNotificationPreferences,
+  useProgress,
   useWebPushPublicKey,
   useWebPushSubscribe,
   useWebPushUnsubscribe,
 } from "../../api/queries";
+import type { NotificationPreference } from "../../types/api";
 import { toast } from "../../components/Toast";
 import { type AppTheme, saveTheme } from "../../theme";
 import styles from "../App.module.scss";
@@ -33,6 +40,178 @@ function urlBase64ToArrayBuffer(value: string): ArrayBuffer {
     output[i] = raw.charCodeAt(i);
   }
   return buffer;
+}
+
+export function StepUpSection({ initData }: { initData?: string }) {
+  const stepUp = useStepUp();
+  const [password, setPassword] = useState("");
+  const [totpCode, setTotpCode] = useState("");
+  const [verifiedUntil, setVerifiedUntil] = useState<number | null>(null);
+  const active = verifiedUntil !== null && verifiedUntil > Date.now();
+  return (
+    <div className={styles.webAccessCard}>
+      <div className={styles.webAccessHeader}>
+        <div>
+          <strong>Подтверждение личности</strong>
+          <small>{active ? "Опасные операции разрешены на 5 минут" : "Нужно перед сменой пароля и 2FA"}</small>
+        </div>
+        <span className={styles.webAccessDot} data-on={active} />
+      </div>
+      {!active && (
+        <div className={styles.webAccessForm}>
+          {!initData && (
+            <input type="password" placeholder="Текущий пароль" value={password} onChange={(event) => setPassword(event.target.value)} />
+          )}
+          <input
+            inputMode="numeric"
+            placeholder="Код 2FA, если включён"
+            value={totpCode}
+            onChange={(event) => setTotpCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+          />
+          <div className={styles.webAccessActions}>
+            <button
+              type="button"
+              disabled={stepUp.isPending || (!initData && !password)}
+              onClick={() => stepUp.mutate(
+                { init_data: initData || undefined, password: password || undefined, totp_code: totpCode || undefined },
+                {
+                  onSuccess: () => {
+                    setVerifiedUntil(Date.now() + 5 * 60_000);
+                    setPassword("");
+                    setTotpCode("");
+                    toast("Личность подтверждена на 5 минут", "success");
+                  },
+                  onError: () => toast("Не удалось подтвердить личность", "error"),
+                },
+              )}
+            >
+              {stepUp.isPending ? "Проверяем…" : "Подтвердить"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const NOTIFICATION_CATEGORY_LABELS: Record<string, string> = {
+  SCHEDULE: "Расписание",
+  ATTENDANCE: "Явка",
+  NORMATIVES: "Нормативы",
+  ANNOUNCEMENTS: "Объявления",
+  APPEALS: "Обращения",
+  SYSTEM: "Системные",
+};
+
+export function NotificationPreferencesSection() {
+  const preferences = useNotificationPreferences(true);
+  const update = useUpdateNotificationPreferences();
+  const [draft, setDraft] = useState<NotificationPreference[] | null>(null);
+  useEffect(() => {
+    if (preferences.data) setDraft(preferences.data);
+  }, [preferences.data]);
+  const items = draft ?? preferences.data ?? [];
+  const patch = (category: string, change: Partial<NotificationPreference>) => {
+    setDraft(items.map((item) => item.category_code === category ? { ...item, ...change } : item));
+  };
+  if (preferences.isLoading) return <div className={styles.webAccessCard}>Загружаем настройки…</div>;
+  return (
+    <div className={styles.notificationPreferences}>
+      {items.map((item) => (
+        <div key={item.category_code} className={styles.webAccessCard}>
+          <div className={styles.webAccessHeader}>
+            <div><strong>{NOTIFICATION_CATEGORY_LABELS[item.category_code] ?? item.category_code}</strong><small>Каналы доставки</small></div>
+          </div>
+          <div className={styles.preferenceGrid}>
+            {(["telegram_enabled", "vk_enabled", "web_push_enabled", "in_app_enabled"] as const).map((field) => (
+              <label key={field}>
+                <input type="checkbox" checked={item[field]} onChange={(event) => patch(item.category_code, { [field]: event.target.checked })} />
+                {{ telegram_enabled: "Telegram", vk_enabled: "VK", web_push_enabled: "Web Push", in_app_enabled: "Приложение" }[field]}
+              </label>
+            ))}
+            <label>
+              <input type="checkbox" checked={item.quiet_hours_enabled} onChange={(event) => patch(item.category_code, { quiet_hours_enabled: event.target.checked })} />
+              Тихие часы
+            </label>
+            {item.quiet_hours_enabled && (
+              <div className={styles.quietHoursRow}>
+                <input type="time" value={item.quiet_hours_start ?? "23:00"} onChange={(event) => patch(item.category_code, { quiet_hours_start: event.target.value })} />
+                <span>—</span>
+                <input type="time" value={item.quiet_hours_end ?? "07:00"} onChange={(event) => patch(item.category_code, { quiet_hours_end: event.target.value })} />
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+      <button
+        type="button"
+        className={styles.primaryButton}
+        disabled={!draft || update.isPending}
+        onClick={() => update.mutate(
+          items.map((item) => item.quiet_hours_enabled ? {
+            ...item,
+            quiet_hours_start: item.quiet_hours_start ?? "23:00",
+            quiet_hours_end: item.quiet_hours_end ?? "07:00",
+          } : item),
+          { onSuccess: () => toast("Настройки уведомлений сохранены", "success"), onError: () => toast("Не удалось сохранить настройки", "error") },
+        )}
+      >
+        {update.isPending ? "Сохраняем…" : "Сохранить уведомления"}
+      </button>
+    </div>
+  );
+}
+
+export function CalendarSection() {
+  const create = useCreateCalendarSubscription();
+  const revoke = useRevokeCalendarSubscription();
+  const [url, setUrl] = useState<string | null>(null);
+  const webcalUrl = url?.replace(/^https?:/, "webcal:") ?? "";
+  return (
+    <div className={styles.webAccessCard}>
+      <div className={styles.webAccessHeader}>
+        <div><strong>Календарь</strong><small>Личная ссылка содержит общие события и события вашего отделения</small></div>
+        <span className={styles.webAccessDot} data-on={Boolean(url)} />
+      </div>
+      {!url ? (
+        <div className={styles.webAccessActions}>
+          <button type="button" disabled={create.isPending} onClick={() => create.mutate(undefined, { onSuccess: (data) => setUrl(data.url) })}>
+            {create.isPending ? "Создаём…" : "Создать ссылку ICS"}
+          </button>
+        </div>
+      ) : (
+        <div className={styles.webAccessForm}>
+          <input readOnly value={url} aria-label="Ссылка календаря" />
+          <div className={styles.webAccessActions}>
+            <button type="button" onClick={() => navigator.clipboard.writeText(url).then(() => toast("Ссылка скопирована", "success"))}>Копировать</button>
+            <a className={styles.vkBotLink} href={`https://calendar.google.com/calendar/r?cid=${encodeURIComponent(url)}`} target="_blank" rel="noreferrer">Google Calendar</a>
+            <a className={styles.vkBotLink} href={webcalUrl}>Apple Calendar</a>
+            <button type="button" className={styles.webAccessDanger} disabled={revoke.isPending} onClick={() => revoke.mutate(undefined, { onSuccess: () => { setUrl(null); toast("Подписка отозвана", "success"); } })}>Отозвать</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function ProgressSection() {
+  const progress = useProgress(true);
+  if (!progress.data) return null;
+  return (
+    <div className={styles.webAccessCard}>
+      <div className={styles.webAccessHeader}>
+        <div><strong>Прогресс и достижения</strong><small>Достижения видны только вам</small></div>
+      </div>
+      <div className={styles.achievementGrid}>
+        {progress.data.achievements.map((item) => (
+          <div key={item.code} data-unlocked={Boolean(item.unlocked_at)}>
+            <strong>{item.title}</strong>
+            <span>{item.current_value} / {item.target_value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export function ThemeSection() {

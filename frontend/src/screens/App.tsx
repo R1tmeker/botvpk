@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   BarChart3,
   AlertTriangle,
@@ -18,6 +19,7 @@ import {
   Megaphone,
   MessageSquareWarning,
   RefreshCw,
+  Search,
   Settings,
   Target,
   User,
@@ -30,6 +32,9 @@ import {
   useActivityFeed,
   useAdminApplications,
   useAdminAudit,
+  useAdminAuditUndo,
+  useAdminImportCommit,
+  useAdminImportPreview,
   useAdminMenu,
   useAdminPromo,
   useAdminSquads,
@@ -43,8 +48,9 @@ import {
   useCreateAppealMessage,
   useCreateJoinApplication,
   useCreateSquad,
-  useDashboardSettings,
+  useDashboardBootstrap,
   useGradesReport,
+  useGlobalSearch,
   useJoinEvents,
   useJoinMe,
   useLearningCourses,
@@ -62,16 +68,17 @@ import {
   useNormativeSubmissionsHistory,
   useOpenFile,
   usePendingNormativeSubmissions,
-  usePromo,
   usePublicContent,
   usePublicEvents,
   useReadAllNotifications,
   useReadNotification,
+  useRealtimeInvalidation,
   useResetDashboardSettings,
   useReviewSubmission,
   useRespondEvent,
   useRespondCandidateEvent,
   useSendAnnouncement,
+  useSelfCheckIn,
   useSchedule,
   useSquads,
   useSubmitNormative,
@@ -135,9 +142,20 @@ import {
   type ApplicationHistoryItem,
   type EventResponseItem,
 } from "../api/queries";
-import { api, clearAccessToken, getStoredToken } from "../api/client";
+import { api } from "../api/client";
+import { canStoreFile, deleteOfflineValue, loadOfflineValue, saveOfflineValue } from "../offline/storage";
 import { LoginScreen } from "./LoginScreen";
-import { ThemeSection, TwoFactorSection, VkLinkSection, WebAccessSection, WebPushSection } from "./profile/ProfileIntegrations";
+import {
+  CalendarSection,
+  NotificationPreferencesSection,
+  ProgressSection,
+  StepUpSection,
+  ThemeSection,
+  TwoFactorSection,
+  VkLinkSection,
+  WebAccessSection,
+  WebPushSection,
+} from "./profile/ProfileIntegrations";
 import {
   applyPhoneMask,
   formatDate,
@@ -150,6 +168,7 @@ import {
   toDateTimeLocal,
 } from "../utils/format";
 import type {
+  ActionItem,
   Appeal,
   AppealMessage,
   Announcement,
@@ -158,6 +177,7 @@ import type {
   CandidateEvent,
   DashboardSetting,
   JoinApplication,
+  ImportPreview,
   LearningCourse,
   LearningMaterial,
   MenuCard,
@@ -170,6 +190,7 @@ import type {
   RoleCode,
   ScheduleEvent,
   ScheduleTemplate,
+  SearchResult,
   Squad,
   UserProfile,
   UserRecord,
@@ -425,6 +446,10 @@ function apiErrorDetail(error: unknown): string | null {
   if (typeof data !== "object" || data === null || !("detail" in data)) return null;
   const detail = (data as { detail?: unknown }).detail;
   if (typeof detail === "string") return detail;
+  if (typeof detail === "object" && detail !== null && "message" in detail) {
+    const message = (detail as { message?: unknown }).message;
+    if (typeof message === "string") return message;
+  }
   if (Array.isArray(detail)) return detail.map((item) => typeof item === "string" ? item : JSON.stringify(item)).join(", ");
   return null;
 }
@@ -530,7 +555,30 @@ type ViewKey =
   | "reports"
   | "people"
   | "profile"
+  | "search"
   | "admin";
+
+const VIEW_PATHS: Record<ViewKey, string> = {
+  dashboard: "/",
+  schedule: "/schedule",
+  attendance: "/attendance",
+  normatives: "/normatives",
+  learning: "/learning",
+  notifications: "/notifications",
+  announcements: "/announcements",
+  appeals: "/appeals",
+  reports: "/reports",
+  people: "/people",
+  profile: "/profile",
+  search: "/search",
+  admin: "/admin",
+};
+
+function viewFromPath(pathname: string): ViewKey {
+  const segment = pathname.split("/").filter(Boolean)[0] ?? "dashboard";
+  if (segment === "settings" || segment === "more") return "profile";
+  return normalizeView(segment);
+}
 
 type JoinApplicationPayload = {
   full_name: string;
@@ -579,6 +627,7 @@ const fallbackProfile: UserProfile = {
   phone: null,
   city: null,
   education_place: null,
+  version: null,
 };
 
 const roleLabels: Record<RoleCode, string> = {
@@ -605,6 +654,37 @@ const applicationStatusLabels: Record<string, string> = {
   REJECTED: "Отклонён",
   ARCHIVED: "Архив",
 };
+
+const technicalCodeLabels: Record<string, string> = {
+  ACTIVE: "Активен",
+  ARCHIVED: "Архив",
+  PLANNED: "Запланировано",
+  CANCELLED: "Отменено",
+  CLASS: "Занятие",
+  TRAINING: "Тренировка",
+  OTHER: "Другое",
+  TECHNICAL: "Техническая проблема",
+  SCHEDULE: "Расписание",
+  ATTENDANCE_ERROR: "Ошибка явки",
+  GRADE_ERROR: "Ошибка оценки",
+  PERSONAL: "Личный вопрос",
+  COMPLAINT: "Жалоба",
+  SUGGESTION: "Предложение",
+  LOW: "Низкая срочность",
+  NORMAL: "Обычная срочность",
+  HIGH: "Срочно",
+  URGENT: "Очень срочно",
+  TEXT: "Текст",
+  VIDEO: "Видео",
+  DOCUMENT: "Документ",
+  ALL: "Все",
+  PARTICIPANTS: "Участники",
+  COMMANDERS: "Командиры",
+};
+
+function codeLabel(code: string | null | undefined): string {
+  return code ? technicalCodeLabels[code] ?? code : "—";
+}
 
 const roleLevels: Record<RoleCode, number> = {
   PUBLIC_USER: 0,
@@ -714,10 +794,8 @@ const navItems: NavItem[] = [
   { view: "schedule", iconCode: "schedule", label: "План", minLevel: 0 },
   { view: "attendance", iconCode: "attendance", label: "Явка", minLevel: 3 },
   { view: "normatives", iconCode: "norms", label: "Нормы", minLevel: 0 },
-  { view: "profile", iconCode: "profile", label: "Профиль", minLevel: 0 },
+  { view: "profile", iconCode: "profile", label: "Ещё", minLevel: 0 },
 ];
-
-const adminNavItem: NavItem = { view: "admin", iconCode: "admin", label: "Админка", minLevel: 6 };
 
 const viewMinLevels: Record<ViewKey, number> = {
   dashboard: 0,
@@ -731,6 +809,7 @@ const viewMinLevels: Record<ViewKey, number> = {
   reports: 5,
   people: 3,
   profile: 0,
+  search: 3,
   admin: 6,
 };
 
@@ -874,17 +953,18 @@ function StatusCarousel({
 /* ─────────────────────────── App ─────────────────────────── */
 
 export function App({ webApp }: Props) {
+  const location = useLocation();
+  const navigate = useNavigate();
   const auth = useTelegramAuth();
   const [profile, setProfile] = useState<UserProfile>(fallbackProfile);
   const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
   const [authError, setAuthError] = useState<string | null>(null);
   const [authAttempt, setAuthAttempt] = useState(0);
-  const [activeView, setActiveView] = useState<ViewKey>("dashboard");
-  const [prevView, setPrevView] = useState<ViewKey | null>(null);
+  const activeView = viewFromPath(location.pathname);
   const [milestoneStreak, setMilestoneStreak] = useState<number | null>(null);
   const prevStreakRef = useRef<number>(0);
   const webMode = !(webApp.initData?.trim());
-  const hasToken = authStatus === "ready" && (webMode || Boolean(auth.data?.access_token));
+  const hasToken = authStatus === "ready";
   const telegramUserId = webApp.initDataUnsafe?.user?.id ?? null;
   const initDataLength = webApp.initData?.length ?? 0;
   const isAuthenticating = authStatus === "checking" || auth.isPending;
@@ -892,42 +972,45 @@ export function App({ webApp }: Props) {
   const level = roleLevels[profile.role_code];
   const publicMode = hasToken && level < 3;
   const internalMode = hasToken && level >= 3;
+  const onView = (...views: ViewKey[]) => hasToken && views.includes(activeView);
 
-  const menu = useMenu(hasToken);
+  const menu = useMenu(hasToken && activeView !== "dashboard");
   const publicContent = usePublicContent(publicMode);
   const publicEvents = usePublicEvents(publicMode);
   const joinMe = useJoinMe(hasToken && profile.role_code === "CANDIDATE");
   const joinHistory = useJoinHistory(hasToken && profile.role_code === "CANDIDATE");
   const joinEvents = useJoinEvents(hasToken && profile.role_code === "CANDIDATE");
-  const schedule = useSchedule(internalMode);
-  const squadsList = useSquads(internalMode);
-  const scheduleWeekType = useScheduleWeekType(internalMode);
-  const attendance = useMyAttendance(internalMode);
-  const attendanceStats = useMyAttendanceStats(internalMode);
-  const normatives = useNormatives(hasToken, level >= 6);
-  const mySubmissions = useMyNormativeSubmissions(hasToken && level >= 1);
-  const pendingSubmissions = usePendingNormativeSubmissions(hasToken && level >= 4);
-  const submissionHistory = useNormativeSubmissionsHistory(hasToken && level >= 4);
-  const notifications = useNotifications(internalMode);
-  const announcements = useAnnouncements(internalMode);
-  const attendanceReport = useAttendanceReport(hasToken && level >= 5);
-  const gradesReport = useGradesReport(hasToken && level >= 5);
-  const normativesReport = useNormativesReport(hasToken && level >= 5);
-  const dashboardSettings = useDashboardSettings(internalMode);
-  const promo = usePromo(internalMode);
-  const learning = useLearningMaterials(hasToken);
-  const learningCourses = useLearningCourses(hasToken);
-  const appeals = useAppeals(internalMode);
-  const mySquad = useMySquad(internalMode);
-  const myStreak = useMyStreak(internalMode);
-  const allUsers = useUsers(internalMode);
-  const activityFeed = useActivityFeed(hasToken && level >= 4);
-  const adminUsers = useAdminUsers(hasToken && level >= 4);
-  const adminApplications = useAdminApplications(hasToken && level >= 6);
-  const adminPromo = useAdminPromo(hasToken && level >= 6);
-  const adminMenu = useAdminMenu(hasToken && level >= 6);
-  const adminSquads = useAdminSquads(hasToken && level >= 6);
-  const adminAudit = useAdminAudit(hasToken && level >= 8);
+  const schedule = useSchedule(internalMode && onView("dashboard", "schedule", "attendance"), profile.id);
+  const squadsList = useSquads(internalMode && onView("schedule", "attendance", "people", "profile"));
+  const scheduleWeekType = useScheduleWeekType(internalMode && onView("schedule"));
+  const attendance = useMyAttendance(internalMode && onView("attendance", "profile"));
+  const attendanceStats = useMyAttendanceStats(internalMode && onView("dashboard", "profile"));
+  const normatives = useNormatives(hasToken && onView("normatives"), level >= 6);
+  const mySubmissions = useMyNormativeSubmissions(hasToken && level >= 1 && onView("normatives", "profile"));
+  const pendingSubmissions = usePendingNormativeSubmissions(hasToken && level >= 4 && onView("normatives"));
+  const submissionHistory = useNormativeSubmissionsHistory(hasToken && level >= 4 && onView("normatives"));
+  const notifications = useNotifications(internalMode && onView("dashboard", "notifications"));
+  const announcements = useAnnouncements(internalMode && onView("announcements"));
+  const attendanceReport = useAttendanceReport(hasToken && level >= 5 && onView("reports", "attendance"));
+  const gradesReport = useGradesReport(hasToken && level >= 5 && onView("reports"));
+  const normativesReport = useNormativesReport(hasToken && level >= 5 && onView("reports"));
+  const dashboardBootstrap = useDashboardBootstrap(internalMode && onView("dashboard"));
+  const dashboardSettings = dashboardBootstrap.data?.settings ?? [];
+  const promo = dashboardBootstrap.data?.promo ?? [];
+  const learning = useLearningMaterials(hasToken && (publicMode || onView("learning")), profile.id);
+  const learningCourses = useLearningCourses(hasToken && onView("learning"));
+  const appeals = useAppeals(internalMode && onView("appeals"));
+  const mySquad = useMySquad(internalMode && onView("people"));
+  const myStreak = useMyStreak(internalMode && onView("dashboard", "profile"));
+  const allUsers = useUsers(internalMode && onView("attendance", "people", "profile"));
+  const activityFeed = useActivityFeed(false);
+  const adminUsers = useAdminUsers(hasToken && level >= 4 && onView("admin"));
+  const adminApplications = useAdminApplications(hasToken && level >= 6 && onView("admin"));
+  const adminPromo = useAdminPromo(hasToken && level >= 6 && onView("admin"));
+  const adminMenu = useAdminMenu(hasToken && level >= 6 && onView("admin"));
+  const adminSquads = useAdminSquads(hasToken && level >= 6 && onView("admin"));
+  const adminAudit = useAdminAudit(hasToken && level >= 8 && onView("admin"));
+  const actionItems = dashboardBootstrap.data?.action_items ?? [];
 
   const hapticSuccess = () => { webApp.HapticFeedback?.notificationOccurred?.("success"); };
   const hapticError = () => { webApp.HapticFeedback?.notificationOccurred?.("error"); };
@@ -954,26 +1037,23 @@ export function App({ webApp }: Props) {
   useEffect(() => {
     const initData = webApp.initData?.trim() ?? "";
     if (!initData) {
-      // Website mode (not opened from Telegram): try to restore a saved password session.
-      const stored = getStoredToken();
-      if (!stored) {
-        setAuthStatus("missing_init_data");
-        setAuthError(null);
-        return;
-      }
+      // Website mode: restore the HttpOnly server session if it is still valid.
       setAuthStatus("checking");
       setAuthError(null);
       let cancelled = false;
       api
-        .get<UserProfile>("/me")
+        .get<{ profile: UserProfile; app_timezone: string }>("/auth/session")
         .then(({ data }) => {
           if (cancelled) return;
-          setProfile(data);
+          if (!data || typeof data !== "object" || !data.profile) {
+            throw new Error("Invalid session response");
+          }
+          setProfile(data.profile);
+          if (data.app_timezone) setAppTimezone(data.app_timezone);
           setAuthStatus("ready");
         })
         .catch(() => {
           if (cancelled) return;
-          clearAccessToken();
           setAuthStatus("missing_init_data");
         });
       return () => {
@@ -1024,6 +1104,7 @@ export function App({ webApp }: Props) {
   }).length ?? 0;
   const visibleCandidateEvents = joinEvents.data?.length ? joinEvents.data : publicEvents.data ?? [];
   const showDashboardChrome = hasToken && activeView === "dashboard";
+  useRealtimeInvalidation(hasToken);
 
   useEffect(() => {
     document.body.dataset.appChrome = showDashboardChrome ? "dashboard" : "plain";
@@ -1033,30 +1114,27 @@ export function App({ webApp }: Props) {
   }, [showDashboardChrome]);
 
   const openView = (view: string) => {
+    if (view.startsWith("/")) {
+      navigate(view);
+      webApp.HapticFeedback?.impactOccurred("light");
+      return;
+    }
     const next = normalizeView(view);
     if (!canAccessView(next, level)) {
-      setActiveView("dashboard");
+      navigate("/", { replace: true });
       webApp.BackButton?.hide();
       return;
     }
-    setPrevView(activeView);
-    setActiveView(next);
+    navigate(VIEW_PATHS[next]);
     webApp.HapticFeedback?.impactOccurred("light");
-    // Show Telegram BackButton when not on dashboard
-    if (next !== "dashboard") {
-      webApp.BackButton?.show();
-    } else {
-      webApp.BackButton?.hide();
-    }
   };
 
   useEffect(() => {
     if (!canAccessView(activeView, level)) {
-      setActiveView("dashboard");
-      setPrevView(null);
+      navigate("/", { replace: true });
       webApp.BackButton?.hide();
     }
-  }, [activeView, level]);
+  }, [activeView, level, navigate]);
 
   // Trigger milestone confetti when streak hits milestone
   useEffect(() => {
@@ -1070,26 +1148,31 @@ export function App({ webApp }: Props) {
     prevStreakRef.current = current;
   }, [myStreak.data?.current_streak]);
 
-  // Wire up BackButton to go back
+  // Telegram BackButton follows browser history.
   useEffect(() => {
     const handler = () => {
-      if (prevView) {
-        setActiveView(prevView);
-        setPrevView(null);
-        webApp.HapticFeedback?.impactOccurred("soft");
-        if (prevView === "dashboard") webApp.BackButton?.hide();
-      } else {
-        setActiveView("dashboard");
-        webApp.BackButton?.hide();
-      }
+      navigate(-1);
+      webApp.HapticFeedback?.impactOccurred("soft");
     };
+    if (activeView === "dashboard") webApp.BackButton?.hide();
+    else webApp.BackButton?.show();
     webApp.BackButton?.onClick(handler);
     return () => webApp.BackButton?.offClick(handler);
-  }, [prevView]);
+  }, [activeView, navigate, webApp]);
+
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k" && internalMode) {
+        event.preventDefault();
+        navigate("/search");
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [internalMode, navigate]);
 
   const visibleNav = hasToken ? [
     ...navItems.filter((item) => level >= item.minLevel),
-    ...(level >= adminNavItem.minLevel ? [adminNavItem] : []),
   ] : [];
 
   // Website mode (no Telegram): show the full-screen login before the app shell.
@@ -1137,6 +1220,16 @@ export function App({ webApp }: Props) {
             <span>{hasToken ? roleLabels[profile.role_code] : "Авторизация"}</span>
           </div>
         </button>
+        {internalMode && (
+          <button
+            type="button"
+            className={styles.headerSearchBtn}
+            onClick={() => navigate("/search")}
+            aria-label="Поиск (Ctrl+K)"
+          >
+            <Search aria-hidden="true" />
+          </button>
+        )}
       </header>
 
       {showDashboardChrome && (
@@ -1145,7 +1238,7 @@ export function App({ webApp }: Props) {
             profile={profile}
             level={level}
             unreadCount={unreadCount}
-            promo={promo.data ?? []}
+            promo={promo}
             navigate={openView}
           />
 
@@ -1245,10 +1338,11 @@ export function App({ webApp }: Props) {
               attendance={visibleAttendance}
               normatives={visibleNormatives}
               attendanceStats={attendanceStats.data}
-              promo={promo.data ?? []}
-              settings={dashboardSettings.data ?? []}
+              promo={promo}
+              settings={dashboardSettings}
               streak={myStreak.data ?? null}
               activityFeed={activityFeed.data ?? []}
+              actionItems={actionItems}
               onSaveSettings={(items) =>
                 updateDashboardSettings.mutate(items, {
                   onSuccess: () => toast("Главная сохранена", "success"),
@@ -1325,6 +1419,7 @@ export function App({ webApp }: Props) {
 
         {!isAuthenticating && hasToken && activeView === "normatives" && (
           <NormativesView
+            userId={profile.id}
             items={visibleNormatives}
             submissions={mySubmissions.data ?? []}
             pending={pendingSubmissions.data ?? []}
@@ -1393,9 +1488,13 @@ export function App({ webApp }: Props) {
             items={appeals.data ?? []}
             currentUserId={profile.id}
             onCreate={(payload) =>
-              createAppeal.mutate(payload, {
-                onSuccess: () => { hapticSuccess(); toast("Обращение отправлено", "success"); },
-                onError: () => { hapticError(); toast("Не удалось отправить обращение", "error"); },
+              createAppeal.mutateAsync(payload).then(() => {
+                hapticSuccess();
+                toast("Обращение отправлено", "success");
+              }).catch((error) => {
+                hapticError();
+                toast("Не удалось отправить обращение", "error");
+                throw error;
               })
             }
             isSubmitting={createAppeal.isPending}
@@ -1434,11 +1533,17 @@ export function App({ webApp }: Props) {
             isAvatarUploading={uploadAvatar.isPending}
             webMode={webMode}
             telegramMode={!webMode}
+            stepUpInitData={webApp.initData}
+            canOpenAdmin={level >= 6}
+            onOpenView={openView}
             onLogout={() => {
-              clearAccessToken();
-              window.location.reload();
+              api.post("/auth/logout").finally(() => window.location.reload());
             }}
           />
+        )}
+
+        {!isAuthenticating && hasToken && activeView === "search" && level >= 3 && (
+          <SearchView onOpen={(deepLink) => navigate(deepLink)} />
         )}
 
         {!isAuthenticating && hasToken && activeView === "admin" && level >= 6 && (
@@ -1506,10 +1611,59 @@ function normalizeView(code: string): ViewKey {
   if (code === "full_roster" || code === "my_squad" || code === "squads") return "people";
   if (code === "appeal") return "appeals";
   if (code === "mark_attendance") return "attendance";
-  if (["dashboard", "schedule", "attendance", "normatives", "learning", "notifications", "announcements", "appeals", "reports", "people", "profile", "admin"].includes(code)) {
+  if (["dashboard", "schedule", "attendance", "normatives", "learning", "notifications", "announcements", "appeals", "reports", "people", "profile", "search", "admin"].includes(code)) {
     return code as ViewKey;
   }
   return "dashboard";
+}
+
+function SearchView({ onOpen }: { onOpen: (deepLink: string) => void }) {
+  const [value, setValue] = useState("");
+  const [query, setQuery] = useState("");
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setQuery(value.trim()), 250);
+    return () => window.clearTimeout(timeout);
+  }, [value]);
+  const search = useGlobalSearch(query);
+  const typeLabels: Record<SearchResult["type"], string> = {
+    person: "Человек",
+    event: "Событие",
+    normative: "Норматив",
+    material: "Материал",
+    appeal: "Обращение",
+  };
+  return (
+    <div className={styles.panel}>
+      <div className={styles.panelHeader}>
+        <h2>Поиск</h2>
+        <span>Ctrl / ⌘ + K</span>
+      </div>
+      <label className={styles.searchBar}>
+        <Search aria-hidden="true" />
+        <input
+          autoFocus
+          type="search"
+          value={value}
+          placeholder="Люди, события, нормативы, материалы…"
+          onChange={(event) => setValue(event.target.value)}
+        />
+      </label>
+      <div className={styles.searchResults} aria-live="polite">
+        {query.length < 2 && <Empty text="Введите минимум два символа" />}
+        {query.length >= 2 && search.isLoading && <SkeletonCard />}
+        {query.length >= 2 && !search.isLoading && (search.data?.length ?? 0) === 0 && (
+          <Empty text="Ничего доступного для вашей роли не найдено" />
+        )}
+        {search.data?.map((item) => (
+          <button key={`${item.type}-${item.id}`} type="button" onClick={() => onOpen(item.deep_link)}>
+            <span>{typeLabels[item.type]}</span>
+            <strong>{item.title}</strong>
+            {item.description && <small>{item.description}</small>}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 /* ─────────── ResponseButtons ─────────── */
@@ -1645,6 +1799,7 @@ function Dashboard({
   settings,
   streak,
   activityFeed,
+  actionItems,
   onSaveSettings,
   onResetSettings,
   isSavingSettings,
@@ -1660,6 +1815,7 @@ function Dashboard({
   settings: DashboardSetting[];
   streak: StreakData;
   activityFeed: ActivityItem[];
+  actionItems: ActionItem[];
   onSaveSettings: (items: Array<{ block_code: string; sort_order: number; is_hidden: boolean; is_pinned: boolean; view_mode_code?: string | null }>) => void;
   onResetSettings: () => void;
   isSavingSettings: boolean;
@@ -1688,6 +1844,30 @@ function Dashboard({
         <h2>Сводка</h2>
         <span>{level >= 4 ? "командирский доступ" : "личный доступ"}</span>
       </div>
+      {level >= 4 && actionItems.length > 0 && (
+        <section className={styles.actionCenter} aria-labelledby="action-center-title">
+          <div className={styles.actionCenterHeader}>
+            <h3 id="action-center-title">Требует действия</h3>
+            <span>{actionItems.reduce((sum, item) => sum + item.count, 0)}</span>
+          </div>
+          <div className={styles.actionCenterList}>
+            {actionItems.map((item) => (
+              <button
+                key={item.code}
+                type="button"
+                data-severity={item.severity}
+                onClick={() => navigate(item.deep_link)}
+              >
+                <span className={styles.actionCenterCount}>{item.count}</span>
+                <span>
+                  <strong>{item.title}</strong>
+                  <small>{item.description}</small>
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
       <div className={styles.dashboardStack}>
         {orderedBlocks.map((block) => {
           if (!isVisible(block.code)) return null;
@@ -2192,7 +2372,7 @@ function CandidateEventDetail({
         Назад к мероприятиям
       </button>
       <div className={styles.eventHero}>
-        <span>{event.event_type_code}</span>
+        <span>{codeLabel(event.event_type_code)}</span>
         <h2>{event.title}</h2>
         <p>{formatDate(event.start_datetime)}</p>
       </div>
@@ -2303,9 +2483,74 @@ function ScheduleView({
   squads: Squad[];
   onRespond: RespondFn;
 }) {
+  const selfCheckIn = useSelfCheckIn();
+  const [queuedCheckins, setQueuedCheckins] = useState<Set<number>>(new Set());
   const [tab, setTab] = useState<"today" | "week" | "month" | "archive">("week");
   const [filter, setFilter] = useState<"all" | "unanswered" | "coming" | "not_coming">("all");
   const now = Date.now();
+  useEffect(() => {
+    let cancelled = false;
+    const restore = async () => {
+      const queued = new Set<number>();
+      for (const event of events) {
+        const item = await loadOfflineValue<{ eventId: number; closesAt: number }>(`queue:self-checkin:${event.id}`);
+        if (item && item.closesAt >= Date.now()) queued.add(event.id);
+        else if (item) await deleteOfflineValue(`queue:self-checkin:${event.id}`);
+      }
+      if (!cancelled) setQueuedCheckins(queued);
+    };
+    void restore();
+    return () => { cancelled = true; };
+  }, [events]);
+
+  useEffect(() => {
+    const flush = async () => {
+      if (!navigator.onLine || queuedCheckins.size === 0) return;
+      for (const eventId of queuedCheckins) {
+        const queued = await loadOfflineValue<{ eventId: number; closesAt: number }>(`queue:self-checkin:${eventId}`);
+        if (!queued) continue;
+        if (queued.closesAt < Date.now()) {
+          await deleteOfflineValue(`queue:self-checkin:${eventId}`);
+          toast("Окно самоотметки закрылось до восстановления сети", "warning");
+          continue;
+        }
+        try {
+          await selfCheckIn.mutateAsync(eventId);
+          await deleteOfflineValue(`queue:self-checkin:${eventId}`);
+          toast("Отложенная самоотметка отправлена", "success");
+        } catch (error) {
+          toast(apiErrorDetail(error) ?? "Сервер отклонил отложенную самоотметку", "error");
+        }
+      }
+      setQueuedCheckins(new Set());
+    };
+    window.addEventListener("online", flush);
+    void flush();
+    return () => window.removeEventListener("online", flush);
+  }, [queuedCheckins]);
+
+  const checkIn = async (event: ScheduleEvent) => {
+    if (!navigator.onLine) {
+      const closesAt = event.self_checkin_closes_at
+        ? new Date(event.self_checkin_closes_at).getTime()
+        : new Date(event.start_datetime).getTime() + 20 * 60_000;
+      if (Date.now() > closesAt) {
+        toast("Окно самоотметки уже закрыто", "warning");
+        return;
+      }
+      await saveOfflineValue(`queue:self-checkin:${event.id}`, { eventId: event.id, closesAt });
+      setQueuedCheckins((previous) => new Set(previous).add(event.id));
+      toast("Самоотметка ждёт восстановления сети", "info");
+      return;
+    }
+    selfCheckIn.mutate(event.id, {
+      onSuccess: (attendance) => toast(
+        attendance.status_code === "LATE" ? "Отмечено опоздание" : "Присутствие отмечено",
+        attendance.status_code === "LATE" ? "warning" : "success",
+      ),
+      onError: (error) => toast(apiErrorDetail(error) ?? "Не удалось отметить присутствие", "error"),
+    });
+  };
   const isArchivedEvent = (event: ScheduleEvent) =>
     event.status_code === "CANCELLED" || new Date(event.start_datetime).getTime() < now;
 
@@ -2371,6 +2616,16 @@ function ScheduleView({
                 currentResponse={event.my_response_code}
                 onRespond={onRespond}
               />
+            )}
+            {event.self_checkin_enabled && event.status_code !== "CANCELLED" && tab !== "archive" && (
+              <button
+                type="button"
+                className={styles.compactBtn}
+                disabled={selfCheckIn.isPending}
+                onClick={() => void checkIn(event)}
+              >
+                {queuedCheckins.has(event.id) ? "Ждёт сеть" : selfCheckIn.isPending ? "Отмечаем…" : "Отметиться"}
+              </button>
             )}
             {event.requires_response && level >= 4 && (
               <EventVoterList eventId={event.id} squads={squads} canView={level >= 4} />
@@ -2707,6 +2962,7 @@ function formatShortDate(d: Date): string {
 
 /* ─────────── NormativesView ─────────── */
 function NormativesView({
+  userId,
   items,
   submissions,
   pending,
@@ -2717,6 +2973,7 @@ function NormativesView({
   onReview,
   isBusy,
 }: {
+  userId: number | null;
   items: Normative[];
   submissions: NormativeSubmission[];
   pending: NormativeSubmission[];
@@ -2740,6 +2997,7 @@ function NormativesView({
   const [videoModal, setVideoModal] = useState<{ src?: string; embedSrc?: string } | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<Record<number, Array<{ id: number; name: string }>>>({});
   const [comments, setComments] = useState<Record<number, string>>({});
+  const [offlineFiles, setOfflineFiles] = useState<Record<number, File[]>>({});
 
   const openVideoModal = async (url?: string | null, fileId?: number | null) => {
     if (url) {
@@ -2768,7 +3026,70 @@ function NormativesView({
     if (!tabs.some(([value]) => value === tab)) setTab("active");
   }, [tab, tabs.length]);
 
+  useEffect(() => {
+    if (!userId) return;
+    for (const item of activeItems) {
+      void loadOfflineValue<string>(`draft:normative:${userId}:${item.id}:comment`).then((saved) => {
+        if (saved) setComments((previous) => ({ ...previous, [item.id]: saved }));
+      });
+      void loadOfflineValue<File[]>(`draft:normative:${userId}:${item.id}:files`).then((saved) => {
+        if (saved?.length) {
+          setOfflineFiles((previous) => ({ ...previous, [item.id]: saved }));
+          setUploadedFiles((previous) => ({
+            ...previous,
+            [item.id]: saved.map((file, index) => ({ id: -(index + 1), name: `${file.name} · ждёт сеть` })),
+          }));
+        }
+      });
+    }
+  }, [items, userId]);
+
+  useEffect(() => {
+    if (!userId || Object.keys(offlineFiles).length === 0) return;
+    const uploadOfflineFiles = async () => {
+      if (!navigator.onLine) return;
+      for (const [rawId, files] of Object.entries(offlineFiles)) {
+        const normativeId = Number(rawId);
+        try {
+          const uploaded: Array<{ id: number; name: string }> = [];
+          for (const file of files) {
+            const result = await upload.mutateAsync(file);
+            uploaded.push({ id: result.id, name: result.original_name || file.name });
+          }
+          setUploadedFiles((previous) => ({ ...previous, [normativeId]: uploaded }));
+          setOfflineFiles((previous) => {
+            const next = { ...previous };
+            delete next[normativeId];
+            return next;
+          });
+          await deleteOfflineValue(`draft:normative:${userId}:${normativeId}:files`);
+          toast("Файлы норматива загружены из черновика", "success");
+        } catch {
+          // Preserve files for the next retry.
+        }
+      }
+    };
+    window.addEventListener("online", uploadOfflineFiles);
+    void uploadOfflineFiles();
+    return () => window.removeEventListener("online", uploadOfflineFiles);
+  }, [offlineFiles, userId]);
+
   const handleFileChange = async (normativeId: number, file: File) => {
+    if (!navigator.onLine) {
+      if (!userId || !(await canStoreFile(file))) {
+        toast("Недостаточно места: сохранён только комментарий", "warning");
+        return;
+      }
+      const next = [...(offlineFiles[normativeId] ?? []), file];
+      await saveOfflineValue(`draft:normative:${userId}:${normativeId}:files`, next);
+      setOfflineFiles((previous) => ({ ...previous, [normativeId]: next }));
+      setUploadedFiles((previous) => ({
+        ...previous,
+        [normativeId]: next.map((entry, index) => ({ id: -(index + 1), name: `${entry.name} · ждёт сеть` })),
+      }));
+      toast("Файл сохранён до восстановления сети", "info");
+      return;
+    }
     try {
       const result = await upload.mutateAsync(file);
       setUploadedFiles((prev) => ({ ...prev, [normativeId]: [...(prev[normativeId] ?? []), { id: result.id, name: file.name }] }));
@@ -2868,7 +3189,21 @@ function NormativesView({
                         <span>{file.name}</span>
                         <button
                           type="button"
-                          onClick={() => setUploadedFiles((prev) => ({ ...prev, [item.id]: (prev[item.id] ?? []).filter((entry) => entry.id !== file.id) }))}
+                          onClick={() => {
+                            if (file.id < 0 && userId) {
+                              const index = Math.abs(file.id) - 1;
+                              const next = (offlineFiles[item.id] ?? []).filter((_, fileIndex) => fileIndex !== index);
+                              setOfflineFiles((previous) => ({ ...previous, [item.id]: next }));
+                              setUploadedFiles((previous) => ({
+                                ...previous,
+                                [item.id]: next.map((entry, fileIndex) => ({ id: -(fileIndex + 1), name: `${entry.name} · ждёт сеть` })),
+                              }));
+                              if (next.length) void saveOfflineValue(`draft:normative:${userId}:${item.id}:files`, next);
+                              else void deleteOfflineValue(`draft:normative:${userId}:${item.id}:files`);
+                            } else {
+                              setUploadedFiles((prev) => ({ ...prev, [item.id]: (prev[item.id] ?? []).filter((entry) => entry.id !== file.id) }));
+                            }
+                          }}
                         >
                           Убрать
                         </button>
@@ -2878,7 +3213,11 @@ function NormativesView({
                       <input
                         placeholder="Комментарий к сдаче..."
                         value={comments[item.id] ?? ""}
-                        onChange={(e) => setComments((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          setComments((prev) => ({ ...prev, [item.id]: value }));
+                          if (userId) void saveOfflineValue(`draft:normative:${userId}:${item.id}:comment`, value);
+                        }}
                       />
                       <FilePicker
                         accept={FILE_PREVIEW_ACCEPT}
@@ -2891,10 +3230,10 @@ function NormativesView({
                     <button
                       className={styles.iconAction}
                       type="button"
-                      disabled={isBusy || upload.isPending}
+                      disabled={isBusy || upload.isPending || Boolean(offlineFiles[item.id]?.length)}
                       onClick={() => onSubmit(item.id, comments[item.id] || undefined, attached.map((file) => file.id))}
                     >
-                      {isBusy || upload.isPending ? "Отправляем..." : "Отправить на проверку"}
+                      {offlineFiles[item.id]?.length ? "Ждём сеть для файлов" : isBusy || upload.isPending ? "Отправляем..." : "Отправить на проверку"}
                     </button>
                   </div>
                 ) : (
@@ -3130,7 +3469,7 @@ function AnnouncementsView({
             <AppIcon code="announcements" />
             <div>
               <strong>{item.title}</strong>
-              <span>{item.status_code} · {item.body?.slice(0, 60)}</span>
+              <span>{codeLabel(item.status_code)} · {item.body?.slice(0, 60)}</span>
             </div>
             {item.file_id && (
               <div className={styles.filePreviewActions}>
@@ -3155,7 +3494,7 @@ function AppealsView({
 }: {
   items: Appeal[];
   currentUserId: number | null;
-  onCreate: (payload: AppealPayload) => void;
+  onCreate: (payload: AppealPayload) => Promise<void>;
   isSubmitting: boolean;
 }) {
   const [form, setForm] = useState<AppealPayload>({
@@ -3167,6 +3506,7 @@ function AppealsView({
     file_id: null,
   });
   const [appealAttachment, setAppealAttachment] = useState<{ id: number; name: string } | null>(null);
+  const [offlineFile, setOfflineFile] = useState<File | null>(null);
   const canSubmit = form.subject.trim().length > 0 && form.description.trim().length > 0;
   const [openAppealId, setOpenAppealId] = useState<number | null>(null);
 
@@ -3175,6 +3515,60 @@ function AppealsView({
   const messages = useAppealMessages(openAppealId, openAppealId !== null);
   const createMessage = useCreateAppealMessage();
   const [msgText, setMsgText] = useState("");
+  const draftKey = currentUserId ? `draft:appeal:${currentUserId}` : null;
+
+  useEffect(() => {
+    if (!draftKey) return;
+    void loadOfflineValue<AppealPayload>(draftKey).then((saved) => {
+      if (saved) setForm(saved);
+    });
+    void loadOfflineValue<File>(`${draftKey}:file`).then((saved) => {
+      if (saved) {
+        setOfflineFile(saved);
+        setAppealAttachment({ id: 0, name: `${saved.name} · ждёт сеть` });
+      }
+    });
+  }, [draftKey]);
+
+  useEffect(() => {
+    if (!draftKey || (!form.subject.trim() && !form.description.trim())) return;
+    const timeout = window.setTimeout(() => void saveOfflineValue(draftKey, form), 400);
+    return () => window.clearTimeout(timeout);
+  }, [draftKey, form]);
+
+  useEffect(() => {
+    if (!draftKey || !offlineFile) return;
+    const uploadWhenOnline = async () => {
+      if (!navigator.onLine) return;
+      try {
+        const result = await upload.mutateAsync(offlineFile);
+        setAppealAttachment({ id: result.id, name: result.original_name || offlineFile.name });
+        setForm((previous) => ({ ...previous, file_id: result.id }));
+        setOfflineFile(null);
+        await deleteOfflineValue(`${draftKey}:file`);
+        toast("Вложение из черновика загружено", "success");
+      } catch {
+        // Keep the local draft and retry on the next online event.
+      }
+    };
+    window.addEventListener("online", uploadWhenOnline);
+    void uploadWhenOnline();
+    return () => window.removeEventListener("online", uploadWhenOnline);
+  }, [draftKey, offlineFile]);
+
+  const submitAppeal = async () => {
+    try {
+      await onCreate(form);
+      setForm({ subject: "", description: "", category_code: "OTHER", urgency_code: "NORMAL", is_anonymous: false, file_id: null });
+      setAppealAttachment(null);
+      if (draftKey) {
+        await deleteOfflineValue(draftKey);
+        await deleteOfflineValue(`${draftKey}:file`);
+      }
+    } catch {
+      toast("Черновик сохранён и не будет потерян", "warning");
+    }
+  };
 
   return (
     <div className={styles.panel}>
@@ -3224,7 +3618,12 @@ function AppealsView({
             {appealAttachment && (
               <div className={styles.fileAttached}>
                 <span>{appealAttachment.name}</span>
-                <button type="button" onClick={() => { setAppealAttachment(null); setForm({ ...form, file_id: null }); }}>Убрать</button>
+                <button type="button" onClick={() => {
+                  setAppealAttachment(null);
+                  setOfflineFile(null);
+                  setForm({ ...form, file_id: null });
+                  if (draftKey) void deleteOfflineValue(`${draftKey}:file`);
+                }}>Убрать</button>
               </div>
             )}
             <FilePicker
@@ -3232,6 +3631,17 @@ function AppealsView({
               label={upload.isPending ? "Загружаем..." : appealAttachment ? "Заменить вложение" : "Прикрепить файл или видео"}
               className={styles.fileButton}
               onFile={async (file) => {
+                if (!navigator.onLine) {
+                  if (!draftKey || !(await canStoreFile(file))) {
+                    toast("Недостаточно места: сохранён только текст черновика", "warning");
+                    return;
+                  }
+                  await saveOfflineValue(`${draftKey}:file`, file);
+                  setOfflineFile(file);
+                  setAppealAttachment({ id: 0, name: `${file.name} · ждёт сеть` });
+                  toast("Файл сохранён до восстановления сети", "info");
+                  return;
+                }
                 try {
                   const result = await upload.mutateAsync(file);
                   setAppealAttachment({ id: result.id, name: result.original_name || file.name });
@@ -3241,7 +3651,7 @@ function AppealsView({
                 }
               }}
             />
-            <button type="button" disabled={!canSubmit || isSubmitting || upload.isPending} onClick={() => onCreate(form)}>
+            <button type="button" disabled={!canSubmit || isSubmitting || upload.isPending || Boolean(offlineFile)} onClick={() => void submitAppeal()}>
               {isSubmitting ? "Отправляем..." : "Отправить обращение"}
             </button>
           </div>
@@ -3253,7 +3663,7 @@ function AppealsView({
                 <AppIcon code="appeals" />
                 <div>
                   <strong>{item.subject}</strong>
-                  <span>{appealStatusLabel(item.status_code)} · {item.category_code} · {formatDate(item.created_at)}</span>
+                  <span>{appealStatusLabel(item.status_code)} · {codeLabel(item.category_code)} · {formatDate(item.created_at)}</span>
                 </div>
                 {item.file_id && (
                   <div className={styles.filePreviewActions}>
@@ -3886,7 +4296,7 @@ function RosterTable({
               </td>
               <td>{squadName(user.squad_id)}</td>
               <td>{roleLabels[user.role_code as RoleCode] ?? user.role_code}</td>
-              {!compact && <td>{user.status_code === "ACTIVE" ? "Активен" : user.status_code === "ARCHIVED" ? "Архив" : user.status_code}</td>}
+              {!compact && <td>{codeLabel(user.status_code)}</td>}
               {!compact && <td>{formatPhoneDisplay(user.phone)}</td>}
               {!compact && <td>{user.birth_date ? formatDateFull(user.birth_date) : "—"}</td>}
             </tr>
@@ -3940,6 +4350,9 @@ function ProfileView({
   onProfileUpdate,
   webMode = false,
   telegramMode = true,
+  stepUpInitData,
+  canOpenAdmin = false,
+  onOpenView,
   onLogout,
 }: {
   profile: UserProfile;
@@ -3953,15 +4366,22 @@ function ProfileView({
   onProfileUpdate: (p: UserProfile) => void;
   webMode?: boolean;
   telegramMode?: boolean;
+  stepUpInitData?: string;
+  canOpenAdmin?: boolean;
+  onOpenView?: (view: string) => void;
   onLogout?: () => void;
 }) {
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState({ full_name: "", phone: "", city: "", education_place: "", birth_date: "" });
   const [editPhone, setEditPhone] = useState("+7");
+  const [editBaseVersion, setEditBaseVersion] = useState<string | null>(null);
+  const [profileConflict, setProfileConflict] = useState<UserProfile | null>(null);
   const [localAvatarPreview, setLocalAvatarPreview] = useState<string | null>(null);
   const [avatarFailed, setAvatarFailed] = useState(false);
+  const [section, setSection] = useState<"data" | "security" | "integrations" | "notifications">("data");
   const updateMe = useUpdateMe();
+  const profileDraftKey = profile.id ? `draft:profile:${profile.id}` : null;
 
   const startEdit = () => {
     setEditForm({
@@ -3972,19 +4392,41 @@ function ProfileView({
       birth_date: profile.birth_date ?? "",
     });
     setEditPhone(profile.phone ? formatPhoneDisplay(profile.phone) : "+7");
+    setEditBaseVersion(profile.version ?? null);
+    setProfileConflict(null);
     setEditing(true);
+    if (profileDraftKey) {
+      void loadOfflineValue<{ form: typeof editForm; version: string | null }>(profileDraftKey).then((saved) => {
+        if (saved) {
+          setEditForm(saved.form);
+          setEditBaseVersion(saved.version);
+          setEditPhone(saved.form.phone ? formatPhoneDisplay(saved.form.phone) : "+7");
+          toast("Локальный черновик профиля восстановлен", "info");
+        }
+      });
+    }
   };
 
   const saveEdit = () => {
     updateMe.mutate(
-      { ...editForm, phone: editForm.phone || undefined },
+      { ...editForm, phone: editForm.phone || undefined, if_unmodified_since: editBaseVersion },
       {
         onSuccess: (updated) => {
           setEditing(false);
+          setProfileConflict(null);
           onProfileUpdate(updated);
           toast("Профиль сохранён", "success");
+          if (profileDraftKey) void deleteOfflineValue(profileDraftKey);
         },
-        onError: () => toast("Не удалось сохранить", "error"),
+        onError: (error) => {
+          const detail = (error as { response?: { data?: { detail?: { code?: string; server?: UserProfile } } } }).response?.data?.detail;
+          if (detail?.code === "profile_conflict" && detail.server) {
+            setProfileConflict(detail.server);
+            toast("Обнаружен конфликт профиля", "warning");
+          } else {
+            toast("Не удалось сохранить", "error");
+          }
+        },
       },
     );
   };
@@ -4006,6 +4448,15 @@ function ProfileView({
   useEffect(() => () => {
     if (localAvatarPreview) URL.revokeObjectURL(localAvatarPreview);
   }, [localAvatarPreview]);
+
+  useEffect(() => {
+    if (!editing || !profileDraftKey) return;
+    const timeout = window.setTimeout(
+      () => void saveOfflineValue(profileDraftKey, { form: editForm, version: editBaseVersion }),
+      400,
+    );
+    return () => window.clearTimeout(timeout);
+  }, [editBaseVersion, editForm, editing, profileDraftKey]);
 
   const handleAvatarFile = async (file: File) => {
     const previewUrl = URL.createObjectURL(file);
@@ -4037,6 +4488,22 @@ function ProfileView({
 
   return (
     <div className={styles.panel}>
+      <div className={styles.filterChips} aria-label="Разделы меню Ещё">
+        <button type="button" className={styles.chip} data-active="true">Профиль и настройки</button>
+        {profile.role_code !== "PUBLIC_USER" && (
+          <button type="button" className={styles.chip} onClick={() => onOpenView?.("notifications")}>Уведомления</button>
+        )}
+        {canOpenAdmin && (
+          <button type="button" className={styles.chip} onClick={() => onOpenView?.("admin")}>Администрирование</button>
+        )}
+      </div>
+      <Tabs
+        tabs={[["data", "Данные"], ["security", "Безопасность"], ["integrations", "Интеграции"], ["notifications", "Уведомления"]]}
+        active={section}
+        onChange={(value) => setSection(value as typeof section)}
+      />
+      {section === "data" && (
+        <>
       <div className={styles.panelHeader}>
         <h2>Профиль</h2>
         <button type="button" className={styles.editProfileBtn} onClick={editing ? () => setEditing(false) : startEdit}>
@@ -4079,6 +4546,29 @@ function ProfileView({
 
         {editing ? (
           <div className={styles.formBlock}>
+            {profileConflict && (
+              <div className={styles.conflictCard} role="alert">
+                <strong>Профиль изменён на сервере</strong>
+                <small>Сервер: {profileConflict.full_name}, {profileConflict.phone || "без телефона"}</small>
+                <small>Черновик: {editForm.full_name}, {editForm.phone || "без телефона"}</small>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditForm({
+                      full_name: profileConflict.full_name,
+                      phone: profileConflict.phone ?? "",
+                      city: profileConflict.city ?? "",
+                      education_place: profileConflict.education_place ?? "",
+                      birth_date: profileConflict.birth_date ?? "",
+                    });
+                    setEditBaseVersion(profileConflict.version ?? null);
+                    setProfileConflict(null);
+                  }}
+                >
+                  Взять серверную версию
+                </button>
+              </div>
+            )}
             <label className={styles.fieldLabel}>
               <span>ФИО</span>
               <input
@@ -4214,23 +4704,31 @@ function ProfileView({
       {allUsers.length > 0 && (
         <ProfileRosterTabs profile={profile} allUsers={allUsers} squads={squads} />
       )}
-      <ThemeSection />
-      {telegramMode && profile.id !== null && roleLevels[profile.role_code] >= 3 && (
-        <WebAccessSection />
+          <ThemeSection />
+          <ProgressSection />
+        </>
       )}
-      {profile.id !== null && roleLevels[profile.role_code] >= 4 && (
-        <TwoFactorSection />
+      {section === "security" && (
+        <>
+          <StepUpSection initData={telegramMode ? stepUpInitData : undefined} />
+          {telegramMode && profile.id !== null && roleLevels[profile.role_code] >= 3 && <WebAccessSection />}
+          {profile.id !== null && roleLevels[profile.role_code] >= 4 && <TwoFactorSection />}
+          {webMode && onLogout && (
+            <button type="button" className={styles.logoutButton} onClick={onLogout}>
+              <LogOut size={16} strokeWidth={2.2} /> Выйти из аккаунта
+            </button>
+          )}
+        </>
       )}
-      {profile.id !== null && roleLevels[profile.role_code] >= 3 && (
-        <WebPushSection />
+      {section === "integrations" && (
+        <>
+          <CalendarSection />
+          {profile.id !== null && roleLevels[profile.role_code] >= 3 && <WebPushSection />}
+          {telegramMode && profile.id !== null && roleLevels[profile.role_code] >= 3 && <VkLinkSection />}
+        </>
       )}
-      {telegramMode && profile.id !== null && roleLevels[profile.role_code] >= 3 && (
-        <VkLinkSection />
-      )}
-      {webMode && onLogout && (
-        <button type="button" className={styles.logoutButton} onClick={onLogout}>
-          <LogOut size={16} strokeWidth={2.2} /> Выйти из аккаунта
-        </button>
+      {section === "notifications" && profile.id !== null && roleLevels[profile.role_code] >= 3 && (
+        <NotificationPreferencesSection />
       )}
     </div>
   );
@@ -4262,7 +4760,7 @@ function AdminView({
   onReject: (id: number, reason?: string) => void;
   isBusy: boolean;
 }) {
-  type AdminTab = "users" | "applications" | "appeals" | "squads" | "schedule" | "events" | "normatives" | "learning" | "promo" | "menu" | "logs" | "settings";
+  type AdminTab = "users" | "applications" | "appeals" | "squads" | "schedule" | "events" | "normatives" | "learning" | "promo" | "menu" | "imports" | "logs" | "settings";
   const [tab, setTab] = useState<AdminTab>("users");
   const [scheduleAdminTab, setScheduleAdminTab] = useState<"active" | "closed">("active");
   const [candidateEventsTab, setCandidateEventsTab] = useState<"active" | "archive">("active");
@@ -4274,6 +4772,7 @@ function AdminView({
   const [userSearch, setUserSearch] = useState("");
   const [appStatusFilter, setAppStatusFilter] = useState("");
   const [logFilter, setLogFilter] = useState({ action_code: "", entity_name: "" });
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
   const [pipelineStage, setPipelineStage] = useState<"start" | "applied" | "invited" | "roster">("applied");
   const [drawerApp, setDrawerApp] = useState<JoinApplication | null>(null);
   const [drawerPublicUser, setDrawerPublicUser] = useState<UserRecord | null>(null);
@@ -4380,6 +4879,9 @@ function AdminView({
   );
   const adminSettings = useAdminSettings(tab === "settings" && level >= 9);
   const updateSettings = useUpdateSettings();
+  const previewImport = useAdminImportPreview();
+  const commitImport = useAdminImportCommit();
+  const undoAudit = useAdminAuditUndo();
   const exportCSV = useExportCSVviaBot();
   const exportXLSX = useExportXLSXviaBot();
   const [settingsDraft, setSettingsDraft] = useState<Record<string, string>>({});
@@ -4387,7 +4889,16 @@ function AdminView({
   const squadMap = new Map(squads.map((s) => [s.id, s.name]));
   const roleOptions = Object.keys(roleLabels) as RoleCode[];
   const statusOptions = ["ACTIVE", "INACTIVE", "ARCHIVED", "BLOCKED"];
-  const [newEvent, setNewEvent] = useState({ title: "", start_datetime: "", end_datetime: "", place: "", squad_id: "", requires_response: true });
+  const [newEvent, setNewEvent] = useState({
+    title: "",
+    start_datetime: "",
+    end_datetime: "",
+    place: "",
+    squad_id: "",
+    requires_response: true,
+    self_checkin_enabled: false,
+    late_after_minutes: 5,
+  });
   const scheduleEvents = adminSchedule.data ?? [];
   const isClosedAdminScheduleEvent = (event: ScheduleEvent) => {
     if (event.status_code === "CANCELLED") return true;
@@ -4410,7 +4921,7 @@ function AdminView({
     { title: "Подготовка", tabs: [["normatives", "Нормативы", 6], ["learning", "Материалы", 6], ["appeals", "Связь", 6]] },
     { title: "Интерфейс", tabs: [["promo", "Промо", 6], ["menu", "Меню", 6]] },
   ];
-  const systemAdminGroup = { title: "Система", tabs: [["logs", "Логи", 8], ["settings", "Настройки", 9]] as Array<[AdminTab, string, number]> };
+  const systemAdminGroup = { title: "Система", tabs: [["imports", "Импорт", 8], ["logs", "Логи", 8], ["settings", "Настройки", 9]] as Array<[AdminTab, string, number]> };
   const adminGroups = level >= 8 ? [systemAdminGroup, ...contentAdminGroups] : contentAdminGroups;
   const adminTabs = adminGroups.flatMap((group) => group.tabs);
   const visibleTabs = adminTabs.filter(([, , minLevel]) => level >= minLevel);
@@ -4650,7 +5161,7 @@ function AdminView({
                 <div className={`${styles.memberRow} ${styles.adminUserRow}`} key={user.id ?? user.telegram_id}>
                   <div>
                     <strong>{user.full_name}</strong>
-                    <span>{squadMap.get(user.squad_id ?? -1) ?? "без отделения"}{user.username ? ` · @${user.username}` : ""} · {user.status_code}</span>
+                    <span>{squadMap.get(user.squad_id ?? -1) ?? "без отделения"}{user.username ? ` · @${user.username}` : ""} · {codeLabel(user.status_code)}</span>
                   </div>
                   <div className={styles.adminControls}>
                     <label className={styles.adminControlRow}>
@@ -4874,6 +5385,16 @@ function AdminView({
                   <input type="checkbox" checked={newEvent.requires_response} onChange={(e) => setNewEvent({ ...newEvent, requires_response: e.target.checked })} />
                   <span>Требуется ответ (приду / не приду)</span>
                 </label>
+                <label className={styles.checkboxLine}>
+                  <input type="checkbox" checked={newEvent.self_checkin_enabled} onChange={(e) => setNewEvent({ ...newEvent, self_checkin_enabled: e.target.checked })} />
+                  <span>Разрешить самоотметку по времени</span>
+                </label>
+                {newEvent.self_checkin_enabled && (
+                  <label className={styles.fieldLabel}>
+                    <span>Опоздание после, минут</span>
+                    <input type="number" min={0} max={1440} value={newEvent.late_after_minutes} onChange={(e) => setNewEvent({ ...newEvent, late_after_minutes: Number(e.target.value) })} />
+                  </label>
+                )}
                 <button
                   type="button"
                   disabled={!newEvent.title.trim() || !newEvent.start_datetime || createEvent.isPending}
@@ -4885,8 +5406,13 @@ function AdminView({
                       place: newEvent.place || undefined,
                       squad_id: newEvent.squad_id ? Number(newEvent.squad_id) : null,
                       requires_response: newEvent.requires_response,
+                      self_checkin_enabled: newEvent.self_checkin_enabled,
+                      late_after_minutes: newEvent.late_after_minutes,
                     },
-                    { onSuccess: () => { setNewEvent({ title: "", start_datetime: "", end_datetime: "", place: "", squad_id: "", requires_response: true }); toast("Событие создано", "success"); } },
+                    { onSuccess: () => {
+                      setNewEvent({ title: "", start_datetime: "", end_datetime: "", place: "", squad_id: "", requires_response: true, self_checkin_enabled: false, late_after_minutes: 5 });
+                      toast("Событие создано", "success");
+                    } },
                   )}
                 >
                   {createEvent.isPending ? "Создаём..." : "Создать событие"}
@@ -4912,6 +5438,7 @@ function AdminView({
                       {ev.title}
                       {ev.is_overridden && <span className={styles.inlineBadge} data-tone="warning">изм.</span>}
                       {isClosedAdminScheduleEvent(ev) && <span className={styles.inlineBadge} data-tone="warning">закрыт</span>}
+                      {ev.self_checkin_enabled && <span className={styles.inlineBadge}>самоотметка</span>}
                     </strong>
                     <span>{formatDate(ev.start_datetime)}{ev.place ? ` · ${ev.place}` : ""}{ev.squad_id ? ` · ${squadMap.get(ev.squad_id) ?? "отделение"}` : " · все"}</span>
                   </div>
@@ -4973,6 +5500,16 @@ function AdminView({
                       }}
                     >
                       Изменить
+                    </button>
+                    <button
+                      type="button"
+                      disabled={updateEvent.isPending}
+                      onClick={() => updateEvent.mutate(
+                        { id: ev.id, self_checkin_enabled: !ev.self_checkin_enabled },
+                        { onSuccess: () => toast(ev.self_checkin_enabled ? "Самоотметка отключена" : "Самоотметка включена", "info") },
+                      )}
+                    >
+                      {ev.self_checkin_enabled ? "Отключить самоотметку" : "Включить самоотметку"}
                     </button>
                     {ev.requires_response && !isClosedAdminScheduleEvent(ev) && (
                       <button
@@ -5165,7 +5702,7 @@ function AdminView({
                 <div>
                   <strong>{item.subject}</strong>
                   <span>
-                    {appealStatusLabel(item.status_code)} · {item.urgency_code} · {item.category_code}
+                    {appealStatusLabel(item.status_code)} · {codeLabel(item.urgency_code)} · {codeLabel(item.category_code)}
                     {!item.is_anonymous && item.author_user_id ? ` · пользователь #${item.author_user_id}` : " · анонимно"}
                   </span>
                   <span>{formatDate(item.created_at)}</span>
@@ -5577,7 +6114,7 @@ function AdminView({
                   <AppIcon code="learning" />
                   <div>
                     <strong>{mat.title}</strong>
-                    <span>{mat.type_code} · {mat.audience_code} · {mat.is_active ? "активен" : "скрыт"}</span>
+                    <span>{codeLabel(mat.type_code)} · {codeLabel(mat.audience_code)} · {mat.is_active ? "активен" : "скрыт"}</span>
                     {mat.external_url && <span style={{ fontSize: "0.75rem", wordBreak: "break-all" }}>{mat.external_url}</span>}
                     {mat.file_id && <span style={{ color: "#1a2f5a" }}>Файл или видео прикреплены</span>}
                   </div>
@@ -5656,6 +6193,65 @@ function AdminView({
             </article>
           )))}
 
+          {tab === "imports" && (
+            <div className={styles.importPanel}>
+              <div className={styles.webAccessCard}>
+                <div className={styles.webAccessHeader}>
+                  <div>
+                    <strong>Импорт состава CSV/XLSX</strong>
+                    <small>Сначала только проверка; изменения выполняются отдельным транзакционным шагом.</small>
+                  </div>
+                </div>
+                <FilePicker
+                  accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  label={previewImport.isPending ? "Проверяем…" : "Выбрать файл"}
+                  className={styles.primaryButton}
+                  onFile={(file) => previewImport.mutate(file, {
+                    onSuccess: setImportPreview,
+                    onError: (error) => toast(apiErrorDetail(error) ?? "Не удалось проверить файл", "error"),
+                  })}
+                />
+              </div>
+              {importPreview && (
+                <div className={styles.webAccessCard}>
+                  <div className={styles.metrics}>
+                    <Metric label="Новые" value={importPreview.create_count} />
+                    <Metric label="Изменения" value={importPreview.update_count} />
+                    <Metric label="Без изменений" value={importPreview.unchanged_count} />
+                    <Metric label="Ошибки" value={importPreview.errors.length} />
+                  </div>
+                  {importPreview.errors.map((issue) => (
+                    <div className={styles.importIssue} key={`${issue.row}-${issue.message}`}>
+                      Строка {issue.row}: {issue.message}
+                    </div>
+                  ))}
+                  <div className={styles.importChanges}>
+                    {importPreview.changes.slice(0, 100).map((change) => (
+                      <div key={`${change.row}-${change.identity}`} data-action={change.action}>
+                        <strong>{change.action}</strong>
+                        <span>строка {change.row} · Telegram {change.identity}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    className={styles.primaryButton}
+                    disabled={importPreview.errors.length > 0 || commitImport.isPending}
+                    onClick={() => commitImport.mutate(importPreview.preview_id, {
+                      onSuccess: (result) => {
+                        toast(`Импорт завершён: +${result.created}, обновлено ${result.updated}`, "success");
+                        setImportPreview(null);
+                      },
+                      onError: (error) => toast(apiErrorDetail(error) ?? "Импорт не выполнен", "error"),
+                    })}
+                  >
+                    {commitImport.isPending ? "Применяем…" : "Применить изменения"}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* ── Audit Logs ── */}
           {tab === "logs" && (
             <>
@@ -5688,6 +6284,20 @@ function AdminView({
                       </span>
                     )}
                   </div>
+                  {["admin.import.commit", "admin.users.bulk"].includes(item.action_code) && !item.undone_at && (
+                    <button
+                      type="button"
+                      className={styles.linkButton}
+                      disabled={undoAudit.isPending}
+                      onClick={() => undoAudit.mutate(item.id, {
+                        onSuccess: (result) => toast(`Операция отменена для ${result.affected} записей`, "success"),
+                        onError: (error) => toast(apiErrorDetail(error) ?? "Undo недоступен", "error"),
+                      })}
+                    >
+                      Отменить операцию
+                    </button>
+                  )}
+                  {item.undone_at && <span className={styles.inlineBadge}>отменено</span>}
                 </article>
               ))}
             </>

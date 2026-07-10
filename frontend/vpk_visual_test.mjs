@@ -128,8 +128,6 @@ function mockJson(body, status = 200) {
 // Single catch-all route handler — avoids Playwright glob matching Vite paths
 async function setupRoutes(page, roleCode, level) {
   const authResponse = {
-    access_token: "mock_token_" + roleCode,
-    token_type: "bearer",
     profile: makeProfile(roleCode, level),
     app_timezone: "Asia/Novosibirsk",
   };

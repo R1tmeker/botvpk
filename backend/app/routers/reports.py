@@ -15,6 +15,7 @@ from ..dependencies.auth import CurrentUser, require_role
 from ..models import Appeal, Attendance, AttendanceGrade, EventResponse, JoinApplication, NormativeSubmission, ScheduleEvent, Squad, User
 from ..roles import CONFIRMED_ROLES, RoleLevel
 from ..schemas.core import ReportSummary
+from ..utils.timezones import current_local_date, local_day_utc_bounds, utc_to_local_date
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
@@ -397,6 +398,7 @@ async def export_attendance_matrix(
     month: str | None = None,
     current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_SQUAD_COMMANDER)),
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> StreamingResponse:
     """Attendance timesheet: rows = members grouped by squad, columns = days that had events.
 
@@ -413,7 +415,7 @@ async def export_attendance_matrix(
         raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="openpyxl not installed.") from exc
 
     # Period = a calendar month (default: current).
-    today = date.today()
+    today = current_local_date(settings.timezone)
     if month:
         try:
             year_str, month_str = month.split("-", 1)
@@ -423,8 +425,8 @@ async def export_attendance_matrix(
     else:
         period_start = today.replace(day=1)
     period_end = (period_start.replace(day=28) + timedelta(days=4)).replace(day=1)  # first day of next month
-    start_dt = datetime(period_start.year, period_start.month, period_start.day, tzinfo=timezone.utc)
-    end_dt = datetime(period_end.year, period_end.month, period_end.day, tzinfo=timezone.utc)
+    start_dt, _ = local_day_utc_bounds(period_start, settings.timezone)
+    end_dt, _ = local_day_utc_bounds(period_end, settings.timezone)
 
     # Squad scope: below platoon-deputy a commander only sees their own squad.
     restricted = current_user.role_level < RoleLevel.DEPUTY_PLATOON_COMMANDER
@@ -439,7 +441,7 @@ async def export_attendance_matrix(
     if scope_squad_id is not None:
         ev_stmt = ev_stmt.where((ScheduleEvent.squad_id.is_(None)) | (ScheduleEvent.squad_id == scope_squad_id))
     ev_rows = (await session.execute(ev_stmt)).all()
-    event_date = {eid: dt.date() for eid, dt in ev_rows}
+    event_date = {eid: utc_to_local_date(dt, settings.timezone) for eid, dt in ev_rows}
     dates = sorted(set(event_date.values()))
 
     # Aggregate one status per (user, day).

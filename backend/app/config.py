@@ -3,16 +3,13 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     bot_token: str = Field(..., alias="BOT_TOKEN")
     database_url: str = Field(..., alias="DATABASE_URL")
-    jwt_secret: str = Field(..., alias="JWT_SECRET")
-    jwt_algorithm: str = Field("HS256", alias="JWT_ALGORITHM")
-    jwt_expire_minutes: int = Field(1440, alias="JWT_EXPIRE_MINUTES")
     timezone: str = Field("Asia/Novosibirsk", validation_alias=AliasChoices("TZ", "TIMEZONE"))
     app_env: str = Field("development", alias="APP_ENV")
     api_host: str = Field("0.0.0.0", alias="API_HOST")
@@ -24,6 +21,16 @@ class Settings(BaseSettings):
     uploads_dir: Path = Field(Path("uploads"), alias="UPLOADS_DIR")
     max_upload_size_mb: int = Field(200, alias="MAX_UPLOAD_SIZE_MB")
     redis_url: str | None = Field(None, alias="REDIS_URL")
+    session_secret: str = Field(..., alias="SESSION_SECRET")
+    session_cookie_name: str = Field("vpk_session", alias="SESSION_COOKIE_NAME")
+    csrf_cookie_name: str = Field("vpk_csrf", alias="CSRF_COOKIE_NAME")
+    session_idle_minutes: int = Field(1440, alias="SESSION_IDLE_MINUTES")
+    session_absolute_minutes: int = Field(10080, alias="SESSION_ABSOLUTE_MINUTES")
+    totp_encryption_key: str = Field(..., alias="TOTP_ENCRYPTION_KEY")
+    link_code_pepper: str = Field(..., alias="LINK_CODE_PEPPER")
+    clamav_host: str = Field("clamav", alias="CLAMAV_HOST")
+    clamav_port: int = Field(3310, alias="CLAMAV_PORT")
+    clamav_required: bool = Field(False, alias="CLAMAV_REQUIRED")
     sentry_dsn: str | None = Field(None, alias="SENTRY_DSN")
     sentry_traces_sample_rate: float = Field(0.05, alias="SENTRY_TRACES_SAMPLE_RATE")
     release_version: str | None = Field(None, alias="RELEASE_VERSION")
@@ -56,6 +63,41 @@ class Settings(BaseSettings):
         if not self.api_cors_origins:
             return []
         return [item.strip() for item in self.api_cors_origins.split(",") if item.strip()]
+
+    @property
+    def secure_cookies(self) -> bool:
+        return self.app_env.casefold() == "production"
+
+    @property
+    def effective_session_secret(self) -> str:
+        return self.session_secret
+
+    @property
+    def effective_totp_encryption_key(self) -> str:
+        return self.totp_encryption_key
+
+    @property
+    def effective_link_code_pepper(self) -> str:
+        return self.link_code_pepper
+
+    @model_validator(mode="after")
+    def validate_production_secrets(self) -> Settings:
+        if self.app_env.casefold() != "production":
+            return self
+        required = {
+            "SESSION_SECRET": self.session_secret,
+            "TOTP_ENCRYPTION_KEY": self.totp_encryption_key,
+            "LINK_CODE_PEPPER": self.link_code_pepper,
+        }
+        for name, value in required.items():
+            lowered = (value or "").casefold()
+            if len(value or "") < 32 or any(marker in lowered for marker in ("change_me", "example", "test")):
+                raise ValueError(f"{name} must be a non-placeholder secret of at least 32 characters in production.")
+        if not self.redis_url:
+            raise ValueError("REDIS_URL is required in production.")
+        if not self.clamav_required:
+            raise ValueError("CLAMAV_REQUIRED must be true in production.")
+        return self
 
 
 @lru_cache

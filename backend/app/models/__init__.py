@@ -9,6 +9,7 @@ from .notification import Notification
 from .announcement import Announcement
 from .appeal import Appeal, AppealMessage
 from .promo import MenuCard, PromoBlock, UserDashboardSetting
+from .product import AchievementProgress, CalendarSubscription, NotificationPreference
 from .schedule import AbsenceReason, EventRecipient, EventResponse, ScheduleEvent, ScheduleTemplate
 from .settings import BotChat, Setting
 from .squad import Squad
@@ -17,6 +18,7 @@ from .web_push import WebPushSubscription
 
 __all__ = [
     "AbsenceReason",
+    "AchievementProgress",
     "Announcement",
     "Appeal",
     "AppealMessage",
@@ -29,6 +31,7 @@ __all__ = [
     "ChannelLinkCode",
     "CandidateEvent",
     "CandidateEventResponse",
+    "CalendarSubscription",
     "EventRecipient",
     "EventResponse",
     "File",
@@ -42,6 +45,7 @@ __all__ = [
     "NormativeSubmissionFile",
     "NormativeTarget",
     "Notification",
+    "NotificationPreference",
     "PromoBlock",
     "ScheduleEvent",
     "ScheduleTemplate",

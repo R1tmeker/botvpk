@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import Settings, get_settings
 from ..database import get_db_session
 from ..dependencies.auth import CurrentUser, can_manage_squad, require_role
 from ..models import Attendance, AttendanceGrade, AttendanceHistory, ScheduleEvent, User
@@ -17,6 +18,8 @@ from ..schemas.core import (
     AttendanceUpdate,
     ReportSummary,
 )
+from ..services.attendance import sync_automatic_grade
+from ..services.realtime import publish_realtime_event
 from ..utils.audit import model_snapshot, record_audit, utcnow
 
 router = APIRouter(prefix="/attendance", tags=["attendance"])
@@ -79,40 +82,6 @@ async def ensure_can_manage_attendance_row(
         user_ids=[attendance.user_id],
     )
     return event
-
-
-async def sync_automatic_grade(
-    *,
-    session: AsyncSession,
-    event: ScheduleEvent,
-    attendance: Attendance,
-    actor_id: int,
-) -> None:
-    if event.grading_type != "FIVE_POINT":
-        return
-    grade = await session.scalar(select(AttendanceGrade).where(AttendanceGrade.attendance_id == attendance.id))
-    old_grade = grade.grade_value if grade else None
-    if attendance.status_code == "PRESENT":
-        if grade is None:
-            grade = AttendanceGrade(attendance_id=attendance.id, set_by_user_id=actor_id)
-            session.add(grade)
-        grade.grade_value = "5"
-        grade.comment = grade.comment or "Автоматически за присутствие."
-        grade.set_by_user_id = actor_id
-        grade.updated_at = utcnow()
-    elif attendance.status_code in {"ABSENT", "EXCUSED", "SICK", "RELEASED"} and grade is not None:
-        grade.grade_value = None
-        grade.updated_at = utcnow()
-    if old_grade != (grade.grade_value if grade else None):
-        session.add(
-            AttendanceHistory(
-                attendance_id=attendance.id,
-                old_grade=old_grade,
-                new_grade=grade.grade_value if grade else None,
-                changed_by_id=actor_id,
-                change_reason="Автоматическое правило оценивания",
-            )
-        )
 
 
 @router.get("/my", response_model=list[AttendanceRead])
@@ -247,18 +216,22 @@ async def event_attendance(
     return list((await session.scalars(statement)).all())
 
 
-@router.post("/events/{event_id}/mark", response_model=list[AttendanceRead])
+@router.post("/events/{event_id}/mark", response_model=list[AttendanceRead], include_in_schema=False)
+@router.post("/events/{event_id}/bulk", response_model=list[AttendanceRead])
 async def mark_event_attendance(
     event_id: int,
     payload: AttendanceMarkRequest,
     current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_SQUAD_COMMANDER)),
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> list[Attendance]:
     marker_id = require_profile(current_user)
     event = await get_event_or_404(session, event_id)
     user_ids = [item.user_id for item in payload.items]
     if not user_ids:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No attendance items provided.")
+    if len(user_ids) != len(set(user_ids)):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Duplicate user_id in attendance items.")
     await ensure_can_manage_attendance(session=session, current_user=current_user, event=event, user_ids=user_ids)
 
     existing = {
@@ -272,6 +245,7 @@ async def mark_event_attendance(
     for item in payload.items:
         attendance = existing.get(item.user_id)
         old_status = attendance.status_code if attendance else None
+        old_source = attendance.source_code if attendance else None
         if attendance is None:
             attendance = Attendance(event_id=event_id, user_id=item.user_id)
             session.add(attendance)
@@ -280,6 +254,7 @@ async def mark_event_attendance(
         attendance.custom_reason = item.custom_reason
         attendance.marked_by_user_id = marker_id
         attendance.marked_at = now
+        attendance.source_code = "COMMANDER"
         attendance.is_draft = item.is_draft
         attendance.updated_at = now
         saved.append(attendance)
@@ -290,6 +265,8 @@ async def mark_event_attendance(
                 attendance_id=attendance.id,
                 old_status=old_status,
                 new_status=item.status_code,
+                old_source_code=old_source,
+                new_source_code="COMMANDER",
                 changed_by_id=marker_id,
                 change_reason=item.comment,
             )
@@ -306,6 +283,12 @@ async def mark_event_attendance(
     await session.commit()
     for attendance in saved:
         await session.refresh(attendance)
+    await publish_realtime_event(
+        settings,
+        event_type="attendance.updated",
+        entity_id=event_id,
+        query_keys=["attendance", "dashboard", "reports", "progress"],
+    )
     return saved
 
 
@@ -327,6 +310,8 @@ async def update_attendance(
         setattr(attendance, key, value)
     attendance.marked_by_user_id = marker_id
     attendance.marked_at = utcnow()
+    old_source = attendance.source_code
+    attendance.source_code = "COMMANDER"
     attendance.updated_at = utcnow()
     await sync_automatic_grade(session=session, event=event, attendance=attendance, actor_id=marker_id)
     session.add(
@@ -334,6 +319,8 @@ async def update_attendance(
             attendance_id=attendance.id,
             old_status=old_status,
             new_status=attendance.status_code,
+            old_source_code=old_source,
+            new_source_code="COMMANDER",
             changed_by_id=marker_id,
             change_reason=payload.change_reason,
         )

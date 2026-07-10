@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import logging
 import re
+from urllib.parse import urljoin
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from .config import Settings
 from .database import AsyncSessionLocal
@@ -21,6 +23,7 @@ from .models import (
     NormativeSubmission,
     NormativeSubmissionFile,
     Notification,
+    NotificationPreference,
     ScheduleEvent,
     Setting,
     Squad,
@@ -29,6 +32,7 @@ from .models import (
 )
 from .models.file import File as StoredFile
 from .services.delivery import call_telegram_with_rate_limit, vk_rate_limit_pause
+from .services.notifications import quiet_hours_delivery_time
 from .services.web_push import send_web_push_notification, web_push_available
 from .utils.audit import utcnow
 from .utils.vk import send_vk_message
@@ -137,25 +141,30 @@ def _build_notification_keyboard(notification: Notification, settings: Settings)
             InlineKeyboardButton(text="Доработка", callback_data=f"norm_review:{submission_id}:NEEDS_REDO"),
             InlineKeyboardButton(text="Отклонить", callback_data=f"norm_review:{submission_id}:REJECTED"),
         ]])
-    if notification.type_code == "NEW_APPLICATION" and settings.mini_app_url:
+    deep_link_url = (
+        urljoin(f"{settings.mini_app_url.rstrip('/')}/", notification.deep_link.lstrip("/"))
+        if settings.mini_app_url and notification.deep_link
+        else settings.mini_app_url
+    )
+    if notification.type_code == "NEW_APPLICATION" and deep_link_url:
         return InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="Открыть приложение", web_app=WebAppInfo(url=settings.mini_app_url)),
+            InlineKeyboardButton(text="Открыть приложение", web_app=WebAppInfo(url=deep_link_url)),
         ]])
     if notification.type_code == "ATTENDANCE" and notification.entity_id:
         return InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="Отметить явку", callback_data=f"attendance:{notification.entity_id}:0"),
         ]])
-    if notification.type_code == "APPEAL" and settings.mini_app_url:
+    if notification.type_code == "APPEAL" and deep_link_url:
         return InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="Открыть обращение", web_app=WebAppInfo(url=settings.mini_app_url)),
+            InlineKeyboardButton(text="Открыть обращение", web_app=WebAppInfo(url=deep_link_url)),
         ]])
-    if notification.type_code == "NORMATIVE" and settings.mini_app_url:
+    if notification.type_code == "NORMATIVE" and deep_link_url:
         return InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="Открыть нормативы", web_app=WebAppInfo(url=settings.mini_app_url)),
+            InlineKeyboardButton(text="Открыть нормативы", web_app=WebAppInfo(url=deep_link_url)),
         ]])
-    if notification.type_code in ("APPLICATION", "NORMATIVE") and settings.mini_app_url:
+    if notification.type_code in ("APPLICATION", "NORMATIVE") and deep_link_url:
         return InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="Открыть приложение", web_app=WebAppInfo(url=settings.mini_app_url)),
+            InlineKeyboardButton(text="Открыть приложение", web_app=WebAppInfo(url=deep_link_url)),
         ]])
     return None
 
@@ -199,13 +208,24 @@ async def _send_submission_files(bot: Bot, telegram_id: int, submission_id: int,
 
 async def send_pending_tg_notifications(settings: Settings) -> None:
     async with AsyncSessionLocal() as session:
+        preference = aliased(NotificationPreference)
+        now = utcnow()
         rows = (
             await session.execute(
                 select(Notification, User.telegram_id)
                 .join(User, User.id == Notification.user_id)
+                .outerjoin(
+                    preference,
+                    and_(
+                        preference.user_id == Notification.user_id,
+                        preference.category_code == Notification.category_code,
+                    ),
+                )
                 .where(
                     Notification.send_to_tg.is_(True),
                     Notification.tg_sent_at.is_(None),
+                    or_(preference.id.is_(None), preference.telegram_enabled.is_(True)),
+                    or_(Notification.deliver_after.is_(None), Notification.deliver_after <= now),
                     User.telegram_id.is_not(None),
                     User.status_code == "ACTIVE",
                 )
@@ -217,6 +237,21 @@ async def send_pending_tg_notifications(settings: Settings) -> None:
             return
         bot = _get_bot(settings)
         for notification, telegram_id in rows:
+            user_preference = await session.scalar(
+                select(NotificationPreference).where(
+                    NotificationPreference.user_id == notification.user_id,
+                    NotificationPreference.category_code == notification.category_code,
+                )
+            )
+            deliver_after = quiet_hours_delivery_time(
+                user_preference,
+                priority_code=notification.priority_code,
+                now=now,
+                timezone_name=settings.timezone,
+            )
+            if deliver_after is not None:
+                notification.deliver_after = deliver_after
+                continue
             try:
                 text = notification.title if not notification.body else f"{notification.title}\n\n{notification.body}"
                 keyboard = _build_notification_keyboard(notification, settings)
@@ -235,7 +270,9 @@ async def send_pending_tg_notifications(settings: Settings) -> None:
                 ):
                     await _send_submission_files(bot, telegram_id, notification.entity_id, session)
                 notification.tg_sent_at = utcnow()
-            except Exception:  # noqa: BLE001
+                notification.delivery_error = None
+            except Exception as exc:  # noqa: BLE001
+                notification.delivery_error = str(exc)[:2000]
                 logger.exception("Failed to send notification id=%s", notification.id)
         await session.commit()
 
@@ -245,13 +282,24 @@ async def send_pending_vk_notifications(settings: Settings) -> None:
     if not settings.vk_bot_enabled or not settings.vk_group_token:
         return
     async with AsyncSessionLocal() as session:
+        preference = aliased(NotificationPreference)
+        now = utcnow()
         rows = (
             await session.execute(
                 select(Notification, User.vk_id)
                 .join(User, User.id == Notification.user_id)
+                .outerjoin(
+                    preference,
+                    and_(
+                        preference.user_id == Notification.user_id,
+                        preference.category_code == Notification.category_code,
+                    ),
+                )
                 .where(
                     Notification.send_to_tg.is_(True),
                     Notification.vk_sent_at.is_(None),
+                    or_(preference.id.is_(None), preference.vk_enabled.is_(True)),
+                    or_(Notification.deliver_after.is_(None), Notification.deliver_after <= now),
                     User.vk_id.is_not(None),
                     User.status_code == "ACTIVE",
                 )
@@ -262,12 +310,29 @@ async def send_pending_vk_notifications(settings: Settings) -> None:
         if not rows:
             return
         for notification, vk_id in rows:
+            user_preference = await session.scalar(
+                select(NotificationPreference).where(
+                    NotificationPreference.user_id == notification.user_id,
+                    NotificationPreference.category_code == notification.category_code,
+                )
+            )
+            deliver_after = quiet_hours_delivery_time(
+                user_preference,
+                priority_code=notification.priority_code,
+                now=now,
+                timezone_name=settings.timezone,
+            )
+            if deliver_after is not None:
+                notification.deliver_after = deliver_after
+                continue
             try:
                 text = notification.title if not notification.body else f"{notification.title}\n\n{notification.body}"
                 await send_vk_message(settings.vk_group_token, vk_id, text)
                 await vk_rate_limit_pause()
                 notification.vk_sent_at = utcnow()
-            except Exception:  # noqa: BLE001
+                notification.delivery_error = None
+            except Exception as exc:  # noqa: BLE001
+                notification.delivery_error = str(exc)[:2000]
                 logger.exception("Failed to send VK notification id=%s", notification.id)
         await session.commit()
 
@@ -277,13 +342,24 @@ async def send_pending_web_push_notifications(settings: Settings) -> None:
     if not web_push_available(settings):
         return
     async with AsyncSessionLocal() as session:
+        preference = aliased(NotificationPreference)
+        now = utcnow()
         rows = (
             await session.execute(
                 select(Notification, WebPushSubscription)
                 .join(User, User.id == Notification.user_id)
                 .join(WebPushSubscription, WebPushSubscription.user_id == Notification.user_id)
+                .join(
+                    preference,
+                    and_(
+                        preference.user_id == Notification.user_id,
+                        preference.category_code == Notification.category_code,
+                        preference.web_push_enabled.is_(True),
+                    ),
+                )
                 .where(
                     Notification.web_push_sent_at.is_(None),
+                    or_(Notification.deliver_after.is_(None), Notification.deliver_after <= now),
                     WebPushSubscription.is_active.is_(True),
                     User.status_code == "ACTIVE",
                 )
@@ -295,6 +371,21 @@ async def send_pending_web_push_notifications(settings: Settings) -> None:
             return
         sent_notification_ids: set[int] = set()
         for notification, subscription in rows:
+            user_preference = await session.scalar(
+                select(NotificationPreference).where(
+                    NotificationPreference.user_id == notification.user_id,
+                    NotificationPreference.category_code == notification.category_code,
+                )
+            )
+            deliver_after = quiet_hours_delivery_time(
+                user_preference,
+                priority_code=notification.priority_code,
+                now=now,
+                timezone_name=settings.timezone,
+            )
+            if deliver_after is not None:
+                notification.deliver_after = deliver_after
+                continue
             sent = await send_web_push_notification(settings, subscription, notification)
             if sent:
                 sent_notification_ids.add(notification.id)
@@ -342,6 +433,7 @@ async def materialize_absent_responses() -> None:
                     absence_reason_id=response.absence_reason_id,
                     custom_reason=response.custom_reason,
                     marked_at=now,
+                    source_code="BOT",
                     updated_at=now,
                 )
             )

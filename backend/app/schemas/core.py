@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, time
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ORMModel(BaseModel):
@@ -66,6 +66,7 @@ class UserSelfUpdate(BaseModel):
     city: str | None = None
     education_place: str | None = None
     birth_date: date | None = None
+    if_unmodified_since: datetime | None = None
 
 
 class SquadRead(ORMModel):
@@ -206,6 +207,10 @@ class ScheduleEventRead(ORMModel):
     squad_id: int | None = None
     status_code: str
     requires_response: bool
+    self_checkin_enabled: bool = False
+    self_checkin_opens_at: datetime | None = None
+    self_checkin_closes_at: datetime | None = None
+    late_after_minutes: int = 5
     is_overridden: bool = False
     response_deadline_at: datetime | None = None
     grading_type: str
@@ -226,9 +231,23 @@ class ScheduleEventCreate(BaseModel):
     squad_id: int | None = None
     status_code: str = "PLANNED"
     requires_response: bool = True
+    self_checkin_enabled: bool = False
+    self_checkin_opens_at: datetime | None = None
+    self_checkin_closes_at: datetime | None = None
+    late_after_minutes: int = Field(default=5, ge=0, le=1440)
     response_deadline_at: datetime | None = None
     grading_type: str = "FIVE_POINT"
     file_id: int | None = None
+
+    @model_validator(mode="after")
+    def validate_checkin_window(self):
+        if (
+            self.self_checkin_opens_at is not None
+            and self.self_checkin_closes_at is not None
+            and self.self_checkin_opens_at >= self.self_checkin_closes_at
+        ):
+            raise ValueError("self_checkin_opens_at must be earlier than self_checkin_closes_at")
+        return self
 
 
 class ScheduleEventUpdate(BaseModel):
@@ -241,6 +260,10 @@ class ScheduleEventUpdate(BaseModel):
     squad_id: int | None = None
     status_code: str | None = None
     requires_response: bool | None = None
+    self_checkin_enabled: bool | None = None
+    self_checkin_opens_at: datetime | None = None
+    self_checkin_closes_at: datetime | None = None
+    late_after_minutes: int | None = Field(default=None, ge=0, le=1440)
     response_deadline_at: datetime | None = None
     grading_type: str | None = None
     file_id: int | None = None
@@ -315,6 +338,7 @@ class AttendanceRead(ORMModel):
     custom_reason: str | None = None
     marked_by_user_id: int | None = None
     marked_at: datetime | None = None
+    source_code: str = "COMMANDER"
     is_draft: bool
     updated_at: datetime | None = None
 
@@ -438,10 +462,16 @@ class NotificationRead(ORMModel):
     body: str | None = None
     entity_name: str | None = None
     entity_id: int | None = None
+    category_code: str = "SYSTEM"
+    priority_code: str = "NORMAL"
+    deep_link: str | None = None
     is_read: bool
     is_pinned: bool
     send_to_tg: bool
     tg_sent_at: datetime | None = None
+    vk_sent_at: datetime | None = None
+    web_push_sent_at: datetime | None = None
+    delivery_error: str | None = None
     read_at: datetime | None = None
     created_at: datetime
 
@@ -763,6 +793,9 @@ class FileRead(ORMModel):
     original_name: str | None = None
     mime_type: str | None = None
     size_bytes: int | None = None
+    scan_status: str = "PENDING"
+    scan_detail: str | None = None
+    scanned_at: datetime | None = None
     uploaded_by_id: int | None = None
     created_at: datetime
 

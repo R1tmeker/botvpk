@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Date, DateTime, ForeignKey, Index, Integer, String, func
+from sqlalchemy import BigInteger, Date, DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..database import Base
@@ -33,6 +33,7 @@ class User(Base):
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     token_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     totp_secret: Mapped[str | None] = mapped_column(String(64))
+    totp_secret_encrypted: Mapped[str | None] = mapped_column(Text)
     totp_enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     vk_id: Mapped[int | None] = mapped_column(BigInteger, unique=True)
     linked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

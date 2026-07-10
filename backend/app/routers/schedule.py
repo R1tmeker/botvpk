@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import Settings, get_settings
 from ..database import get_db_session
 from ..dependencies.auth import CurrentUser, can_manage_squad, require_role
 from ..models import AbsenceReason, EventResponse, Notification, ScheduleEvent, ScheduleTemplate, Setting
@@ -13,6 +14,7 @@ from ..models.user import User as UserModel
 from ..roles import CONFIRMED_ROLES, RoleLevel
 from ..schemas.core import (
     AbsenceReasonRead,
+    AttendanceRead,
     EventResponseCreate,
     MessageResponse,
     ScheduleEventCreate,
@@ -22,8 +24,11 @@ from ..schemas.core import (
     ScheduleTemplateRead,
     ScheduleTemplateUpdate,
 )
+from ..services.attendance import SelfCheckInError, self_check_in, sync_automatic_grade
 from ..services.events import save_event_response
+from ..services.realtime import publish_realtime_event
 from ..utils.audit import model_snapshot, record_audit, utcnow
+from ..utils.timezones import current_local_date, local_datetime_to_utc, local_day_utc_bounds, utc_to_local_date
 
 router = APIRouter(prefix="/schedule", tags=["schedule"])
 
@@ -65,12 +70,13 @@ def serialize_event(event: ScheduleEvent, response_by_event: dict[int, str | Non
 async def current_week_type(
     session: AsyncSession = Depends(get_db_session),
     _current_user: CurrentUser = Depends(require_role(RoleLevel.PARTICIPANT)),
+    settings: Settings = Depends(get_settings),
 ) -> dict[str, str | None]:
     week_a_start = await get_week_a_start(session)
     if week_a_start is None:
         return {"parity": None, "week_a_start": None}
     return {
-        "parity": week_parity_for_date(date.today(), week_a_start),
+        "parity": week_parity_for_date(current_local_date(settings.timezone), week_a_start),
         "week_a_start": week_a_start.isoformat(),
     }
 
@@ -111,10 +117,10 @@ async def list_schedule(
 async def today_schedule(
     current_user: CurrentUser = Depends(require_role(RoleLevel.PARTICIPANT)),
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> list[ScheduleEventRead]:
-    today = date.today()
-    start = datetime.combine(today, time.min, tzinfo=timezone.utc)
-    end = datetime.combine(today, time.max, tzinfo=timezone.utc)
+    today = current_local_date(settings.timezone)
+    start, end = local_day_utc_bounds(today, settings.timezone)
     return await list_schedule(start, end, None, current_user, session)
 
 
@@ -182,6 +188,60 @@ async def respond_event(
     return MessageResponse(detail="Response saved.")
 
 
+@router.post("/events/{event_id}/self-checkin", response_model=AttendanceRead)
+async def check_in_to_event(
+    event_id: int,
+    current_user: CurrentUser = Depends(require_role(RoleLevel.PARTICIPANT)),
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> AttendanceRead:
+    if current_user.user_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User profile is required.")
+    event = await session.get(ScheduleEvent, event_id)
+    if event is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
+    if not can_view_event(current_user, event):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot check in to this event.")
+    now = utcnow()
+    try:
+        attendance, created = await self_check_in(
+            session,
+            event=event,
+            user_id=current_user.user_id,
+            now=now,
+        )
+    except SelfCheckInError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    if created:
+        await sync_automatic_grade(
+            session=session,
+            event=event,
+            attendance=attendance,
+            actor_id=current_user.user_id,
+        )
+        await record_audit(
+            session,
+            user_id=current_user.user_id,
+            action_code="attendance.self_checkin",
+            entity_name="attendance",
+            entity_id=attendance.id,
+            old_value={"status_code": "NOT_MARKED"},
+            new_value={"status_code": attendance.status_code, "source_code": "SELF"},
+        )
+    await session.commit()
+    await session.refresh(attendance)
+    await publish_realtime_event(
+        settings,
+        event_type="attendance.updated",
+        entity_id=event.id,
+        query_keys=["attendance", "dashboard", "progress"],
+    )
+    return AttendanceRead.model_validate(attendance)
+
+
 @router.post("/events", response_model=ScheduleEventRead, status_code=status.HTTP_201_CREATED)
 async def create_event(
     payload: ScheduleEventCreate,
@@ -240,6 +300,13 @@ async def update_event(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot manage this event.")
     updates = payload.model_dump(exclude_unset=True)
     audit_updates = payload.model_dump(exclude_unset=True, mode="json")
+    candidate_opens_at = updates.get("self_checkin_opens_at", event.self_checkin_opens_at)
+    candidate_closes_at = updates.get("self_checkin_closes_at", event.self_checkin_closes_at)
+    if candidate_opens_at is not None and candidate_closes_at is not None and candidate_opens_at >= candidate_closes_at:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="self_checkin_opens_at must be earlier than self_checkin_closes_at",
+        )
     old = model_snapshot(event, list(updates))
     for key, value in updates.items():
         setattr(event, key, value)
@@ -403,6 +470,7 @@ async def generate_template_events(
     days: int = 30,
     current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_PLATOON_COMMANDER)),
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> list[ScheduleEvent]:
     template = await session.get(ScheduleTemplate, template_id)
     if not template:
@@ -431,21 +499,23 @@ async def generate_template_events(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Week days must be numbers from 1 to 7 separated by commas.",
         )
-    start_day = template.valid_from or date.today()
+    start_day = template.valid_from or current_local_date(settings.timezone)
     end_day = min(template.valid_to or start_day + timedelta(days=days), start_day + timedelta(days=days))
+    range_start, _ = local_day_utc_bounds(start_day, settings.timezone)
+    _, range_end = local_day_utc_bounds(end_day, settings.timezone)
     existing_events = list(
         (
             await session.scalars(
                 select(ScheduleEvent).where(
                     ScheduleEvent.template_id == template.id,
                     ScheduleEvent.status_code != "CANCELLED",
-                    ScheduleEvent.start_datetime >= datetime.combine(start_day, time.min),
-                    ScheduleEvent.start_datetime <= datetime.combine(end_day, time.max),
+                    ScheduleEvent.start_datetime >= range_start,
+                    ScheduleEvent.start_datetime < range_end,
                 )
             )
         ).all()
     )
-    existing_dates = {event.start_datetime.date() for event in existing_events}
+    existing_dates = {utc_to_local_date(event.start_datetime, settings.timezone) for event in existing_events}
     created: list[ScheduleEvent] = []
     current = start_day
     while current <= end_day:
@@ -457,8 +527,8 @@ async def generate_template_events(
                 if week_parity_for_date(current, week_a_start) != template.week_parity:
                     current += timedelta(days=1)
                     continue
-            start_dt = datetime.combine(current, template.start_time)
-            end_dt = datetime.combine(current, template.end_time) if template.end_time else None
+            start_dt = local_datetime_to_utc(current, template.start_time, settings.timezone)
+            end_dt = local_datetime_to_utc(current, template.end_time, settings.timezone) if template.end_time else None
             deadline = (
                 start_dt - timedelta(minutes=template.response_deadline_minutes)
                 if template.response_deadline_minutes

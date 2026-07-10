@@ -6,12 +6,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import Settings, get_settings
 from ..database import get_db_session
 from ..dependencies.auth import CurrentUser, can_manage_squad, require_role
 from ..models import User
 from ..roles import RoleLevel, ROLE_LEVELS
 from ..schemas.core import UserCreate, UserRead, UserUpdate
 from ..services.auth_security import bump_token_version
+from ..services.sessions import delete_user_sessions
 from ..utils.audit import model_snapshot, record_audit
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -82,6 +84,7 @@ async def update_user(
     payload: UserUpdate,
     current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_PLATOON_COMMANDER)),
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> User:
     user = await session.get(User, user_id)
     if not user:
@@ -102,9 +105,11 @@ async def update_user(
     old = model_snapshot(user, list(updates))
     old_status = user.status_code
     old_telegram_id = user.telegram_id
+    old_role = user.role_code
     for key, value in updates.items():
         setattr(user, key, value)
-    if user.status_code != old_status or user.telegram_id != old_telegram_id:
+    security_changed = user.status_code != old_status or user.telegram_id != old_telegram_id or user.role_code != old_role
+    if security_changed:
         bump_token_version(user)
     user.updated_at = datetime.now(timezone.utc)
     await record_audit(
@@ -117,5 +122,7 @@ async def update_user(
         new_value=updates,
     )
     await session.commit()
+    if security_changed:
+        await delete_user_sessions(settings, user.id)
     await session.refresh(user)
     return user

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import httpx
 
-from fastapi import APIRouter, Depends, File as UploadParam, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File as UploadParam, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,9 +17,11 @@ from ..models import Announcement, Appeal, LearningMaterial, Normative, Normativ
 from ..models import File as StoredFile
 from ..models import User
 from ..roles import RoleLevel
+from ..ratelimit import limiter
 from .normatives import normative_visible as _normative_visible
 from ..schemas.core import FileRead
 from ..services.uploads import GENERAL_UPLOAD_MIME_TYPES, UploadValidationError, build_upload_path, prepare_upload
+from ..services.malware import MalwareScannerError, scan_bytes
 from ..utils.audit import record_audit
 
 router = APIRouter(prefix="/files", tags=["files"])
@@ -40,6 +42,8 @@ async def download_avatar(
     stored = await session.get(StoredFile, file_id)
     if stored is None or not stored.file_path or not (stored.mime_type or "").startswith("image/"):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Avatar not found.")
+    if stored.scan_status not in {"REENCODED", "LEGACY_TRUSTED"}:
+        raise HTTPException(status_code=status.HTTP_423_LOCKED, detail="Avatar is not approved.")
     owner_id = await session.scalar(select(User.id).where(User.avatar_file_id == file_id).limit(1))
     if owner_id is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Avatar not found.")
@@ -61,7 +65,9 @@ async def download_avatar(
 
 
 @router.post("/upload", response_model=FileRead, status_code=status.HTTP_201_CREATED)
+@limiter.limit("20/minute")
 async def upload_file(
+    request: Request,
     upload: UploadFile = UploadParam(...),
     current_user: CurrentUser = Depends(require_role(RoleLevel.CANDIDATE)),
     session: AsyncSession = Depends(get_db_session),
@@ -85,13 +91,58 @@ async def upload_file(
         )
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     now = datetime.now(timezone.utc)
-    target = build_upload_path(settings.uploads_dir, str(now.year), f"{now.month:02d}", extension=prepared.extension)
-    target.write_bytes(prepared.content)
+    scan_status = "REENCODED"
+    scan_detail = "Image decoded and re-encoded by Pillow."
+    scanned_at = now
+    rejected_status: int | None = None
+    if prepared.mime_type.startswith("image/"):
+        target = build_upload_path(
+            settings.uploads_dir,
+            str(now.year),
+            f"{now.month:02d}",
+            extension=prepared.extension,
+        )
+        target.write_bytes(prepared.content)
+    else:
+        quarantine = build_upload_path(
+            settings.uploads_dir,
+            "quarantine",
+            str(now.year),
+            f"{now.month:02d}",
+            extension=prepared.extension,
+        )
+        quarantine.write_bytes(prepared.content)
+        target = quarantine
+        try:
+            result = await scan_bytes(settings, prepared.content)
+            scanned_at = now
+            scan_detail = result.detail
+            if result.clean:
+                approved = build_upload_path(
+                    settings.uploads_dir,
+                    str(now.year),
+                    f"{now.month:02d}",
+                    extension=prepared.extension,
+                )
+                quarantine.replace(approved)
+                target = approved
+                scan_status = "CLEAN"
+            else:
+                scan_status = "INFECTED"
+                quarantine.unlink(missing_ok=True)
+                rejected_status = status.HTTP_422_UNPROCESSABLE_ENTITY
+        except MalwareScannerError as exc:
+            scan_status = "QUARANTINED"
+            scan_detail = str(exc)
+            rejected_status = status.HTTP_503_SERVICE_UNAVAILABLE
     stored = StoredFile(
-        file_path=str(target),
+        file_path=str(target) if target.exists() else None,
         original_name=upload.filename,
         mime_type=prepared.mime_type,
         size_bytes=prepared.size_bytes,
+        scan_status=scan_status,
+        scan_detail=scan_detail,
+        scanned_at=scanned_at,
         uploaded_by_id=user_id,
     )
     session.add(stored)
@@ -102,10 +153,18 @@ async def upload_file(
         action_code="file.upload",
         entity_name="files",
         entity_id=stored.id,
-        new_value={"original_name": upload.filename, "mime_type": prepared.mime_type, "size_bytes": prepared.size_bytes},
+        new_value={
+            "original_name": upload.filename,
+            "mime_type": prepared.mime_type,
+            "size_bytes": prepared.size_bytes,
+            "scan_status": scan_status,
+        },
     )
     await session.commit()
     await session.refresh(stored)
+    if rejected_status is not None:
+        detail = "Файл заражён и удалён." if scan_status == "INFECTED" else "Файл помещён в карантин: антивирус временно недоступен."
+        raise HTTPException(status_code=rejected_status, detail=detail)
     return stored
 
 
@@ -169,6 +228,8 @@ def _announcement_visible(item: Announcement, current_user: CurrentUser) -> bool
 
 
 async def _check_file_access(stored: StoredFile, current_user: CurrentUser, session: AsyncSession) -> None:
+    if stored.scan_status not in {"CLEAN", "REENCODED", "LEGACY_TRUSTED"}:
+        raise HTTPException(status_code=status.HTTP_423_LOCKED, detail="File is quarantined or rejected.")
     if current_user.role_level >= RoleLevel.DEPUTY_PLATOON_COMMANDER:
         return
     if stored.uploaded_by_id is not None and stored.uploaded_by_id == current_user.user_id:

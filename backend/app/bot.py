@@ -36,10 +36,11 @@ from .database import AsyncSessionLocal
 from .models import AbsenceReason, Appeal, Attendance, EventResponse, JoinApplication, Normative, NormativeSubmission, Notification, ScheduleEvent, Squad, User
 from .roles import RoleLevel, role_level
 from .services.auth_security import PasswordPolicyError, bump_token_version, validate_password_policy
+from .services.attendance import SelfCheckInError, self_check_in, sync_automatic_grade
 from .services.delivery import call_telegram_with_rate_limit
 from .services.events import save_event_response as save_event_response_service
 from .services.heartbeat import heartbeat_loop
-from .services.observability import init_sentry
+from .services.observability import configure_json_logging, init_sentry
 from .services.normatives import submit_normative as submit_normative_service
 from .utils.audit import record_audit
 from .utils.channel_link import issue_link_code
@@ -138,6 +139,8 @@ def main_keyboard(role: RoleLevel) -> ReplyKeyboardMarkup:
     rows: list[list[KeyboardButton]] = [[KeyboardButton(text="Меню"), KeyboardButton(text="Расписание"), KeyboardButton(text="Уведомления")]]
     if role >= RoleLevel.DEPUTY_SQUAD_COMMANDER:
         rows.append([KeyboardButton(text="Заявки")])
+    if role >= RoleLevel.PARTICIPANT:
+        rows.append([KeyboardButton(text="Отметиться")])
     if settings.mini_app_url:
         rows.append([KeyboardButton(text="Открыть приложение", web_app=WebAppInfo(url=settings.mini_app_url))])
     if role >= RoleLevel.SUPER_ADMIN:
@@ -167,6 +170,7 @@ def main_menu_inline(role: RoleLevel) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="Моя явка", callback_data="menu:attendance"),
             ]
         )
+        rows.append([InlineKeyboardButton(text="Отметиться", callback_data="menu:checkin")])
         rows.append(
             [
                 InlineKeyboardButton(text="Обращение", callback_data="menu:appeal"),
@@ -737,6 +741,11 @@ async def menu_callback(callback: CallbackQuery, state: FSMContext) -> None:
             await message.answer("Посещаемость доступна после подтверждения участия.")
         else:
             await send_attendance_text(message, user)
+    elif action == "checkin":
+        if user is None or role < RoleLevel.PARTICIPANT:
+            await message.answer("Самоотметка доступна после подтверждения участия.")
+        else:
+            await send_self_checkin_result(message, user)
     elif action == "appeal":
         await start_appeal_dialog(message, state, callback.from_user.id)
     elif action == "vk":
@@ -801,6 +810,70 @@ async def schedule(message: Message) -> None:
         await message.answer("Расписание доступно после подтверждения участия.")
         return
     await _send_schedule_with_batch(message, user)
+
+
+async def send_self_checkin_result(message: Message, user: User) -> None:
+    now = datetime.now(timezone.utc)
+    async with AsyncSessionLocal() as session:
+        events = list(
+            (
+                await session.scalars(
+                    select(ScheduleEvent)
+                    .where(
+                        ScheduleEvent.self_checkin_enabled.is_(True),
+                        ScheduleEvent.status_code != "CANCELLED",
+                        (ScheduleEvent.squad_id.is_(None)) | (ScheduleEvent.squad_id == user.squad_id),
+                        ScheduleEvent.start_datetime >= now - timedelta(hours=2),
+                        ScheduleEvent.start_datetime <= now + timedelta(hours=2),
+                    )
+                    .order_by(ScheduleEvent.start_datetime)
+                )
+            ).all()
+        )
+        last_error: SelfCheckInError | None = None
+        for event in events:
+            try:
+                attendance_row, created = await self_check_in(
+                    session,
+                    event=event,
+                    user_id=user.id,
+                    now=now,
+                    source_code="BOT",
+                )
+            except SelfCheckInError as exc:
+                last_error = exc
+                continue
+            if created:
+                await sync_automatic_grade(
+                    session=session,
+                    event=event,
+                    attendance=attendance_row,
+                    actor_id=user.id,
+                )
+                await record_audit(
+                    session,
+                    user_id=user.id,
+                    action_code="attendance.self_checkin_bot",
+                    entity_name="attendance",
+                    entity_id=attendance_row.id,
+                    new_value={"event_id": event.id, "status_code": attendance_row.status_code, "source_code": "BOT"},
+                )
+            await session.commit()
+            status_label = "опоздание" if attendance_row.status_code == "LATE" else "присутствие"
+            await message.answer(f"{event.title}: {status_label} отмечено.", reply_markup=main_keyboard(user_role(user)))
+            return
+    detail = str(last_error) if last_error else "Сейчас нет события с открытым окном самоотметки."
+    await message.answer(detail, reply_markup=main_keyboard(user_role(user)))
+
+
+@router.message(Command("checkin"))
+@router.message(F.text.casefold().in_({"отметиться", "самоотметка"}))
+async def self_checkin_command(message: Message) -> None:
+    user = await find_user(message.from_user.id)
+    if user is None or user_role(user) < RoleLevel.PARTICIPANT:
+        await message.answer("Самоотметка доступна после подтверждения участия.")
+        return
+    await send_self_checkin_result(message, user)
 
 
 @router.callback_query(F.data.startswith("event:"))
@@ -1501,6 +1574,7 @@ async def attendance_mark_callback(callback: CallbackQuery) -> None:
         attendance_row.status_code = status_code
         attendance_row.marked_by_user_id = db_commander.id
         attendance_row.marked_at = now
+        attendance_row.source_code = "BOT"
         attendance_row.updated_at = now
         await session.flush()
         await record_audit(
@@ -1873,7 +1947,7 @@ def build_storage(settings):
 
 
 async def main() -> None:
-    logging.basicConfig(level=logging.INFO)
+    configure_json_logging()
     settings = get_settings()
     init_sentry(settings, service_name="telegram_bot")
     asyncio.create_task(heartbeat_loop(settings.bot_heartbeat_path))
@@ -1894,6 +1968,7 @@ async def main() -> None:
         BotCommand(command="notifications", description="Мои уведомления"),
         BotCommand(command="normatives", description="Нормативы"),
         BotCommand(command="attendance", description="Моя посещаемость"),
+        BotCommand(command="checkin", description="Отметиться на занятии"),
         BotCommand(command="appeal", description="Обращение командиру"),
         BotCommand(command="vk", description="Привязать VK"),
         BotCommand(command="resetpassword", description="Сбросить пароль сайта"),

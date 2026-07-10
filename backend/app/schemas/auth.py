@@ -45,6 +45,12 @@ class TwoFactorCodeRequest(BaseModel):
     code: str = Field(min_length=6, max_length=8)
 
 
+class StepUpRequest(BaseModel):
+    password: str | None = Field(default=None, max_length=128)
+    totp_code: str | None = Field(default=None, min_length=6, max_length=8)
+    init_data: str | None = Field(default=None, max_length=8192)
+
+
 class VkLinkCodeResponse(BaseModel):
     code: str
     expires_at: datetime
@@ -69,11 +75,11 @@ class UserProfile(BaseModel):
     phone: str | None = None
     city: str | None = None
     education_place: str | None = None
+    version: datetime | None = None
 
 
 class AuthResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
+    authenticated: bool = True
     profile: UserProfile
     app_timezone: str = "Asia/Novosibirsk"
 

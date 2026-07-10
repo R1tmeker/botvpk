@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import jwt
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,9 +10,7 @@ from ..config import Settings, get_settings
 from ..database import get_db_session
 from ..models import User
 from ..roles import RoleLevel, role_level
-from ..utils.jwt import decode_access_token
-
-bearer_scheme = HTTPBearer(auto_error=False)
+from ..services.sessions import AuthSession, SessionUnavailableError, csrf_matches, resolve_auth_session
 
 
 @dataclass(frozen=True)
@@ -24,6 +20,8 @@ class CurrentUser:
     telegram_id: int
     role_code: str
     squad_id: int | None
+    auth_session: AuthSession
+    session_token: str
 
     @property
     def role_level(self) -> RoleLevel:
@@ -31,37 +29,41 @@ class CurrentUser:
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    request: Request,
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> CurrentUser:
-    if credentials is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token.")
+    token = request.cookies.get(settings.session_cookie_name)
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing authenticated session.")
     try:
-        payload = decode_access_token(credentials.credentials, settings)
-    except jwt.PyJWTError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid bearer token.") from exc
+        auth_session = await resolve_auth_session(settings, token)
+    except SessionUnavailableError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Session storage unavailable.") from exc
+    if auth_session is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired or revoked.")
 
-    telegram_id = payload.get("telegram_id")
-    if telegram_id is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload.")
-    user_id = payload.get("user_id")
-    user = None
-    if user_id is not None:
-        user = await session.scalar(select(User).where(User.id == user_id))
-        if user is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User from token not found.")
-        if user.status_code != "ACTIVE":
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User account is inactive.")
-        token_version = int(payload.get("token_version", 0) or 0)
-        if token_version != (user.token_version or 0):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has been revoked.")
+    if request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
+        csrf_header = request.headers.get("X-CSRF-Token", "")
+        csrf_cookie = request.cookies.get(settings.csrf_cookie_name, "")
+        if not csrf_header or not csrf_cookie or csrf_header != csrf_cookie or not csrf_matches(settings, auth_session, csrf_header):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="CSRF validation failed.")
+
+    user = await session.scalar(select(User).where(User.id == auth_session.user_id))
+    if user is None or user.telegram_id != auth_session.telegram_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session user not found.")
+    if user.status_code != "ACTIVE":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User account is inactive.")
+    if auth_session.token_version != (user.token_version or 0):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session has been revoked.")
     return CurrentUser(
         user=user,
-        user_id=user.id if user else None,
-        telegram_id=int(telegram_id),
-        role_code=user.role_code if user else payload.get("role_code", "PUBLIC_USER"),
-        squad_id=user.squad_id if user else payload.get("squad_id"),
+        user_id=user.id,
+        telegram_id=int(user.telegram_id or 0),
+        role_code=user.role_code,
+        squad_id=user.squad_id,
+        auth_session=auth_session,
+        session_token=token,
     )
 
 
@@ -72,6 +74,12 @@ def require_role(min_role: RoleLevel):
         return current_user
 
     return dependency
+
+
+async def require_step_up(current_user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    if not current_user.auth_session.step_up_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Recent authentication is required.")
+    return current_user
 
 
 def is_platoon_or_admin(current_user: CurrentUser) -> bool:

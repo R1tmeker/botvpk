@@ -17,21 +17,22 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.create_table(
-        "normative_submission_files",
-        sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("submission_id", sa.Integer(), nullable=False),
-        sa.Column("file_id", sa.Integer(), nullable=False),
-        sa.Column("uploaded_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-        sa.ForeignKeyConstraint(["submission_id"], ["normative_submissions.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["file_id"], ["files.id"], ondelete="CASCADE"),
-        sa.UniqueConstraint("submission_id", "file_id"),
-    )
-    op.create_index(
-        "idx_normative_submission_files_submission",
-        "normative_submission_files",
-        ["submission_id"],
-    )
+    if not sa.inspect(op.get_bind()).has_table("normative_submission_files"):
+        op.create_table(
+            "normative_submission_files",
+            sa.Column("id", sa.Integer(), primary_key=True),
+            sa.Column("submission_id", sa.Integer(), nullable=False),
+            sa.Column("file_id", sa.Integer(), nullable=False),
+            sa.Column("uploaded_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+            sa.ForeignKeyConstraint(["submission_id"], ["normative_submissions.id"], ondelete="CASCADE"),
+            sa.ForeignKeyConstraint(["file_id"], ["files.id"], ondelete="CASCADE"),
+            sa.UniqueConstraint("submission_id", "file_id"),
+        )
+        op.create_index(
+            "idx_normative_submission_files_submission",
+            "normative_submission_files",
+            ["submission_id"],
+        )
     op.execute(
         """
         INSERT INTO normative_submission_files (submission_id, file_id)

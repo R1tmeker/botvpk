@@ -25,6 +25,7 @@ class Attendance(Base):
     custom_reason: Mapped[str | None] = mapped_column(String(500))
     marked_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     marked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source_code: Mapped[str] = mapped_column(String(50), nullable=False, server_default="COMMANDER")
     is_draft: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -51,6 +52,8 @@ class AttendanceHistory(Base):
     new_status: Mapped[str | None] = mapped_column(String(50))
     old_grade: Mapped[str | None] = mapped_column(String(20))
     new_grade: Mapped[str | None] = mapped_column(String(20))
+    old_source_code: Mapped[str | None] = mapped_column(String(50))
+    new_source_code: Mapped[str | None] = mapped_column(String(50))
     changed_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     change_reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

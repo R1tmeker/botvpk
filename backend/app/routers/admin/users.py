@@ -12,10 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...config import Settings, get_settings
 from ...database import get_db_session
 from ...dependencies.auth import CurrentUser, require_role
-from ...models import Squad, User
+from ...models import NotificationPreference, Squad, User
 from ...roles import RoleLevel, ROLE_LEVELS
 from ...schemas.core import UserRead, UserUpdate
+from ...schemas.product import AdminUsersBulkResult, AdminUsersBulkUpdate
 from ...services.auth_security import bump_token_version
+from ...services.sessions import delete_user_sessions
 from ...utils.audit import model_snapshot, record_audit
 
 router = APIRouter(prefix="/admin/users", tags=["admin:users"])
@@ -52,6 +54,7 @@ LEAD_ROLE_TO_SQUAD_FIELD = {
     "DEPUTY_SQUAD_COMMANDER": "deputy_user_id",
 }
 SQUAD_FIELD_TO_LEAD_ROLE = {value: key for key, value in LEAD_ROLE_TO_SQUAD_FIELD.items()}
+NOTIFICATION_CATEGORIES = ("SCHEDULE", "ATTENDANCE", "NORMATIVES", "ANNOUNCEMENTS", "APPEALS", "SYSTEM")
 
 
 async def clear_user_squad_lead_refs(
@@ -316,12 +319,113 @@ async def export_users_xlsx_send(
     return {"sent": True, "count": len(users)}
 
 
+@router.patch("/bulk", response_model=AdminUsersBulkResult)
+async def bulk_update_users(
+    payload: AdminUsersBulkUpdate,
+    current_user: CurrentUser = Depends(require_role(RoleLevel.ADMIN)),
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> AdminUsersBulkResult:
+    if current_user.user_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User profile is required.")
+    user_changes = payload.model_dump(
+        include={"role_code", "squad_id", "status_code"},
+        exclude_none=True,
+    )
+    preference_changes = payload.model_dump(
+        include={"telegram_enabled", "vk_enabled", "web_push_enabled", "in_app_enabled"},
+        exclude_none=True,
+    )
+    if "role_code" in user_changes:
+        if user_changes["role_code"] not in ROLE_LEVELS:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown role_code.")
+        target_level = ROLE_LEVELS[user_changes["role_code"]]
+        if target_level >= current_user.role_level and current_user.role_level < RoleLevel.SUPER_ADMIN:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot assign this role.")
+    if "status_code" in user_changes and user_changes["status_code"] not in {"ACTIVE", "ARCHIVED"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown status_code.")
+    if "squad_id" in user_changes and await session.get(Squad, user_changes["squad_id"]) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Squad not found.")
+
+    users = list(
+        (
+            await session.scalars(
+                select(User).where(User.id.in_(payload.user_ids)).order_by(User.id).with_for_update()
+            )
+        ).all()
+    )
+    if len(users) != len(payload.user_ids):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="One or more users not found.")
+    audit_before: list[dict] = []
+    audit_after: list[dict] = []
+    revoke_user_ids: list[int] = []
+    for user in users:
+        if user.id == current_user.user_id and any(key in user_changes for key in ("role_code", "status_code")):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot change your own role or status.")
+        if ROLE_LEVELS.get(user.role_code, RoleLevel.PUBLIC_USER) >= current_user.role_level and current_user.role_level < RoleLevel.SUPER_ADMIN:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot change an equal or higher role.")
+        before = {field: getattr(user, field) for field in user_changes}
+        for field, value in user_changes.items():
+            setattr(user, field, value)
+        if any(field in user_changes for field in ("role_code", "status_code")):
+            bump_token_version(user)
+            revoke_user_ids.append(user.id)
+        user.updated_at = datetime.now(timezone.utc)
+        await sync_user_squad_leadership(session, user)
+
+        before_preferences: list[dict] = []
+        after_preferences: list[dict] = []
+        if preference_changes:
+            existing_preferences = {
+                item.category_code: item
+                for item in (
+                    await session.scalars(
+                        select(NotificationPreference).where(NotificationPreference.user_id == user.id)
+                    )
+                ).all()
+            }
+            for category in NOTIFICATION_CATEGORIES:
+                preference = existing_preferences.get(category)
+                before_pref = (
+                    {field: getattr(preference, field) for field in preference_changes}
+                    if preference is not None
+                    else None
+                )
+                if preference is None:
+                    preference = NotificationPreference(user_id=user.id, category_code=category)
+                    session.add(preference)
+                for field, value in preference_changes.items():
+                    setattr(preference, field, value)
+                preference.updated_at = datetime.now(timezone.utc)
+                before_preferences.append({"category_code": category, "values": before_pref})
+                after_preferences.append({"category_code": category, "values": preference_changes})
+        audit_before.append({"id": user.id, "before": before, "preferences": before_preferences})
+        audit_after.append({"id": user.id, "after": user_changes, "preferences": after_preferences})
+
+    audit = await record_audit(
+        session,
+        user_id=current_user.user_id,
+        action_code="admin.users.bulk",
+        entity_name="users",
+        old_value=audit_before,
+        new_value=audit_after,
+        comment=f"Bulk update of {len(users)} users",
+    )
+    await session.flush()
+    audit_batch_id = audit.id
+    await session.commit()
+    for user_id in revoke_user_ids:
+        await delete_user_sessions(settings, user_id)
+    return AdminUsersBulkResult(affected=len(users), audit_batch_id=audit_batch_id)
+
+
 @router.patch("/{user_id}", response_model=UserRead)
 async def admin_update_user(
     user_id: int,
     payload: UserUpdate,
     current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_PLATOON_COMMANDER)),
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> User:
     user = await session.get(User, user_id)
     if not user:
@@ -331,7 +435,7 @@ async def admin_update_user(
         if updates["role_code"] not in ROLE_LEVELS:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown role_code.")
         target_level = ROLE_LEVELS.get(updates["role_code"], RoleLevel.PUBLIC_USER)
-        if target_level >= current_user.role_level and current_user.role_level < RoleLevel.ADMIN:
+        if target_level >= current_user.role_level and current_user.role_level < RoleLevel.SUPER_ADMIN:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Cannot assign a role equal to or higher than your own.",
@@ -339,9 +443,11 @@ async def admin_update_user(
     old = model_snapshot(user, list(updates))
     old_status = user.status_code
     old_telegram_id = user.telegram_id
+    old_role = user.role_code
     for key, value in updates.items():
         setattr(user, key, value)
-    if user.status_code != old_status or user.telegram_id != old_telegram_id:
+    security_changed = user.status_code != old_status or user.telegram_id != old_telegram_id or user.role_code != old_role
+    if security_changed:
         bump_token_version(user)
     await sync_user_squad_leadership(session, user)
     user.updated_at = datetime.now(timezone.utc)
@@ -355,6 +461,8 @@ async def admin_update_user(
         new_value=updates,
     )
     await session.commit()
+    if security_changed:
+        await delete_user_sessions(settings, user.id)
     await session.refresh(user)
     return user
 
@@ -364,6 +472,7 @@ async def deactivate_user(
     user_id: int,
     current_user: CurrentUser = Depends(require_role(RoleLevel.ADMIN)),
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> User:
     user = await session.get(User, user_id)
     if not user:
@@ -386,5 +495,6 @@ async def deactivate_user(
         new_value={"status_code": "ARCHIVED"},
     )
     await session.commit()
+    await delete_user_sessions(settings, user.id)
     await session.refresh(user)
     return user

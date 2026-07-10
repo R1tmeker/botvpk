@@ -12,12 +12,16 @@ class ChannelLinkCode(Base):
     """One-time code that links an external channel (e.g. VK) to an existing user."""
 
     __tablename__ = "channel_link_codes"
-    __table_args__ = (Index("idx_link_codes_code", "channel", "code"),)
+    __table_args__ = (
+        Index("idx_link_codes_code", "channel", "code"),
+        Index("idx_link_codes_digest", "channel", "code_digest"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     channel: Mapped[str] = mapped_column(String(20), nullable=False, server_default="VK")
-    code: Mapped[str] = mapped_column(String(16), nullable=False)
+    code: Mapped[str | None] = mapped_column(String(16))
+    code_digest: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -29,7 +29,7 @@ async def send_web_push_notification(
         {
             "title": notification.title,
             "body": notification.body or "",
-            "url": "/notifications",
+            "url": notification.deep_link or "/notifications",
             "notification_id": notification.id,
         },
         ensure_ascii=False,

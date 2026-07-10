@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from redis.asyncio import Redis
 from sqlalchemy.exc import IntegrityError
@@ -14,14 +14,23 @@ from .config import get_settings
 from .database import AsyncSessionLocal
 from .models import AbsenceReason, Appeal, EventResponse, Notification, Normative, ScheduleEvent, User
 from .roles import RoleLevel, role_level
-from .services.auth_security import password_lockout_state, register_failed_password_login, register_successful_password_login
+from .services.auth_security import (
+    PasswordPolicyError,
+    bump_token_version,
+    password_lockout_state,
+    register_failed_password_login,
+    register_successful_password_login,
+    validate_password_policy,
+)
+from .services.attendance import SelfCheckInError, self_check_in, sync_automatic_grade
 from .services.events import save_event_response as save_event_response_service
 from .services.heartbeat import start_heartbeat_thread
 from .services.normatives import submit_normative as submit_normative_service
-from .services.observability import init_sentry
+from .services.observability import configure_json_logging, init_sentry
+from .services.sessions import consume_fixed_window_limit, delete_user_sessions
 from .utils.audit import record_audit
 from .utils.channel_link import redeem_link_code
-from .utils.password import verify_password
+from .utils.password import hash_password, verify_password
 
 logger = logging.getLogger(__name__)
 
@@ -147,9 +156,11 @@ def _text_button(label: str, color: str = "secondary", payload: dict | None = No
 def main_keyboard(site_url: str | None = None) -> str:
     buttons = [
         [_text_button("Расписание", "primary")],
+        [_text_button("Отметиться", "positive")],
         [_text_button("Уведомления")],
         [_text_button("Профиль")],
         [_text_button("Обращение")],
+        [_text_button("Сбросить пароль")],
         [_text_button("Отвязать")],
     ]
     if site_url:
@@ -183,6 +194,112 @@ def login_entry_keyboard() -> str:
 async def find_user_by_vk(vk_id: int) -> User | None:
     async with AsyncSessionLocal() as session:
         return await session.scalar(select(User).where(User.vk_id == vk_id))
+
+
+async def _self_checkin_from_vk(message, user: User, site_url: str | None) -> None:
+    now = datetime.now(timezone.utc)
+    async with AsyncSessionLocal() as session:
+        events = list(
+            (
+                await session.scalars(
+                    select(ScheduleEvent)
+                    .where(
+                        ScheduleEvent.self_checkin_enabled.is_(True),
+                        ScheduleEvent.status_code != "CANCELLED",
+                        (ScheduleEvent.squad_id.is_(None)) | (ScheduleEvent.squad_id == user.squad_id),
+                        ScheduleEvent.start_datetime >= now.replace(microsecond=0) - timedelta(hours=2),
+                        ScheduleEvent.start_datetime <= now.replace(microsecond=0) + timedelta(hours=2),
+                    )
+                    .order_by(ScheduleEvent.start_datetime)
+                )
+            ).all()
+        )
+        last_error: SelfCheckInError | None = None
+        for event in events:
+            try:
+                attendance_row, created = await self_check_in(
+                    session,
+                    event=event,
+                    user_id=user.id,
+                    now=now,
+                    source_code="BOT",
+                )
+            except SelfCheckInError as exc:
+                last_error = exc
+                continue
+            if created:
+                await sync_automatic_grade(
+                    session=session,
+                    event=event,
+                    attendance=attendance_row,
+                    actor_id=user.id,
+                )
+                await record_audit(
+                    session,
+                    user_id=user.id,
+                    action_code="attendance.self_checkin_vk",
+                    entity_name="attendance",
+                    entity_id=attendance_row.id,
+                    new_value={"event_id": event.id, "status_code": attendance_row.status_code, "source_code": "BOT"},
+                )
+            await session.commit()
+            label = "опоздание" if attendance_row.status_code == "LATE" else "присутствие"
+            await message.answer(f"{event.title}: {label} отмечено.", keyboard=main_keyboard(site_url))
+            return
+    await message.answer(
+        str(last_error) if last_error else "Сейчас нет события с открытым окном самоотметки.",
+        keyboard=main_keyboard(site_url),
+    )
+
+
+async def _handle_password_reset_state(message, user: User, state: dict, text: str, site_url: str | None) -> bool:
+    step = state.get("step")
+    if step == "reset_password_new":
+        try:
+            validate_password_policy(text, telegram_id=user.telegram_id)
+        except PasswordPolicyError as exc:
+            await message.answer(f"Пароль не подходит: {exc}\nВведите другой пароль или напишите «Отмена».")
+            return True
+        await _set_event_state(message.from_id, step="reset_password_confirm", password=text)
+        await message.answer("Повторите новый пароль.")
+        return True
+    if step == "reset_password_confirm":
+        if text != state.get("password"):
+            await _set_event_state(message.from_id, step="reset_password_new")
+            await message.answer("Пароли не совпали. Введите новый пароль заново.")
+            return True
+        settings = get_settings()
+        if not await consume_fixed_window_limit(
+            settings,
+            f"vk-password-reset:{message.from_id}",
+            limit=5,
+            window_seconds=600,
+        ):
+            await _clear_event_state(message.from_id)
+            await message.answer("Слишком много попыток. Повторите через 10 минут.", keyboard=main_keyboard(site_url))
+            return True
+        async with AsyncSessionLocal() as session:
+            db_user = await session.get(User, user.id)
+            if db_user is None:
+                await _clear_event_state(message.from_id)
+                return True
+            db_user.password_hash = hash_password(text)
+            db_user.password_set_at = datetime.now(timezone.utc)
+            db_user.updated_at = datetime.now(timezone.utc)
+            bump_token_version(db_user)
+            await record_audit(
+                session,
+                user_id=db_user.id,
+                action_code="auth.password.reset_vk",
+                entity_name="users",
+                entity_id=db_user.id,
+            )
+            await session.commit()
+        await delete_user_sessions(settings, user.id)
+        await _clear_event_state(message.from_id)
+        await message.answer("Пароль сайта обновлён.", keyboard=main_keyboard(site_url))
+        return True
+    return False
 
 
 def schedule_response_keyboard(events: list[tuple[int, ScheduleEvent]], site_url: str | None) -> str:
@@ -969,12 +1086,15 @@ def build_bot():
             return
 
         event_state = await _get_event_state(vk_id)
-        menu_commands = {"расписание", "уведомления", "профиль", "открыть сайт", "меню", "обращение", "отвязать"}
+        menu_commands = {"расписание", "отметиться", "уведомления", "профиль", "открыть сайт", "меню", "обращение", "сбросить пароль", "отвязать"}
         if event_state and event_state.get("step") == "awaiting_absence_comment":
             if low in menu_commands:
                 await _clear_event_state(vk_id)
             elif text:
                 await _save_absence_comment(message, user, event_state, text, site)
+                return
+        if event_state and str(event_state.get("step", "")).startswith("reset_password_"):
+            if await _handle_password_reset_state(message, user, event_state, text, site):
                 return
             else:
                 await message.answer("Напишите причину текстом или нажмите «Отмена».")
@@ -989,12 +1109,17 @@ def build_bot():
 
         if "расписан" in low:
             await _send_schedule(message, user, site)
+        elif "отмет" in low:
+            await _self_checkin_from_vk(message, user, site)
         elif "уведомл" in low:
             await message.answer(await _notifications_text(user), keyboard=main_keyboard(site))
         elif "профиль" in low:
             await message.answer(_profile_text(user), keyboard=main_keyboard(site))
         elif "обращ" in low:
             await _start_appeal(message, user)
+        elif "сброс" in low and "парол" in low:
+            await _set_event_state(vk_id, step="reset_password_new")
+            await message.answer("Введите новый пароль (минимум 8 символов). Для выхода напишите «Отмена».")
         elif "отвяз" in low:
             await _unlink_vk(message, user)
         elif "сайт" in low:
@@ -1021,7 +1146,7 @@ async def _idle() -> None:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO)
+    configure_json_logging()
     settings = get_settings()
     init_sentry(settings, service_name="vk_bot")
     start_heartbeat_thread(settings.vk_bot_heartbeat_path)

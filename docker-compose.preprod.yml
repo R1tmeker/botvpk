@@ -1,0 +1,58 @@
+services:
+  postgres:
+    environment:
+      POSTGRES_DB: botvpk_preprod
+      POSTGRES_USER: botvpk_preprod
+      POSTGRES_PASSWORD: preprod_only_password
+    env_file: !override
+      - .env.preprod.example
+    volumes: !override
+      - preprod_postgres_data:/var/lib/postgresql/data
+
+  redis:
+    volumes: !override
+      - preprod_redis_data:/data
+
+  clamav:
+    image: clamav/clamav:1.4
+    volumes:
+      - preprod_clamav_data:/var/lib/clamav
+    healthcheck:
+      test: ["CMD-SHELL", "clamdscan --ping 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 60s
+
+  backend:
+    env_file: !override
+      - .env.preprod.example
+    depends_on:
+      clamav:
+        condition: service_healthy
+    volumes: !override
+      - preprod_uploads_data:/app/uploads
+    command: >
+      sh -c "alembic -c alembic.ini upgrade head &&
+             python -m app.scripts.seed_preprod &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+  bot:
+    env_file: !override
+      - .env.preprod.example
+    volumes: !override
+      - preprod_uploads_data:/app/uploads
+
+  nginx:
+    ports: !override
+      - "127.0.0.1:8082:80"
+
+volumes:
+  preprod_postgres_data:
+    name: botvpk_preprod_postgres
+  preprod_redis_data:
+    name: botvpk_preprod_redis
+  preprod_clamav_data:
+    name: botvpk_preprod_clamav
+  preprod_uploads_data:
+    name: botvpk_preprod_uploads

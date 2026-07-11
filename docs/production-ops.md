@@ -7,7 +7,7 @@ Use `nginx/nginx.https.example.conf` as the production reverse proxy template.
 Required values:
 - `MINI_APP_URL=https://your-domain.example.com`
 - `API_CORS_ORIGINS=https://your-domain.example.com`
-- real `BOT_TOKEN`, `JWT_SECRET`, `SUPER_ADMIN_TG_ID`
+- real `BOT_TOKEN`, `SESSION_SECRET`, `TOTP_ENCRYPTION_KEY`, `LINK_CODE_PEPPER`, `SUPER_ADMIN_TG_ID`
 - valid Let's Encrypt certificates mounted to nginx
 
 Mini App must be opened from Telegram over HTTPS. Local `http://localhost:*` URLs are only for development.

@@ -3,7 +3,7 @@
 Система для ВПК: Telegram-бот, Telegram Mini App, FastAPI backend и PostgreSQL. Проект закрывает роли участников и командования: расписание, состав, посещаемость, нормативы с видео/файлами, уведомления, объявления, заявки кандидатов, обращения, отчёты и админку.
 
 ## Состав
-- `backend/` — FastAPI, aiogram 3, SQLAlchemy 2 async ORM, Alembic, PostgreSQL, JWT, проверка Telegram WebApp `initData`, аудит действий.
+- `backend/` — FastAPI, aiogram 3, SQLAlchemy 2 async ORM, Alembic, PostgreSQL, Redis cookie-сессии, проверка Telegram WebApp `initData`, аудит действий.
 - `frontend/` — React 18 + TypeScript + Vite Mini App в цветах ВПК «Звезда», с PNG-иконками и ролевыми разделами.
 - `bot/` и `main.py` — legacy CSV-бот, оставлен для совместимости с текущими локальными данными.
 - `backend/app/bot.py` — новый DB-first Telegram-бот для Docker Compose.
@@ -13,7 +13,8 @@
 ## Быстрый запуск новой версии
 ```powershell
 Copy-Item .env.example .env
-# Заполните .env реальными значениями BOT_TOKEN, JWT_SECRET, POSTGRES_PASSWORD, DATABASE_URL, SUPER_ADMIN_ID, MINI_APP_URL.
+# Заполните .env реальными значениями BOT_TOKEN, SESSION_SECRET, TOTP_ENCRYPTION_KEY,
+# LINK_CODE_PEPPER, POSTGRES_PASSWORD, DATABASE_URL, SUPER_ADMIN_ID и MINI_APP_URL.
 docker compose up --build
 ```
 

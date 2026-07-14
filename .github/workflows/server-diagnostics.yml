@@ -90,6 +90,12 @@ jobs:
           docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}\t{{.Status}}' | grep -E 'botvpk|nginx|cloud|caddy|traefik' || true
           echo "== botvpk nginx logs =="
           docker logs --tail 120 botvpk-nginx-1 2>&1 || true
+          echo "== botvpk nginx config test =="
+          docker run --rm \
+            --network botvpk_default \
+            -v "${current_dir}/nginx/nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro" \
+            -v "${deploy_path}/shared/maintenance:/var/www/maintenance:ro" \
+            nginx:1.29-alpine nginx -t 2>&1 || true
           echo "== botvpk nginx config file =="
           sed -n '1,180p' "${current_dir}/nginx/nginx.prod.conf" || true
           systemctl is-active nginx 2>/dev/null || true

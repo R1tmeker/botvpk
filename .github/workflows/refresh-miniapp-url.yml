@@ -53,7 +53,7 @@ jobs:
 
       - name: Upload tunnel maintenance tools
         run: |
-          tar -czf - ./scripts/notify-miniapp-url.sh ./systemd/vpk-tunnel.service |
+          tar -czf - ./scripts/notify-miniapp-url.sh ./systemd/vpk-tunnel.service ./nginx/nginx.prod.conf |
             $DEPLOY_SSH $DEPLOY_SSH_OPTS \
               ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
               "rm -rf /tmp/botvpk-refresh && mkdir -p /tmp/botvpk-refresh && tar -xzf - -C /tmp/botvpk-refresh"
@@ -74,6 +74,8 @@ jobs:
           install -d -m 755 "${deploy_path}/scripts"
           install -m 755 /tmp/botvpk-refresh/scripts/notify-miniapp-url.sh "${deploy_path}/scripts/notify-miniapp-url.sh"
           install -m 644 /tmp/botvpk-refresh/systemd/vpk-tunnel.service /etc/systemd/system/vpk-tunnel.service
+          install -d -m 755 "${deploy_path}/current/nginx"
+          install -m 644 /tmp/botvpk-refresh/nginx/nginx.prod.conf "${deploy_path}/current/nginx/nginx.prod.conf"
 
           if ! command -v cloudflared >/dev/null 2>&1; then
             arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"

@@ -9,5 +9,8 @@ printf '%s' "${health}" | grep -q '"status":"ok"'
 version="$(curl --fail --silent --show-error "${APP_URL}/version.json")"
 printf '%s' "${version}" | grep -q '"build_id"'
 
+index="$(curl --fail --silent --show-error "${APP_URL}/")"
+printf '%s' "${index}" | grep -q '<div id="root">'
+
 curl --fail --silent --show-error "${APP_URL}/nginx-health" | grep -q 'ok'
 printf '[smoke] API, frontend image and nginx are ready\n'

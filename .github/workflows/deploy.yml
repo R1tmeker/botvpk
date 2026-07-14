@@ -221,6 +221,16 @@ jobs:
           $DEPLOY_SSH $DEPLOY_SSH_OPTS
           ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}
           "mkdir -p '${{ secrets.DEPLOY_PATH }}/releases/${{ github.sha }}'"
+      - name: Ensure shared environment layout
+        run: >-
+          $DEPLOY_SSH $DEPLOY_SSH_OPTS
+          ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}
+          "mkdir -p '${{ secrets.DEPLOY_PATH }}/shared/maintenance' &&
+          if [ ! -f '${{ secrets.DEPLOY_PATH }}/shared/.env' ] && [ -f '${{ secrets.DEPLOY_PATH }}/.env' ]; then
+            cp '${{ secrets.DEPLOY_PATH }}/.env' '${{ secrets.DEPLOY_PATH }}/shared/.env';
+            chmod 600 '${{ secrets.DEPLOY_PATH }}/shared/.env';
+          fi &&
+          test -f '${{ secrets.DEPLOY_PATH }}/shared/.env'"
       - name: Upload release manifests
         run: |
           tar -czf - \

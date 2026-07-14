@@ -70,6 +70,7 @@ jobs:
 
           test -f "${env_file}"
           test -d "${deploy_path}/current"
+          rm -f "${shared_dir}/maintenance/enabled"
 
           install -d -m 755 "${deploy_path}/scripts"
           install -m 755 /tmp/botvpk-refresh/scripts/notify-miniapp-url.sh "${deploy_path}/scripts/notify-miniapp-url.sh"
@@ -123,5 +124,6 @@ jobs:
 
           curl -fsS "${url%/}/version.json" >/dev/null
           curl -fsS "${url%/}/health" >/dev/null
+          curl -fsS "${url%/}/" | grep -q '<div id="root">'
           printf 'MINI_APP_URL=%s\n' "$url"
           REMOTE

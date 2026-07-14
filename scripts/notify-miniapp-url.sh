@@ -178,13 +178,13 @@ curl -fsS -X POST "https://api.telegram.org/bot${BOT_TOKEN}/setChatMenuButton" \
 # Restart channel bots so both Telegram and VK pick up the new URL.
 if command -v docker >/dev/null 2>&1 && [[ -f "$COMPOSE_FILE" ]]; then
   services=(backend bot nginx)
-  compose up -d frontend nginx 2>/dev/null \
+  compose up -d frontend nginx \
     && echo "Frontend and nginx containers ensured" \
     || echo "Warning: failed to ensure frontend/nginx containers" >&2
   if compose config --services 2>/dev/null | grep -qx "vk_bot"; then
     services+=(vk_bot)
   fi
-  compose up -d --force-recreate "${services[@]}" 2>/dev/null \
+  compose up -d --force-recreate "${services[@]}" \
     && echo "Application containers recreated with fresh environment" \
     || echo "Warning: failed to recreate application containers" >&2
 fi

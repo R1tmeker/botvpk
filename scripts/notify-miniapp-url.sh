@@ -177,16 +177,15 @@ curl -fsS -X POST "https://api.telegram.org/bot${BOT_TOKEN}/setChatMenuButton" \
 
 # Restart channel bots so both Telegram and VK pick up the new URL.
 if command -v docker >/dev/null 2>&1 && [[ -f "$COMPOSE_FILE" ]]; then
-  services=(backend bot nginx)
-  compose up -d frontend nginx \
-    && echo "Frontend and nginx containers ensured" \
-    || echo "Warning: failed to ensure frontend/nginx containers" >&2
-  if compose config --services 2>/dev/null | grep -qx "vk_bot"; then
-    services+=(vk_bot)
-  fi
-  compose up -d --force-recreate "${services[@]}" \
-    && echo "Application containers recreated with fresh environment" \
-    || echo "Warning: failed to recreate application containers" >&2
+  compose start backend \
+    && echo "Backend container started" \
+    || compose up -d backend
+  compose up -d frontend \
+    && echo "Frontend container ensured" \
+    || echo "Warning: failed to ensure frontend container" >&2
+  compose up -d --no-deps --force-recreate nginx \
+    && echo "Nginx container recreated with fresh configuration" \
+    || echo "Warning: failed to recreate nginx container" >&2
 fi
 
 # Notify admin with a fresh WebApp button. Old Telegram reply keyboards keep the

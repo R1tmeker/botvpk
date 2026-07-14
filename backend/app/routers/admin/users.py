@@ -328,14 +328,16 @@ async def bulk_update_users(
 ) -> AdminUsersBulkResult:
     if current_user.user_id is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User profile is required.")
-    user_changes = payload.model_dump(
-        include={"role_code", "squad_id", "status_code"},
-        exclude_none=True,
-    )
-    preference_changes = payload.model_dump(
-        include={"telegram_enabled", "vk_enabled", "web_push_enabled", "in_app_enabled"},
-        exclude_none=True,
-    )
+    user_fields = {"role_code", "squad_id", "status_code"}
+    preference_fields = {"telegram_enabled", "vk_enabled", "web_push_enabled", "in_app_enabled"}
+    user_changes = {
+        field: getattr(payload, field)
+        for field in payload.model_fields_set & user_fields
+    }
+    preference_changes = {
+        field: getattr(payload, field)
+        for field in payload.model_fields_set & preference_fields
+    }
     if "role_code" in user_changes:
         if user_changes["role_code"] not in ROLE_LEVELS:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown role_code.")
@@ -344,7 +346,11 @@ async def bulk_update_users(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot assign this role.")
     if "status_code" in user_changes and user_changes["status_code"] not in {"ACTIVE", "ARCHIVED"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown status_code.")
-    if "squad_id" in user_changes and await session.get(Squad, user_changes["squad_id"]) is None:
+    if (
+        "squad_id" in user_changes
+        and user_changes["squad_id"] is not None
+        and await session.get(Squad, user_changes["squad_id"]) is None
+    ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Squad not found.")
 
     users = list(

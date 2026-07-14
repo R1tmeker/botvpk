@@ -35,6 +35,13 @@ class DashboardBootstrap(BaseModel):
     action_items: list[ActionItem]
 
 
+class ActionItemExecutionResult(BaseModel):
+    item_code: str
+    action_code: str
+    affected: int
+    detail: str
+
+
 class CheckInWindow(BaseModel):
     opens_at: datetime
     closes_at: datetime
@@ -151,7 +158,11 @@ class AdminUsersBulkUpdate(BaseModel):
 
     @model_validator(mode="after")
     def validate_changes(self):
-        changes = self.model_dump(exclude={"user_ids"}, exclude_none=True)
+        changes = {
+            field: getattr(self, field)
+            for field in self.model_fields_set
+            if field != "user_ids"
+        }
         if not changes:
             raise ValueError("At least one bulk change is required")
         if len(self.user_ids) != len(set(self.user_ids)):

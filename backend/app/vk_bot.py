@@ -34,8 +34,7 @@ from .utils.password import hash_password, verify_password
 
 logger = logging.getLogger(__name__)
 
-# Short-lived in-memory login-dialog state per VK user.
-# Lost on restart — acceptable for a quick two-message login.
+# Redis-backed dialog state in production; the in-memory fallback is for local development only.
 _vk_login_state: dict[int, dict] = {}
 _vk_event_state: dict[int, dict] = {}
 _redis_client: Redis | None = None

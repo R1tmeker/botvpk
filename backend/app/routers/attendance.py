@@ -18,7 +18,7 @@ from ..schemas.core import (
     AttendanceUpdate,
     ReportSummary,
 )
-from ..services.attendance import sync_automatic_grade
+from ..services.attendance import BulkAttendanceChange, bulk_mark_attendance, sync_automatic_grade
 from ..services.realtime import publish_realtime_event
 from ..utils.audit import model_snapshot, record_audit, utcnow
 
@@ -234,55 +234,12 @@ async def mark_event_attendance(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Duplicate user_id in attendance items.")
     await ensure_can_manage_attendance(session=session, current_user=current_user, event=event, user_ids=user_ids)
 
-    existing = {
-        item.user_id: item
-        for item in (
-            await session.scalars(select(Attendance).where(Attendance.event_id == event_id, Attendance.user_id.in_(user_ids)))
-        ).all()
-    }
-    saved: list[Attendance] = []
-    now = utcnow()
-    for item in payload.items:
-        attendance = existing.get(item.user_id)
-        old_status = attendance.status_code if attendance else None
-        old_source = attendance.source_code if attendance else None
-        if attendance is None:
-            attendance = Attendance(event_id=event_id, user_id=item.user_id)
-            session.add(attendance)
-        attendance.status_code = item.status_code
-        attendance.absence_reason_id = item.absence_reason_id
-        attendance.custom_reason = item.custom_reason
-        attendance.marked_by_user_id = marker_id
-        attendance.marked_at = now
-        attendance.source_code = "COMMANDER"
-        attendance.is_draft = item.is_draft
-        attendance.updated_at = now
-        saved.append(attendance)
-        await session.flush()
-        await sync_automatic_grade(session=session, event=event, attendance=attendance, actor_id=marker_id)
-        session.add(
-            AttendanceHistory(
-                attendance_id=attendance.id,
-                old_status=old_status,
-                new_status=item.status_code,
-                old_source_code=old_source,
-                new_source_code="COMMANDER",
-                changed_by_id=marker_id,
-                change_reason=item.comment,
-            )
-        )
-
-    await record_audit(
+    saved = await bulk_mark_attendance(
         session,
-        user_id=marker_id,
-        action_code="attendance.mark",
-        entity_name="schedule_events",
-        entity_id=event_id,
-        new_value={"items": [item.model_dump(mode="json") for item in payload.items]},
+        event=event,
+        actor_id=marker_id,
+        changes=[BulkAttendanceChange(**item.model_dump()) for item in payload.items],
     )
-    await session.commit()
-    for attendance in saved:
-        await session.refresh(attendance)
     await publish_realtime_event(
         settings,
         event_type="attendance.updated",

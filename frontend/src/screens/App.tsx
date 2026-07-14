@@ -33,6 +33,7 @@ import {
   useAdminApplications,
   useAdminAudit,
   useAdminAuditUndo,
+  useAdminBulkUpdateUsers,
   useAdminImportCommit,
   useAdminImportPreview,
   useAdminMenu,
@@ -134,6 +135,7 @@ import {
   useExportAttendanceXLSXviaBot,
   useExportAttendanceMatrix,
   useExportXLSXviaBot,
+  useExecuteActionItem,
   useExportReportViaBot,
   useGetFileBlob,
   useSendFileToBotDM,
@@ -1011,6 +1013,7 @@ export function App({ webApp }: Props) {
   const adminSquads = useAdminSquads(hasToken && level >= 6 && onView("admin"));
   const adminAudit = useAdminAudit(hasToken && level >= 8 && onView("admin"));
   const actionItems = dashboardBootstrap.data?.action_items ?? [];
+  const executeActionItem = useExecuteActionItem();
 
   const hapticSuccess = () => { webApp.HapticFeedback?.notificationOccurred?.("success"); };
   const hapticError = () => { webApp.HapticFeedback?.notificationOccurred?.("error"); };
@@ -1343,6 +1346,18 @@ export function App({ webApp }: Props) {
               streak={myStreak.data ?? null}
               activityFeed={activityFeed.data ?? []}
               actionItems={actionItems}
+              onActionItem={(itemCode, actionCode) => {
+                const destructive = actionCode === "mark_all_present";
+                if (destructive && !window.confirm("Отметить присутствующими всех участников в незакрытых событиях?")) return;
+                executeActionItem.mutate(
+                  { itemCode, actionCode },
+                  {
+                    onSuccess: (result) => toast(result.detail, "success"),
+                    onError: () => toast("Массовое действие не выполнено", "error"),
+                  },
+                );
+              }}
+              isActionPending={executeActionItem.isPending}
               onSaveSettings={(items) =>
                 updateDashboardSettings.mutate(items, {
                   onSuccess: () => toast("Главная сохранена", "success"),
@@ -1789,6 +1804,16 @@ function ResponseButtons({
 type StreakData = { current_streak: number; best_streak: number; total_events: number; present_count: number; percent: number } | null;
 type ActivityItem = { type: string; text: string; created_at: string };
 
+function actionItemLabel(actionCode: string): string {
+  return {
+    send_reminder: "Напомнить всем",
+    assign_reviewer: "Взять в работу",
+    assign: "Назначить на себя",
+    mark_all_present: "Все присутствовали",
+    retry_delivery: "Повторить доставку",
+  }[actionCode] ?? actionCode;
+}
+
 function Dashboard({
   level,
   schedule,
@@ -1800,6 +1825,8 @@ function Dashboard({
   streak,
   activityFeed,
   actionItems,
+  onActionItem,
+  isActionPending,
   onSaveSettings,
   onResetSettings,
   isSavingSettings,
@@ -1816,6 +1843,8 @@ function Dashboard({
   streak: StreakData;
   activityFeed: ActivityItem[];
   actionItems: ActionItem[];
+  onActionItem: (itemCode: string, actionCode: string) => void;
+  isActionPending: boolean;
   onSaveSettings: (items: Array<{ block_code: string; sort_order: number; is_hidden: boolean; is_pinned: boolean; view_mode_code?: string | null }>) => void;
   onResetSettings: () => void;
   isSavingSettings: boolean;
@@ -1852,18 +1881,29 @@ function Dashboard({
           </div>
           <div className={styles.actionCenterList}>
             {actionItems.map((item) => (
-              <button
-                key={item.code}
-                type="button"
-                data-severity={item.severity}
-                onClick={() => navigate(item.deep_link)}
-              >
-                <span className={styles.actionCenterCount}>{item.count}</span>
-                <span>
-                  <strong>{item.title}</strong>
-                  <small>{item.description}</small>
-                </span>
-              </button>
+              <article key={item.code} className={styles.actionCenterItem} data-severity={item.severity}>
+                <button type="button" className={styles.actionCenterLink} onClick={() => navigate(item.deep_link)}>
+                  <span className={styles.actionCenterCount}>{item.count}</span>
+                  <span>
+                    <strong>{item.title}</strong>
+                    <small>{item.description}</small>
+                  </span>
+                </button>
+                {item.bulk_actions.length > 0 && (
+                  <div className={styles.actionCenterActions}>
+                    {item.bulk_actions.map((actionCode) => (
+                      <button
+                        key={actionCode}
+                        type="button"
+                        disabled={isActionPending}
+                        onClick={() => onActionItem(item.code, actionCode)}
+                      >
+                        {actionItemLabel(actionCode)}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </article>
             ))}
           </div>
         </section>
@@ -2660,6 +2700,8 @@ function AttendanceView({
   const [tab, setTab] = useState<"chart" | "calendar" | "history" | "journal">("chart");
   const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
   const [draftAttendance, setDraftAttendance] = useState<Record<number, string>>({});
+  const [journalSearch, setJournalSearch] = useState("");
+  const [journalStatus, setJournalStatus] = useState("ALL");
   const exportAttendanceCSV = useExportAttendanceCSVviaBot();
   const exportAttendanceXLSX = useExportAttendanceXLSXviaBot();
   const exportAttendanceMatrix = useExportAttendanceMatrix();
@@ -2680,6 +2722,14 @@ function AttendanceView({
       })
     : [];
   const existingAttendance = new Map((eventAttendance.data ?? []).map((item) => [item.user_id, item.status_code]));
+  const visibleTargetUsers = targetUsers.filter((user) => {
+    const searchValue = journalSearch.trim().toLocaleLowerCase("ru-RU");
+    if (searchValue && !`${user.full_name} ${user.username ?? ""}`.toLocaleLowerCase("ru-RU").includes(searchValue)) {
+      return false;
+    }
+    const value = draftAttendance[user.id as number] ?? existingAttendance.get(user.id as number) ?? "NOT_MARKED";
+    return journalStatus === "ALL" || value === journalStatus;
+  });
   const eventTitle = (eventId: number) => eventMap.get(eventId) ?? "Событие вне текущего расписания";
 
   const statusLabels: Record<string, string> = {
@@ -2701,7 +2751,26 @@ function AttendanceView({
 
   useEffect(() => {
     setDraftAttendance({});
+    setJournalSearch("");
+    setJournalStatus("ALL");
   }, [selectedEventId]);
+
+  const handleAttendanceKey = (event: React.KeyboardEvent<HTMLSelectElement>, userId: number) => {
+    const quickStatuses: Record<string, string> = { p: "PRESENT", a: "ABSENT", l: "LATE", n: "NOT_MARKED" };
+    const quick = quickStatuses[event.key.toLocaleLowerCase("en-US")];
+    if (quick) {
+      event.preventDefault();
+      setDraftAttendance((previous) => ({ ...previous, [userId]: quick }));
+      return;
+    }
+    if (!['ArrowDown', 'ArrowUp'].includes(event.key) || event.altKey) return;
+    event.preventDefault();
+    const ids = visibleTargetUsers.map((user) => user.id as number);
+    const current = ids.indexOf(userId);
+    const next = event.key === "ArrowDown" ? current + 1 : current - 1;
+    if (next < 0 || next >= ids.length) return;
+    document.querySelector<HTMLSelectElement>(`select[data-attendance-user="${ids[next]}"]`)?.focus();
+  };
   const statusColors: Record<string, string> = {
     PRESENT: "#27ae60", ABSENT: "#e74c3c", LATE: "#f39c12",
     EXCUSED: "#3498db", SICK: "#9b59b6", RELEASED: "#95a5a6", NOT_MARKED: "#bdc3c7",
@@ -2880,7 +2949,24 @@ function AttendanceView({
           <div className={styles.list}>
             {!hasSelectedEvent && <Empty text="Выберите событие для отметки" />}
             {hasSelectedEvent && targetUsers.length === 0 && <Empty text="Нет участников для отметки" />}
-            {targetUsers.map((user) => {
+            {hasSelectedEvent && targetUsers.length > 0 && (
+              <div className={styles.attendanceFilters}>
+                <input
+                  type="search"
+                  value={journalSearch}
+                  onChange={(event) => setJournalSearch(event.target.value)}
+                  placeholder="Поиск по имени или username"
+                  aria-label="Поиск участника в ведомости"
+                />
+                <select value={journalStatus} onChange={(event) => setJournalStatus(event.target.value)} aria-label="Фильтр статуса явки">
+                  <option value="ALL">Все статусы</option>
+                  {statusOptions.map((status) => <option key={status} value={status}>{statusLabels[status]}</option>)}
+                </select>
+                <small>Клавиши P/A/L/N меняют статус, ↑/↓ переходят между строками.</small>
+              </div>
+            )}
+            {hasSelectedEvent && targetUsers.length > 0 && visibleTargetUsers.length === 0 && <Empty text="По фильтру никого не найдено" />}
+            {visibleTargetUsers.map((user) => {
               const userId = user.id as number;
               const value = draftAttendance[userId] ?? existingAttendance.get(userId) ?? "NOT_MARKED";
               return (
@@ -2892,8 +2978,11 @@ function AttendanceView({
                     </span>
                   </div>
                   <select
+                    data-attendance-user={userId}
+                    aria-label={`Статус явки: ${user.full_name}`}
                     value={value}
                     onChange={(event) => setDraftAttendance((prev) => ({ ...prev, [userId]: event.target.value }))}
+                    onKeyDown={(event) => handleAttendanceKey(event, userId)}
                   >
                     {statusOptions.map((status) => (
                       <option key={status} value={status}>{statusLabels[status] ?? status}</option>
@@ -4770,6 +4859,16 @@ function AdminView({
   const [newSquadName, setNewSquadName] = useState("");
   const [squadNames, setSquadNames] = useState<Record<number, string>>({});
   const [userSearch, setUserSearch] = useState("");
+  const [selectedUserIds, setSelectedUserIds] = useState<Set<number>>(new Set());
+  const [bulkUserChanges, setBulkUserChanges] = useState({
+    role_code: "",
+    squad_id: "",
+    status_code: "",
+    telegram_enabled: "",
+    vk_enabled: "",
+    web_push_enabled: "",
+    in_app_enabled: "",
+  });
   const [appStatusFilter, setAppStatusFilter] = useState("");
   const [logFilter, setLogFilter] = useState({ action_code: "", entity_name: "" });
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
@@ -4827,6 +4926,7 @@ function AdminView({
   const updatePromo = useUpdatePromoBlock();
   const deletePromo = useDeletePromoBlock();
   const updateUser = useAdminUpdateUser();
+  const bulkUpdateUsers = useAdminBulkUpdateUsers();
   const deactivateUser = useDeactivateUser();
   const createSquad = useCreateSquad();
   const updateSquad = useUpdateSquad();
@@ -5149,6 +5249,62 @@ function AdminView({
                   </div>
                 </details>
               </div>
+              {level >= roleLevels.ADMIN && (
+                <div className={styles.bulkUserToolbar}>
+                  <div className={styles.bulkUserHeading}>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={filteredUsers.filter((user) => typeof user.id === "number").length > 0 && filteredUsers.filter((user) => typeof user.id === "number").every((user) => selectedUserIds.has(user.id as number))}
+                        onChange={(event) => {
+                          const visibleIds = filteredUsers.flatMap((user) => typeof user.id === "number" ? [user.id] : []);
+                          setSelectedUserIds((previous) => {
+                            const next = new Set(previous);
+                            for (const id of visibleIds) event.target.checked ? next.add(id) : next.delete(id);
+                            return next;
+                          });
+                        }}
+                      />
+                      Выбрать показанных
+                    </label>
+                    <strong>{selectedUserIds.size} выбрано</strong>
+                  </div>
+                  {selectedUserIds.size > 0 && (
+                    <div className={styles.bulkUserGrid}>
+                      <label><span>Роль</span><select value={bulkUserChanges.role_code} onChange={(event) => setBulkUserChanges((value) => ({ ...value, role_code: event.target.value }))}><option value="">Не менять</option>{roleOptions.map((role) => <option key={role} value={role}>{roleLabels[role]}</option>)}</select></label>
+                      <label><span>Отделение</span><select value={bulkUserChanges.squad_id} onChange={(event) => setBulkUserChanges((value) => ({ ...value, squad_id: event.target.value }))}><option value="">Не менять</option><option value="NONE">Без отделения</option>{squads.map((squad) => <option key={squad.id} value={squad.id}>{squad.name}</option>)}</select></label>
+                      <label><span>Статус</span><select value={bulkUserChanges.status_code} onChange={(event) => setBulkUserChanges((value) => ({ ...value, status_code: event.target.value }))}><option value="">Не менять</option><option value="ACTIVE">Активен</option><option value="ARCHIVED">В архиве</option></select></label>
+                      {(["telegram_enabled", "vk_enabled", "web_push_enabled", "in_app_enabled"] as const).map((field) => (
+                        <label key={field}><span>{{ telegram_enabled: "Telegram", vk_enabled: "VK", web_push_enabled: "Web Push", in_app_enabled: "В приложении" }[field]}</span><select value={bulkUserChanges[field]} onChange={(event) => setBulkUserChanges((value) => ({ ...value, [field]: event.target.value }))}><option value="">Не менять</option><option value="true">Включить</option><option value="false">Отключить</option></select></label>
+                      ))}
+                      <button
+                        type="button"
+                        disabled={bulkUpdateUsers.isPending || Object.values(bulkUserChanges).every((value) => value === "")}
+                        onClick={() => {
+                          if (!window.confirm(`Применить изменения к ${selectedUserIds.size} пользователям?`)) return;
+                          const payload: Parameters<typeof bulkUpdateUsers.mutate>[0] = { user_ids: [...selectedUserIds] };
+                          if (bulkUserChanges.role_code) payload.role_code = bulkUserChanges.role_code;
+                          if (bulkUserChanges.squad_id) payload.squad_id = bulkUserChanges.squad_id === "NONE" ? null : Number(bulkUserChanges.squad_id);
+                          if (bulkUserChanges.status_code) payload.status_code = bulkUserChanges.status_code;
+                          for (const field of ["telegram_enabled", "vk_enabled", "web_push_enabled", "in_app_enabled"] as const) {
+                            if (bulkUserChanges[field]) payload[field] = bulkUserChanges[field] === "true";
+                          }
+                          bulkUpdateUsers.mutate(payload, {
+                            onSuccess: (result) => {
+                              toast(`Обновлено пользователей: ${result.affected}`, "success");
+                              setSelectedUserIds(new Set());
+                              setBulkUserChanges({ role_code: "", squad_id: "", status_code: "", telegram_enabled: "", vk_enabled: "", web_push_enabled: "", in_app_enabled: "" });
+                            },
+                            onError: () => toast("Массовое изменение не выполнено", "error"),
+                          });
+                        }}
+                      >
+                        {bulkUpdateUsers.isPending ? "Применяем…" : "Применить массово"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
               {filteredUsers.length === 0 ? <Empty text="Пользователей нет" /> : filteredUsers.map((user) => {
                 const userLevel = roleLevels[user.role_code as RoleCode] ?? 0;
                 const canDeactivate =
@@ -5159,6 +5315,20 @@ function AdminView({
                   (level >= roleLevels.SUPER_ADMIN || userLevel < level);
                 return (
                 <div className={`${styles.memberRow} ${styles.adminUserRow}`} key={user.id ?? user.telegram_id}>
+                  {level >= roleLevels.ADMIN && typeof user.id === "number" && (
+                    <label className={styles.userSelection}>
+                      <input
+                        type="checkbox"
+                        checked={selectedUserIds.has(user.id)}
+                        onChange={(event) => setSelectedUserIds((previous) => {
+                          const next = new Set(previous);
+                          event.target.checked ? next.add(user.id as number) : next.delete(user.id as number);
+                          return next;
+                        })}
+                      />
+                      <span className="sr-only">Выбрать {user.full_name}</span>
+                    </label>
+                  )}
                   <div>
                     <strong>{user.full_name}</strong>
                     <span>{squadMap.get(user.squad_id ?? -1) ?? "без отделения"}{user.username ? ` · @${user.username}` : ""} · {codeLabel(user.status_code)}</span>

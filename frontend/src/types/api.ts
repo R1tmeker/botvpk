@@ -141,9 +141,12 @@ export type AttendanceRecord = {
   event_id: number;
   user_id: number;
   status_code: string;
+  absence_reason_id: number | null;
   custom_reason: string | null;
+  marked_by_user_id: number | null;
   marked_at: string | null;
   source_code: "SELF" | "COMMANDER" | "BOT" | string;
+  is_draft: boolean;
   updated_at: string | null;
 };
 
@@ -210,6 +213,18 @@ export type ActionItem = {
   due_at: string | null;
   deep_link: string;
   bulk_actions: string[];
+};
+
+export type ActionItemExecutionResult = {
+  item_code: string;
+  action_code: string;
+  affected: number;
+  detail: string;
+};
+
+export type AdminUsersBulkResult = {
+  affected: number;
+  audit_batch_id: number;
 };
 
 export type NotificationPreference = {

@@ -42,10 +42,10 @@ def validate_password_policy(password: str, *, telegram_id: int | None = None) -
     lowered = value.casefold()
     if len(value) < 8:
         raise PasswordPolicyError("Пароль должен быть не короче 8 символов.")
-    if value.isdigit():
-        raise PasswordPolicyError("Пароль не должен состоять только из цифр.")
     if telegram_id is not None and value == str(telegram_id):
         raise PasswordPolicyError("Пароль не должен совпадать с Telegram ID.")
+    if value.isdigit():
+        raise PasswordPolicyError("Пароль не должен состоять только из цифр.")
     if not any(ch.isalpha() for ch in value) or not any(ch.isdigit() for ch in value):
         raise PasswordPolicyError("Пароль должен содержать хотя бы одну букву и одну цифру.")
     if lowered in COMMON_PASSWORDS:

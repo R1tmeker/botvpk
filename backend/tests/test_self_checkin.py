@@ -3,7 +3,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services.attendance import SelfCheckInError, resolve_checkin_window, self_checkin_status
+from app.services.attendance import (
+    BulkAttendanceChange,
+    SelfCheckInError,
+    bulk_mark_attendance,
+    ensure_utc,
+    resolve_checkin_window,
+    self_checkin_status,
+)
 
 
 def event_at(start: datetime, **overrides):
@@ -57,3 +64,25 @@ def test_self_checkin_rejects_disabled_or_cancelled_event() -> None:
 
     assert disabled.value.code == "disabled"
     assert cancelled.value.code == "cancelled"
+
+
+def test_ensure_utc_normalizes_naive_and_aware_values() -> None:
+    naive = datetime(2026, 7, 10, 10, 0)
+    assert ensure_utc(naive).tzinfo == timezone.utc
+    plus_three = naive.replace(tzinfo=timezone(timedelta(hours=3)))
+    assert ensure_utc(plus_three) == datetime(2026, 7, 10, 7, 0, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_bulk_attendance_rejects_empty_and_duplicate_batches_before_db_access() -> None:
+    session = SimpleNamespace()
+    event = SimpleNamespace(id=1)
+    with pytest.raises(ValueError, match="No attendance"):
+        await bulk_mark_attendance(session, event=event, changes=[], actor_id=1)
+    with pytest.raises(ValueError, match="Duplicate"):
+        await bulk_mark_attendance(
+            session,
+            event=event,
+            changes=[BulkAttendanceChange(user_id=2, status_code="PRESENT")] * 2,
+            actor_id=1,
+        )

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import Settings, get_settings
 from ..database import get_db_session
 from ..dependencies.auth import CurrentUser, require_role
 from ..models import (
@@ -23,7 +24,9 @@ from ..models import (
 )
 from ..roles import CONFIRMED_ROLES, RoleLevel
 from ..schemas.core import DashboardSettingRead, DashboardSettingsUpdate, MessageResponse
-from ..schemas.product import ActionItem, DashboardBootstrap
+from ..schemas.product import ActionItem, ActionItemExecutionResult, DashboardBootstrap
+from ..services.action_center import ActionCenterError, execute_action_item
+from ..services.realtime import publish_realtime_event
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -303,3 +306,39 @@ async def dashboard_bootstrap(
         else []
     )
     return DashboardBootstrap(settings=settings, promo=promo, action_items=action_items)
+
+
+@router.post(
+    "/action-items/{item_code}/actions/{action_code}",
+    response_model=ActionItemExecutionResult,
+)
+async def execute_dashboard_action(
+    item_code: str,
+    action_code: str,
+    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_SQUAD_COMMANDER)),
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> ActionItemExecutionResult:
+    actor_id = require_profile(current_user)
+    try:
+        affected = await execute_action_item(
+            session,
+            item_code=item_code,
+            action_code=action_code,
+            actor_id=actor_id,
+            role_level=current_user.role_level,
+            squad_id=current_user.squad_id,
+        )
+    except ActionCenterError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    await publish_realtime_event(
+        settings,
+        event_type="dashboard_action_executed",
+        query_keys=["dashboard", "attendance", "notifications", "normatives", "appeals"],
+    )
+    return ActionItemExecutionResult(
+        item_code=item_code,
+        action_code=action_code,
+        affected=affected,
+        detail=f"Обработано объектов: {affected}",
+    )

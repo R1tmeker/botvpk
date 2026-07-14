@@ -146,6 +146,7 @@ import {
 } from "../api/queries";
 import { api } from "../api/client";
 import { canStoreFile, deleteOfflineValue, loadOfflineValue, saveOfflineValue } from "../offline/storage";
+import { ActionCenter } from "../features/dashboard/ActionCenter";
 import { LoginScreen } from "./LoginScreen";
 import {
   CalendarSection,
@@ -1804,16 +1805,6 @@ function ResponseButtons({
 type StreakData = { current_streak: number; best_streak: number; total_events: number; present_count: number; percent: number } | null;
 type ActivityItem = { type: string; text: string; created_at: string };
 
-function actionItemLabel(actionCode: string): string {
-  return {
-    send_reminder: "Напомнить всем",
-    assign_reviewer: "Взять в работу",
-    assign: "Назначить на себя",
-    mark_all_present: "Все присутствовали",
-    retry_delivery: "Повторить доставку",
-  }[actionCode] ?? actionCode;
-}
-
 function Dashboard({
   level,
   schedule,
@@ -1873,40 +1864,13 @@ function Dashboard({
         <h2>Сводка</h2>
         <span>{level >= 4 ? "командирский доступ" : "личный доступ"}</span>
       </div>
-      {level >= 4 && actionItems.length > 0 && (
-        <section className={styles.actionCenter} aria-labelledby="action-center-title">
-          <div className={styles.actionCenterHeader}>
-            <h3 id="action-center-title">Требует действия</h3>
-            <span>{actionItems.reduce((sum, item) => sum + item.count, 0)}</span>
-          </div>
-          <div className={styles.actionCenterList}>
-            {actionItems.map((item) => (
-              <article key={item.code} className={styles.actionCenterItem} data-severity={item.severity}>
-                <button type="button" className={styles.actionCenterLink} onClick={() => navigate(item.deep_link)}>
-                  <span className={styles.actionCenterCount}>{item.count}</span>
-                  <span>
-                    <strong>{item.title}</strong>
-                    <small>{item.description}</small>
-                  </span>
-                </button>
-                {item.bulk_actions.length > 0 && (
-                  <div className={styles.actionCenterActions}>
-                    {item.bulk_actions.map((actionCode) => (
-                      <button
-                        key={actionCode}
-                        type="button"
-                        disabled={isActionPending}
-                        onClick={() => onActionItem(item.code, actionCode)}
-                      >
-                        {actionItemLabel(actionCode)}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </article>
-            ))}
-          </div>
-        </section>
+      {level >= 4 && (
+        <ActionCenter
+          items={actionItems}
+          isPending={isActionPending}
+          onOpen={navigate}
+          onAction={onActionItem}
+        />
       )}
       <div className={styles.dashboardStack}>
         {orderedBlocks.map((block) => {

@@ -131,6 +131,9 @@ for _ in $(seq 1 30); do
 done
 curl --fail --silent --show-error http://127.0.0.1:8081/readiness >/dev/null
 
+log "Disabling maintenance mode"
+rm -f "${MAINTENANCE_FLAG}"
+
 if [[ -x "${RELEASE_DIR}/scripts/release-smoke.sh" ]]; then
   APP_URL="http://127.0.0.1:8081" "${RELEASE_DIR}/scripts/release-smoke.sh"
 fi
@@ -138,7 +141,6 @@ fi
 log "Publishing release"
 ln -sfn "${RELEASE_DIR}" "${CURRENT_LINK}"
 printf '%s\n' "${RELEASE_VERSION}" > "${SHARED_DIR}/current_release"
-rm -f "${MAINTENANCE_FLAG}"
 trap - ERR
 
 log "Release ${RELEASE_VERSION} completed successfully"

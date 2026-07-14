@@ -62,9 +62,15 @@ jobs:
           fi
 
           echo "== local app probes =="
+          curl -sS -i http://127.0.0.1:8081/ | sed -n '1,30p' || true
+          curl -sS -i http://127.0.0.1:8081/index.html | sed -n '1,30p' || true
           curl -sS -i http://127.0.0.1:8081/version.json | sed -n '1,20p' || true
           curl -sS -i http://127.0.0.1:8081/health | sed -n '1,20p' || true
           curl -sS -i http://127.0.0.1:8081/nginx-health | sed -n '1,20p' || true
+
+          echo "== frontend container files =="
+          docker exec botvpk-frontend-1 sh -ceu 'pwd; ls -la /usr/share/nginx/html; find /usr/share/nginx/html -maxdepth 2 -type f | sort | sed -n "1,80p"' || true
+          docker exec botvpk-frontend-1 sh -ceu 'nginx -T 2>/dev/null | sed -n "1,120p"' || true
 
           echo "== listening ports =="
           ss -ltnp 2>/dev/null | grep -E ':(80|443|8081|5173|5178)\b' || true

@@ -54,7 +54,11 @@ jobs:
           echo "== compose ps =="
           if [ -d "${current_dir}" ]; then
             cd "${current_dir}"
-            docker compose --project-name botvpk --env-file "${env_file}" -f docker-compose.prod.yml ps
+            release_version="$(test -f "${deploy_path}/shared/current_release" && cat "${deploy_path}/shared/current_release" || true)"
+            IMAGE_PREFIX=ghcr.io/r1tmeker/botvpk \
+            RELEASE_VERSION="${release_version}" \
+            APP_SHARED_DIR="${deploy_path}/shared" \
+              docker compose --project-name botvpk --env-file "${env_file}" -f docker-compose.prod.yml ps || true
           fi
 
           echo "== local app probes =="

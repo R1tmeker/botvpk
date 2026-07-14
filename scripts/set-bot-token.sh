@@ -8,9 +8,24 @@ set -euo pipefail
 # or:
 #   BOT_TOKEN_NEW='123456:ABC...' /opt/botvpk/scripts/set-bot-token.sh
 
-APP_DIR="${APP_DIR:-/opt/botvpk}"
-ENV_FILE="${ENV_FILE:-$APP_DIR/.env}"
-COMPOSE_FILE="${COMPOSE_FILE:-$APP_DIR/docker-compose.prod.yml}"
+APP_ROOT="${APP_ROOT:-${APP_DIR:-/opt/botvpk}}"
+SHARED_DIR="${SHARED_DIR:-$APP_ROOT/shared}"
+CURRENT_DIR="${CURRENT_DIR:-$APP_ROOT/current}"
+if [[ -z "${ENV_FILE:-}" ]]; then
+  if [[ -f "$SHARED_DIR/.env" ]]; then
+    ENV_FILE="$SHARED_DIR/.env"
+  else
+    ENV_FILE="$APP_ROOT/.env"
+  fi
+fi
+if [[ -z "${COMPOSE_FILE:-}" ]]; then
+  if [[ -f "$CURRENT_DIR/docker-compose.prod.yml" ]]; then
+    COMPOSE_FILE="$CURRENT_DIR/docker-compose.prod.yml"
+  else
+    COMPOSE_FILE="$APP_ROOT/docker-compose.prod.yml"
+  fi
+fi
+COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-botvpk}"
 NEW_TOKEN="${1:-${BOT_TOKEN_NEW:-}}"
 
 if [[ -z "$NEW_TOKEN" ]]; then
@@ -45,7 +60,24 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
-cd "$APP_DIR"
+compose() {
+  local release_version image_prefix compose_dir
+  release_version="${RELEASE_VERSION:-$(cat "$SHARED_DIR/current_release" 2>/dev/null | tr -d '[:space:]' || true)}"
+  image_prefix="${IMAGE_PREFIX:-$(grep -E '^IMAGE_PREFIX=' "$ENV_FILE" 2>/dev/null | tail -n1 | cut -d= -f2- || true)}"
+  image_prefix="${image_prefix:-ghcr.io/r1tmeker/botvpk}"
+  compose_dir="$(dirname "$COMPOSE_FILE")"
+  if [[ -z "$release_version" ]]; then
+    echo "Release version was not found in $SHARED_DIR/current_release" >&2
+    return 1
+  fi
+  (
+    cd "$compose_dir"
+    IMAGE_PREFIX="$image_prefix" \
+    RELEASE_VERSION="$release_version" \
+    APP_SHARED_DIR="$SHARED_DIR" \
+      docker compose --project-name "$COMPOSE_PROJECT_NAME" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
+  )
+}
 
 echo "[token] Checking token with Telegram getMe..."
 GET_ME_JSON="$(curl -fsS "https://api.telegram.org/bot${NEW_TOKEN}/getMe")"
@@ -99,12 +131,12 @@ mv "$TMP_FILE" "$ENV_FILE"
 chmod 600 "$ENV_FILE" 2>/dev/null || true
 
 echo "[token] BOT_TOKEN updated in $ENV_FILE; backup: ${ENV_FILE}.bak"
-echo "[token] Rebuilding backend and bot containers..."
-docker compose -f "$COMPOSE_FILE" up -d --build backend bot
+echo "[token] Recreating backend and bot containers..."
+compose up -d --force-recreate backend bot
 
-if [[ -x "$APP_DIR/scripts/notify-miniapp-url.sh" ]]; then
+if [[ -x "$APP_ROOT/scripts/notify-miniapp-url.sh" ]]; then
   echo "[token] Refreshing Telegram Mini App URL and button..."
-  "$APP_DIR/scripts/notify-miniapp-url.sh" --force || echo "Warning: failed to refresh Telegram Mini App URL" >&2
+  APP_ROOT="$APP_ROOT" "$APP_ROOT/scripts/notify-miniapp-url.sh" --force || echo "Warning: failed to refresh Telegram Mini App URL" >&2
 fi
 
 echo "[token] Done. Open Mini App from the fresh bot button."

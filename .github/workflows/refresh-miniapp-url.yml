@@ -1,0 +1,125 @@
+name: Refresh Mini App URL
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure SSH credentials
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+        run: |
+          install -d -m 700 ~/.ssh
+          ssh_opts="-o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+            chmod 600 ~/.ssh/known_hosts
+            ssh_opts="$ssh_opts -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+          elif [[ -n "$SERVER_HOST" ]] && ssh-keyscan -T 10 -H "$SERVER_HOST" > ~/.ssh/known_hosts 2>/dev/null && [[ -s ~/.ssh/known_hosts ]]; then
+            chmod 600 ~/.ssh/known_hosts
+            ssh_opts="$ssh_opts -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+          else
+            ssh_opts="$ssh_opts -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+          fi
+          echo "DEPLOY_SSH_OPTS=$ssh_opts" >> "$GITHUB_ENV"
+
+          if [[ -n "$SSH_PRIVATE_KEY" ]]; then
+            eval "$(ssh-agent -s)"
+            printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
+            echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+            echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+            echo "DEPLOY_SSH=ssh" >> "$GITHUB_ENV"
+          elif [[ -n "$SSH_PASSWORD" ]]; then
+            sudo apt-get update
+            sudo apt-get install -y sshpass
+            {
+              printf 'SSHPASS<<EOF\n%s\nEOF\n' "$SSH_PASSWORD"
+              printf 'DEPLOY_SSH=sshpass -e ssh\n'
+            } >> "$GITHUB_ENV"
+          else
+            echo "::error::Set SSH_PRIVATE_KEY or SSH_PASSWORD for production maintenance"
+            exit 1
+          fi
+
+      - name: Upload tunnel maintenance tools
+        run: |
+          tar -czf - ./scripts/notify-miniapp-url.sh ./systemd/vpk-tunnel.service |
+            $DEPLOY_SSH $DEPLOY_SSH_OPTS \
+              ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+              "rm -rf /tmp/botvpk-refresh && mkdir -p /tmp/botvpk-refresh && tar -xzf - -C /tmp/botvpk-refresh"
+
+      - name: Restart tunnel and publish fresh URL
+        run: |
+          $DEPLOY_SSH $DEPLOY_SSH_OPTS \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} 'bash -se' <<'REMOTE'
+          set -euo pipefail
+
+          deploy_path='${{ secrets.DEPLOY_PATH }}'
+          shared_dir="${deploy_path}/shared"
+          env_file="${shared_dir}/.env"
+
+          test -f "${env_file}"
+          test -d "${deploy_path}/current"
+
+          install -d -m 755 "${deploy_path}/scripts"
+          install -m 755 /tmp/botvpk-refresh/scripts/notify-miniapp-url.sh "${deploy_path}/scripts/notify-miniapp-url.sh"
+          install -m 644 /tmp/botvpk-refresh/systemd/vpk-tunnel.service /etc/systemd/system/vpk-tunnel.service
+
+          if ! command -v cloudflared >/dev/null 2>&1; then
+            arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+            case "$arch" in
+              amd64|x86_64) cf_arch=amd64 ;;
+              arm64|aarch64) cf_arch=arm64 ;;
+              *) echo "Unsupported architecture for cloudflared: $arch" >&2; exit 1 ;;
+            esac
+            curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${cf_arch}" -o /usr/bin/cloudflared
+            chmod +x /usr/bin/cloudflared
+          fi
+
+          systemctl daemon-reload
+          systemctl stop vpk-tunnel 2>/dev/null || true
+          pkill -f 'cloudflared tunnel --url http://127\.0\.0\.1:8081' 2>/dev/null || true
+          rm -f /tmp/cf_tunnel.log
+          systemctl enable --now vpk-tunnel
+
+          url=""
+          for _ in $(seq 1 45); do
+            url="$(journalctl -u vpk-tunnel -n 200 --no-pager 2>/dev/null | grep -oE 'https://[a-z0-9-]+[.]trycloudflare[.]com' | tail -n 1 || true)"
+            if [ -z "$url" ] && [ -f /tmp/cf_tunnel.log ]; then
+              url="$(grep -oE 'https://[a-z0-9-]+[.]trycloudflare[.]com' /tmp/cf_tunnel.log | tail -n 1 || true)"
+            fi
+            if [ -n "$url" ]; then
+              break
+            fi
+            sleep 2
+          done
+
+          if [ -z "$url" ]; then
+            systemctl status vpk-tunnel --no-pager -l || true
+            tail -n 120 /tmp/cf_tunnel.log 2>/dev/null || true
+            echo "Cloudflare quick tunnel URL was not detected" >&2
+            exit 1
+          fi
+
+          APP_ROOT="${deploy_path}" \
+          SHARED_DIR="${shared_dir}" \
+          CURRENT_DIR="${deploy_path}/current" \
+          ENV_FILE="${env_file}" \
+          CF_SERVICE=vpk-tunnel \
+          WAIT_SECONDS=5 \
+            "${deploy_path}/scripts/notify-miniapp-url.sh" --force "$url"
+
+          curl -fsS "${url%/}/version.json" >/dev/null
+          curl -fsS "${url%/}/health" >/dev/null
+          printf 'MINI_APP_URL=%s\n' "$url"
+          REMOTE

@@ -3,15 +3,31 @@ set -euo pipefail
 
 # Detects the current Cloudflare Quick Tunnel URL, updates .env, refreshes the
 # bot menu button via Telegram API, restarts the bot container, and notifies admin.
-# Defaults are production-friendly for /opt/botvpk, but can be overridden:
-#   APP_DIR=/opt/botvpk TELEGRAM_NOTIFY_ID=123 bash scripts/notify-miniapp-url.sh --force
+# Defaults are production-friendly for the immutable release layout under
+# /opt/botvpk, but can be overridden:
+#   APP_ROOT=/opt/botvpk TELEGRAM_NOTIFY_ID=123 bash scripts/notify-miniapp-url.sh --force
 
-APP_DIR="${APP_DIR:-/opt/botvpk}"
-ENV_FILE="${ENV_FILE:-$APP_DIR/.env}"
-STATE_FILE="${STATE_FILE:-$APP_DIR/.mini_app_url.notified}"
+APP_ROOT="${APP_ROOT:-${APP_DIR:-/opt/botvpk}}"
+SHARED_DIR="${SHARED_DIR:-$APP_ROOT/shared}"
+CURRENT_DIR="${CURRENT_DIR:-$APP_ROOT/current}"
+if [[ -z "${ENV_FILE:-}" ]]; then
+  if [[ -f "$SHARED_DIR/.env" ]]; then
+    ENV_FILE="$SHARED_DIR/.env"
+  else
+    ENV_FILE="$APP_ROOT/.env"
+  fi
+fi
+STATE_FILE="${STATE_FILE:-$SHARED_DIR/.mini_app_url.notified}"
 CF_SERVICE="${CF_SERVICE:-vpk-tunnel}"
 WAIT_SECONDS="${WAIT_SECONDS:-60}"
-COMPOSE_FILE="${APP_DIR}/docker-compose.prod.yml"
+if [[ -z "${COMPOSE_FILE:-}" ]]; then
+  if [[ -f "$CURRENT_DIR/docker-compose.prod.yml" ]]; then
+    COMPOSE_FILE="$CURRENT_DIR/docker-compose.prod.yml"
+  else
+    COMPOSE_FILE="$APP_ROOT/docker-compose.prod.yml"
+  fi
+fi
+COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-botvpk}"
 FORCE=0
 ARG_URL=""
 
@@ -45,6 +61,35 @@ env_value() {
   line="${line%\'}"
   line="${line#\'}"
   printf '%s' "$line"
+}
+
+set_env_value() {
+  local key="$1"
+  local value="$2"
+  if grep -qE "^${key}=" "$ENV_FILE"; then
+    sed -i "s|^${key}=.*|${key}=${value}|" "$ENV_FILE"
+  else
+    printf '\n%s=%s\n' "$key" "$value" >> "$ENV_FILE"
+  fi
+}
+
+compose() {
+  local release_version image_prefix compose_dir
+  release_version="${RELEASE_VERSION:-$(cat "$SHARED_DIR/current_release" 2>/dev/null | tr -d '[:space:]' || true)}"
+  image_prefix="${IMAGE_PREFIX:-$(env_value IMAGE_PREFIX || true)}"
+  image_prefix="${image_prefix:-ghcr.io/r1tmeker/botvpk}"
+  compose_dir="$(dirname "$COMPOSE_FILE")"
+  if [[ -z "$release_version" ]]; then
+    echo "Release version was not found in $SHARED_DIR/current_release" >&2
+    return 1
+  fi
+  (
+    cd "$compose_dir"
+    IMAGE_PREFIX="$image_prefix" \
+    RELEASE_VERSION="$release_version" \
+    APP_SHARED_DIR="$SHARED_DIR" \
+      docker compose --project-name "$COMPOSE_PROJECT_NAME" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
+  )
 }
 
 detect_url_once() {
@@ -103,6 +148,7 @@ if ! CURRENT_URL="$(detect_url)"; then
   echo "Cloudflare trycloudflare.com URL was not found in logs." >&2
   exit 1
 fi
+CURRENT_URL="${CURRENT_URL%/}"
 
 LAST_NOTIFIED="$(cat "$STATE_FILE" 2>/dev/null || true)"
 
@@ -111,20 +157,17 @@ if [[ "$FORCE" != "1" && "$CURRENT_URL" == "$LAST_NOTIFIED" ]]; then
   exit 0
 fi
 
-# Update the Telegram Mini App URL and the website URL used by the VK bot.
-if grep -qE "^MINI_APP_URL=" "$ENV_FILE"; then
-  sed -i "s|^MINI_APP_URL=.*|MINI_APP_URL=${CURRENT_URL}|" "$ENV_FILE"
-else
-  echo "MINI_APP_URL=${CURRENT_URL}" >> "$ENV_FILE"
-fi
+mkdir -p "$(dirname "$STATE_FILE")"
+
+# Update the Telegram Mini App URL, the website URL used by the VK bot, and CORS.
+set_env_value MINI_APP_URL "$CURRENT_URL"
 echo "Updated MINI_APP_URL in $ENV_FILE"
 
-if grep -qE "^SITE_URL=" "$ENV_FILE"; then
-  sed -i "s|^SITE_URL=.*|SITE_URL=${CURRENT_URL}|" "$ENV_FILE"
-else
-  echo "SITE_URL=${CURRENT_URL}" >> "$ENV_FILE"
-fi
+set_env_value SITE_URL "$CURRENT_URL"
 echo "Updated SITE_URL in $ENV_FILE"
+
+set_env_value API_CORS_ORIGINS "$CURRENT_URL"
+echo "Updated API_CORS_ORIGINS in $ENV_FILE"
 
 # Update bot menu button via Telegram API
 curl -fsS -X POST "https://api.telegram.org/bot${BOT_TOKEN}/setChatMenuButton" \
@@ -134,17 +177,16 @@ curl -fsS -X POST "https://api.telegram.org/bot${BOT_TOKEN}/setChatMenuButton" \
 
 # Restart channel bots so both Telegram and VK pick up the new URL.
 if command -v docker >/dev/null 2>&1 && [[ -f "$COMPOSE_FILE" ]]; then
-  docker compose -f "$COMPOSE_FILE" up -d frontend nginx 2>/dev/null \
+  services=(backend bot nginx)
+  compose up -d frontend nginx 2>/dev/null \
     && echo "Frontend and nginx containers ensured" \
     || echo "Warning: failed to ensure frontend/nginx containers" >&2
-  docker compose -f "$COMPOSE_FILE" restart bot 2>/dev/null \
-    && echo "Bot container restarted" \
-    || echo "Warning: failed to restart bot container" >&2
-  if docker compose -f "$COMPOSE_FILE" config --services | grep -qx "vk_bot"; then
-    docker compose -f "$COMPOSE_FILE" restart vk_bot 2>/dev/null \
-      && echo "VK bot container restarted" \
-      || echo "Warning: failed to restart VK bot container" >&2
+  if compose config --services 2>/dev/null | grep -qx "vk_bot"; then
+    services+=(vk_bot)
   fi
+  compose up -d --force-recreate "${services[@]}" 2>/dev/null \
+    && echo "Application containers recreated with fresh environment" \
+    || echo "Warning: failed to recreate application containers" >&2
 fi
 
 # Notify admin with a fresh WebApp button. Old Telegram reply keyboards keep the

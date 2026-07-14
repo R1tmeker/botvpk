@@ -32,11 +32,11 @@ services:
       - clamav_data:/var/lib/clamav
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "clamdscan --ping 1"]
-      interval: 15s
+      test: ["CMD-SHELL", "clamdscan --ping=3"]
+      interval: 30s
       timeout: 10s
-      retries: 12
-      start_period: 60s
+      retries: 20
+      start_period: 180s
 
   backend:
     image: ${IMAGE_PREFIX:?IMAGE_PREFIX is required}/backend:${RELEASE_VERSION:?RELEASE_VERSION is required}
@@ -48,7 +48,7 @@ services:
       redis:
         condition: service_healthy
       clamav:
-        condition: service_healthy
+        condition: service_started
     volumes:
       - uploads_data:/app/uploads
     restart: unless-stopped

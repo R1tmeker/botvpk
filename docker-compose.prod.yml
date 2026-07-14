@@ -107,7 +107,7 @@ services:
     image: ${IMAGE_PREFIX:?IMAGE_PREFIX is required}/frontend:${RELEASE_VERSION:?RELEASE_VERSION is required}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost/version.json | grep -q build_id"]
+      test: ["CMD-SHELL", "nginx -t >/dev/null 2>&1 && test -s /usr/share/nginx/html/version.json"]
       interval: 10s
       timeout: 5s
       retries: 10

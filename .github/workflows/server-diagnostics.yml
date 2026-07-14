@@ -88,6 +88,10 @@ jobs:
 
           echo "== web server hints =="
           docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}\t{{.Status}}' | grep -E 'botvpk|nginx|cloud|caddy|traefik' || true
+          echo "== botvpk nginx logs =="
+          docker logs --tail 120 botvpk-nginx-1 2>&1 || true
+          echo "== botvpk nginx config file =="
+          sed -n '1,180p' "${current_dir}/nginx/nginx.prod.conf" || true
           systemctl is-active nginx 2>/dev/null || true
           nginx -T 2>/dev/null | grep -E 'server_name|proxy_pass|listen|8081|5173|5178' | sed -n '1,120p' || true
           REMOTE

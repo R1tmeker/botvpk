@@ -239,7 +239,6 @@ jobs:
           $DEPLOY_SSH $DEPLOY_SSH_OPTS
           ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}
           "chmod +x '${{ secrets.DEPLOY_PATH }}/releases/${{ github.sha }}/deploy.sh' '${{ secrets.DEPLOY_PATH }}/releases/${{ github.sha }}/scripts/release-smoke.sh' &&
-          '${{ secrets.DEPLOY_PATH }}/releases/${{ github.sha }}/scripts/release-smoke.sh' &&
           cd '${{ secrets.DEPLOY_PATH }}/releases/${{ github.sha }}' &&
           APP_ROOT='${{ secrets.DEPLOY_PATH }}' IMAGE_PREFIX='$IMAGE_PREFIX'
           bash ./deploy.sh '${{ github.sha }}'"

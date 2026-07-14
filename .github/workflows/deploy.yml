@@ -178,25 +178,55 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v4
-      - name: Configure SSH with pinned host keys
+      - name: Configure SSH credentials
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
           SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
         run: |
           install -d -m 700 ~/.ssh
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
-          eval "$(ssh-agent -s)"
-          printf '%s\n' "$SSH_PRIVATE_KEY" | ssh-add -
-          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
-          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+          ssh_opts="-o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+            chmod 600 ~/.ssh/known_hosts
+            ssh_opts="$ssh_opts -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+          elif [[ -n "$SERVER_HOST" ]] && ssh-keyscan -T 10 -H "$SERVER_HOST" > ~/.ssh/known_hosts 2>/dev/null && [[ -s ~/.ssh/known_hosts ]]; then
+            chmod 600 ~/.ssh/known_hosts
+            ssh_opts="$ssh_opts -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+          else
+            ssh_opts="$ssh_opts -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+          fi
+          echo "DEPLOY_SSH_OPTS=$ssh_opts" >> "$GITHUB_ENV"
+
+          if [[ -n "$SSH_PRIVATE_KEY" ]]; then
+            eval "$(ssh-agent -s)"
+            printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
+            echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+            echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+            echo "DEPLOY_SSH=ssh" >> "$GITHUB_ENV"
+            echo "DEPLOY_RSYNC_SSH=ssh" >> "$GITHUB_ENV"
+          elif [[ -n "$SSH_PASSWORD" ]]; then
+            sudo apt-get update
+            sudo apt-get install -y sshpass
+            {
+              printf 'SSHPASS<<EOF\n%s\nEOF\n' "$SSH_PASSWORD"
+              printf 'DEPLOY_SSH=sshpass -e ssh\n'
+              printf 'DEPLOY_RSYNC_SSH=sshpass -e ssh\n'
+            } >> "$GITHUB_ENV"
+          else
+            echo "::error::Set SSH_PRIVATE_KEY or SSH_PASSWORD for production deployment"
+            exit 1
+          fi
       - name: Create immutable release directory
         run: >-
-          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}
+          $DEPLOY_SSH $DEPLOY_SSH_OPTS
+          ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}
           "mkdir -p '${{ secrets.DEPLOY_PATH }}/releases/${{ github.sha }}'"
       - name: Upload release manifests
         run: |
           rsync -azR \
+            -e "$DEPLOY_RSYNC_SSH $DEPLOY_SSH_OPTS" \
             ./docker-compose.prod.yml \
             ./deploy.sh \
             ./bootstrap-server.sh \
@@ -207,7 +237,8 @@ jobs:
         env:
           IMAGE_PREFIX: ${{ needs.build.outputs.image_prefix }}
         run: >-
-          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}
+          $DEPLOY_SSH $DEPLOY_SSH_OPTS
+          ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}
           "chmod +x '${{ secrets.DEPLOY_PATH }}/releases/${{ github.sha }}/deploy.sh'
           '${{ secrets.DEPLOY_PATH }}/releases/${{ github.sha }}/scripts/release-smoke.sh' &&
           cd '${{ secrets.DEPLOY_PATH }}/releases/${{ github.sha }}' &&

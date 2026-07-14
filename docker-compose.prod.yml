@@ -113,7 +113,7 @@ services:
       retries: 10
 
   nginx:
-    image: nginx:1.27-alpine
+    image: nginx:1.29-alpine
     depends_on:
       backend:
         condition: service_healthy

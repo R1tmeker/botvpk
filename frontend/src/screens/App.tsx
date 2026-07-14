@@ -147,6 +147,7 @@ import {
 import { api } from "../api/client";
 import { canStoreFile, deleteOfflineValue, loadOfflineValue, saveOfflineValue } from "../offline/storage";
 import { ActionCenter } from "../features/dashboard/ActionCenter";
+import { resolveTelegramInitData, waitForTelegramInitData } from "../features/identity/telegramLaunch";
 import { LoginScreen } from "./LoginScreen";
 import {
   CalendarSection,
@@ -990,13 +991,15 @@ export function App({ webApp }: Props) {
   const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
   const [authError, setAuthError] = useState<string | null>(null);
   const [authAttempt, setAuthAttempt] = useState(0);
+  const [telegramInitData, setTelegramInitData] = useState(() => resolveTelegramInitData(webApp));
+  const [telegramMode, setTelegramMode] = useState(() => Boolean(resolveTelegramInitData(webApp)));
   const activeView = viewFromPath(location.pathname);
   const [milestoneStreak, setMilestoneStreak] = useState<number | null>(null);
   const prevStreakRef = useRef<number>(0);
-  const webMode = !(webApp.initData?.trim());
+  const webMode = !telegramMode;
   const hasToken = authStatus === "ready";
   const telegramUserId = webApp.initDataUnsafe?.user?.id ?? null;
-  const initDataLength = webApp.initData?.length ?? 0;
+  const initDataLength = telegramInitData.length;
   const isAuthenticating = authStatus === "checking" || auth.isPending;
 
   const level = roleLevels[profile.role_code];
@@ -1066,12 +1069,12 @@ export function App({ webApp }: Props) {
   const uploadAvatar = useUploadAvatar();
 
   useEffect(() => {
-    const initData = webApp.initData?.trim() ?? "";
-    if (!initData) {
+    let cancelled = false;
+    setAuthStatus("checking");
+    setAuthError(null);
+
+    const restoreWebsiteSession = () => {
       // Website mode: restore the HttpOnly server session if it is still valid.
-      setAuthStatus("checking");
-      setAuthError(null);
-      let cancelled = false;
       api
         .get<{ profile: UserProfile; app_timezone: string }>("/auth/session")
         .then(({ data }) => {
@@ -1085,17 +1088,17 @@ export function App({ webApp }: Props) {
         })
         .catch(() => {
           if (cancelled) return;
+          setTelegramMode(false);
           setAuthStatus("missing_init_data");
         });
-      return () => {
-        cancelled = true;
-      };
-    }
-    setAuthStatus("checking");
-    setAuthError(null);
-    auth.mutate(initData, {
+    };
+
+    const authenticate = (initData: string) => auth.mutate(initData, {
       onSuccess: (data) => {
+        if (cancelled) return;
         setProfile(data.profile);
+        setTelegramInitData(initData);
+        setTelegramMode(true);
         setAuthStatus("ready");
         setAuthError(null);
         if (data.app_timezone) {
@@ -1103,12 +1106,24 @@ export function App({ webApp }: Props) {
         }
       },
       onError: (error) => {
+        if (cancelled) return;
+        setTelegramInitData(initData);
+        setTelegramMode(true);
         const detail = apiErrorDetail(error);
         setAuthStatus("failed");
         setAuthError(detail ?? "Не удалось проверить Telegram initData");
         toast(detail ? `Ошибка авторизации: ${detail}` : "Ошибка авторизации. Попробуйте перезапустить приложение.", "error");
       },
     });
+
+    void waitForTelegramInitData(() => resolveTelegramInitData(webApp)).then((initData) => {
+      if (cancelled) return;
+      if (initData) authenticate(initData);
+      else restoreWebsiteSession();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [authAttempt]);
 
   const navCodes = new Set(["dashboard", "schedule", "attendance", "normatives", "profile", "admin"]);
@@ -1575,8 +1590,8 @@ export function App({ webApp }: Props) {
             onAvatarUpload={(file) => uploadAvatar.mutateAsync(file)}
             isAvatarUploading={uploadAvatar.isPending}
             webMode={webMode}
-            telegramMode={!webMode}
-            stepUpInitData={webApp.initData}
+            telegramMode={telegramMode}
+            stepUpInitData={telegramInitData}
             canOpenAdmin={level >= 6}
             onOpenView={openView}
             onLogout={() => {

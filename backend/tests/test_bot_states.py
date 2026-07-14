@@ -7,6 +7,33 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app import bot, vk_bot
+from app.roles import RoleLevel
+
+
+def test_telegram_menu_shows_my_id_for_every_role() -> None:
+    public_reply_buttons = [button.text for row in bot.main_keyboard(RoleLevel.PUBLIC_USER).keyboard for button in row]
+    public_inline_buttons = [
+        button.text for row in bot.main_menu_inline(RoleLevel.PUBLIC_USER).inline_keyboard for button in row
+    ]
+    participant_inline_buttons = [
+        button.text for row in bot.main_menu_inline(RoleLevel.PARTICIPANT).inline_keyboard for button in row
+    ]
+
+    assert "Мой ID" in public_reply_buttons
+    assert "Мой ID" in public_inline_buttons
+    assert "Мой ID" in participant_inline_buttons
+
+
+@pytest.mark.asyncio
+async def test_my_telegram_id_returns_callers_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    message = SimpleNamespace(from_user=SimpleNamespace(id=123456789), answer=AsyncMock())
+    monkeypatch.setattr(bot, "find_user", AsyncMock(return_value=None))
+
+    await bot.my_telegram_id(message)
+
+    message.answer.assert_awaited_once()
+    assert "123456789" in message.answer.await_args.args[0]
+    assert message.answer.await_args.kwargs["parse_mode"] == "HTML"
 
 
 @pytest.mark.asyncio

@@ -137,6 +137,7 @@ def user_role(user: User | None) -> RoleLevel:
 def main_keyboard(role: RoleLevel) -> ReplyKeyboardMarkup:
     settings = get_settings()
     rows: list[list[KeyboardButton]] = [[KeyboardButton(text="Меню"), KeyboardButton(text="Расписание"), KeyboardButton(text="Уведомления")]]
+    rows.append([KeyboardButton(text="Мой ID")])
     if role >= RoleLevel.DEPUTY_SQUAD_COMMANDER:
         rows.append([KeyboardButton(text="Заявки")])
     if role >= RoleLevel.PARTICIPANT:
@@ -179,6 +180,7 @@ def main_menu_inline(role: RoleLevel) -> InlineKeyboardMarkup:
         )
     else:
         rows.append([InlineKeyboardButton(text="Заявка на вступление", callback_data="menu:join")])
+    rows.append([InlineKeyboardButton(text="Мой ID", callback_data="menu:my_id")])
     settings = get_settings()
     if settings.mini_app_url:
         rows.append([InlineKeyboardButton(text="Открыть приложение", web_app=WebAppInfo(url=settings.mini_app_url))])
@@ -333,6 +335,20 @@ async def profile(message: Message) -> None:
         f"Статус: {user.status_code}",
     ]
     await message.answer("\n".join(lines), parse_mode=None)
+
+
+@router.message(Command("id"))
+@router.message(F.text.casefold().in_({"мой id", "мой айди", "id"}))
+async def my_telegram_id(message: Message) -> None:
+    await send_telegram_id(message, message.from_user.id)
+
+
+async def send_telegram_id(message: Message, telegram_id: int) -> None:
+    await message.answer(
+        f"Ваш Telegram ID: <code>{telegram_id}</code>",
+        parse_mode="HTML",
+        reply_markup=main_keyboard(user_role(await find_user(telegram_id))),
+    )
 
 
 @router.message(F.text == "Ссылка туннеля")
@@ -752,6 +768,8 @@ async def menu_callback(callback: CallbackQuery, state: FSMContext) -> None:
         await send_vk_link_code(message, callback.from_user.id)
     elif action == "join":
         await message.answer("Чтобы подать заявку, отправьте команду /join.", parse_mode=None)
+    elif action == "my_id":
+        await send_telegram_id(message, callback.from_user.id)
     else:
         await callback.answer("Раздел пока недоступен.", show_alert=True)
         return
@@ -1973,6 +1991,7 @@ async def main() -> None:
         BotCommand(command="vk", description="Привязать VK"),
         BotCommand(command="resetpassword", description="Сбросить пароль сайта"),
         BotCommand(command="cancel", description="Отменить диалог"),
+        BotCommand(command="id", description="Показать мой Telegram ID"),
         BotCommand(command="join", description="Заявка на вступление"),
         BotCommand(command="profile", description="Мой профиль"),
         BotCommand(command="export", description="Выгрузка состава (CSV/Excel)"),

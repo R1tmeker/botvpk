@@ -265,42 +265,24 @@ async def export_attendance_xlsx_send(
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> dict:
-    """Generate detailed attendance XLSX and send it to the requester via Telegram bot DM."""
-    try:
-        import openpyxl
-        from openpyxl.styles import Alignment, Font, PatternFill
-    except ImportError as exc:
-        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="openpyxl not installed.") from exc
+    """Generate the grouped attendance matrix and send it via Telegram bot DM."""
     from ..background import _get_bot
     from aiogram.types import BufferedInputFile
 
-    rows = await _attendance_export_rows(current_user, session, squad_id)
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Посещаемость"
-    header_fill = PatternFill(fill_type="solid", fgColor="1A2F5A")
-    header_font = Font(bold=True, color="FFFFFF")
-    for col, title in enumerate(ATTENDANCE_EXPORT_COLUMNS, 1):
-        cell = ws.cell(row=1, column=col, value=title)
-        cell.font = header_font
-        cell.fill = header_fill
-        cell.alignment = Alignment(horizontal="center")
-    for row_idx, row in enumerate(rows, 2):
-        for col_idx, value in enumerate(row, 1):
-            ws.cell(row=row_idx, column=col_idx, value=value)
-    for col in ws.columns:
-        max_len = max(len(str(cell.value or "")) for cell in col)
-        ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 44)
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
+    data, filename, member_count = await _build_attendance_matrix(
+        squad_id=squad_id,
+        month=None,
+        current_user=current_user,
+        session=session,
+        settings=settings,
+    )
     bot = _get_bot(settings)
     await bot.send_document(
         current_user.telegram_id,
-        BufferedInputFile(buf.read(), filename="attendance.xlsx"),
-        caption=f"Посещаемость ВПК Звезда — {len(rows)} отметок",
+        BufferedInputFile(data, filename=filename),
+        caption=f"Табель посещаемости ВПК Звезда — {member_count} чел.",
     )
-    return {"sent": True, "count": len(rows)}
+    return {"sent": True, "count": member_count}
 
 
 @router.get("/activity-feed", response_model=list[dict])
@@ -392,14 +374,14 @@ async def activity_feed(
     return feed[:limit]
 
 
-@router.get("/attendance/matrix.xlsx")
-async def export_attendance_matrix(
-    squad_id: int | None = None,
-    month: str | None = None,
-    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_SQUAD_COMMANDER)),
-    session: AsyncSession = Depends(get_db_session),
-    settings: Settings = Depends(get_settings),
-) -> StreamingResponse:
+async def _build_attendance_matrix(
+    *,
+    squad_id: int | None,
+    month: str | None,
+    current_user: CurrentUser,
+    session: AsyncSession,
+    settings: Settings,
+) -> tuple[bytes, str, int]:
     """Attendance timesheet: rows = members grouped by squad, columns = days that had events.
 
     Filled cells come from the system; empty ones carry a dropdown so commanders can
@@ -408,7 +390,7 @@ async def export_attendance_matrix(
     try:
         import openpyxl
         from openpyxl.formatting.rule import CellIsRule
-        from openpyxl.styles import Alignment, Font, PatternFill
+        from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
         from openpyxl.utils import get_column_letter
         from openpyxl.worksheet.datavalidation import DataValidation
     except ImportError as exc:
@@ -490,11 +472,11 @@ async def export_attendance_matrix(
     ws = wb.active
     ws.title = "Посещаемость"
     name_font = Font(bold=True)
-    header_fill = PatternFill(fill_type="solid", fgColor="1A2F5A")
-    header_font = Font(bold=True, color="FFFFFF")
     title_font = Font(bold=True, size=12, color="1A2F5A")
     center = Alignment(horizontal="center", vertical="center")
     note_font = Font(italic=True, color="808080", size=9)
+    thin = Side(style="thin", color="1A1A1A")
+    block_border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
     first_col = 3  # A=ФИО, B=примечание, C…=даты
     date_labels = [d.strftime("%d.%m.%Y") for d in dates]
@@ -511,24 +493,32 @@ async def export_attendance_matrix(
         squad_name = squads[squad_key].name if squad_key in squads else "Без отделения"
         title_cell = ws.cell(row=row, column=1, value=f"{squad_name} - {len(members)} чел")
         title_cell.font = title_font
+        title_cell.alignment = center
+        title_cell.border = block_border
+        ws.cell(row=row, column=2).border = block_border
         for i, label in enumerate(date_labels):
             c = ws.cell(row=row, column=first_col + i, value=label)
-            c.font = header_font
-            c.fill = header_fill
+            c.font = Font(bold=True, color="1A2F5A")
             c.alignment = center
+            c.border = block_border
+        ws.row_dimensions[row].height = 22
         row += 1
         block_start = row
         for member in members:
             name_cell = ws.cell(row=row, column=1, value=member.full_name)
             name_cell.font = name_font
+            name_cell.border = block_border
             lead = squad_leads.get(member.id)
+            note = ws.cell(row=row, column=2, value=lead or None)
+            note.border = block_border
             if lead:
-                note = ws.cell(row=row, column=2, value=lead)
                 note.font = note_font
             for i, day in enumerate(dates):
                 label = MATRIX_STATUS_SHORT.get(status_map.get((member.id, day), ""), "")
                 cell = ws.cell(row=row, column=first_col + i, value=label or None)
                 cell.alignment = center
+                cell.border = block_border
+            ws.row_dimensions[row].height = 20
             row += 1
         if members and dates:
             rng = f"{get_column_letter(first_col)}{block_start}:{get_column_letter(last_col)}{row - 1}"
@@ -560,10 +550,27 @@ async def export_attendance_matrix(
 
     buf = io.BytesIO()
     wb.save(buf)
-    buf.seek(0)
     filename = f"attendance-{period_start.strftime('%Y-%m')}.xlsx"
+    return buf.getvalue(), filename, len(users)
+
+
+@router.get("/attendance/matrix.xlsx")
+async def export_attendance_matrix(
+    squad_id: int | None = None,
+    month: str | None = None,
+    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_SQUAD_COMMANDER)),
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> StreamingResponse:
+    data, filename, _ = await _build_attendance_matrix(
+        squad_id=squad_id,
+        month=month,
+        current_user=current_user,
+        session=session,
+        settings=settings,
+    )
     return StreamingResponse(
-        buf,
+        io.BytesIO(data),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

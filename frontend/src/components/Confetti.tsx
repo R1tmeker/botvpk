@@ -102,7 +102,12 @@ export function MilestoneToast({ streak, onDismiss }: { streak: number; onDismis
   const Icon = msg.Icon;
 
   return (
-    <div className={styles.milestone} onClick={onDismiss}>
+    <button
+      type="button"
+      className={styles.milestone}
+      onClick={onDismiss}
+      aria-label={`Закрыть достижение: ${msg.text}`}
+    >
       <ConfettiCanvas duration={3500} />
       <div className={styles.milestoneCard}>
         <span className={styles.milestoneIcon} aria-hidden="true">
@@ -111,6 +116,6 @@ export function MilestoneToast({ streak, onDismiss }: { streak: number; onDismis
         <strong>{msg.text}</strong>
         <span>Серия: {streak} занятий</span>
       </div>
-    </div>
+    </button>
   );
 }

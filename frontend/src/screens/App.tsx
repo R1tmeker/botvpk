@@ -254,9 +254,22 @@ function toYouTubeEmbedUrl(url: string): string | null {
 }
 
 function VideoPlayerModal({ src, embedSrc, onClose }: { src?: string; embedSrc?: string; onClose: () => void }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    dialogRef.current?.focus();
+  }, []);
   return (
     <div className={styles.videoOverlay} onClick={onClose}>
-      <div className={styles.videoModalBox} onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        className={styles.videoModalBox}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Просмотр видео"
+        tabIndex={-1}
+        onKeyDown={(event) => { if (event.key === "Escape") onClose(); }}
+        onClick={(event) => event.stopPropagation()}
+      >
         <button type="button" className={styles.videoCloseBtn} onClick={onClose} aria-label="Закрыть">✕</button>
         {embedSrc ? (
           <iframe
@@ -276,7 +289,13 @@ function VideoPlayerModal({ src, embedSrc, onClose }: { src?: string; embedSrc?:
 
 function VideoThumbnailCard({ title, isLoading, onClick }: { title: string; isLoading?: boolean; onClick: () => void }) {
   return (
-    <div className={styles.videoCard} onClick={!isLoading ? onClick : undefined} role="button" tabIndex={0}>
+    <button
+      type="button"
+      className={styles.videoCard}
+      onClick={onClick}
+      disabled={isLoading}
+      aria-label={`Открыть видео: ${title}`}
+    >
       <div className={styles.videoCardThumb}>
         {isLoading ? (
           <div className={styles.videoLoadingSpinner} />
@@ -288,7 +307,7 @@ function VideoThumbnailCard({ title, isLoading, onClick }: { title: string; isLo
         )}
       </div>
       <div className={styles.videoCardMeta}>{title}</div>
-    </div>
+    </button>
   );
 }
 
@@ -362,7 +381,15 @@ function ApplicantDetailDrawer({
 
   return (
     <div className={styles.drawerOverlay} onClick={onClose}>
-      <div className={styles.drawerSheet} onClick={(e) => e.stopPropagation()}>
+      <div
+        className={styles.drawerSheet}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Карточка пользователя: ${item.full_name}`}
+        tabIndex={-1}
+        onKeyDown={(event) => { if (event.key === "Escape") onClose(); }}
+        onClick={(event) => event.stopPropagation()}
+      >
         <div className={styles.drawerHandle} />
         <div className={styles.drawerHeader}>
           <div>
@@ -2039,9 +2066,17 @@ function WelcomeBanner({ blocks }: { blocks: PromoBlock[] }) {
 function PrivacyModal({ onClose }: { onClose: () => void }) {
   return (
     <div className={styles.modalOverlay} onClick={onClose}>
-      <div className={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
+      <div
+        className={styles.modalSheet}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="privacy-dialog-title"
+        tabIndex={-1}
+        onKeyDown={(event) => { if (event.key === "Escape") onClose(); }}
+        onClick={(event) => event.stopPropagation()}
+      >
         <div className={styles.modalHeader}>
-          <strong>Политика обработки данных</strong>
+          <strong id="privacy-dialog-title">Политика обработки данных</strong>
           <button type="button" onClick={onClose} aria-label="Закрыть">
             <X aria-hidden="true" />
           </button>
@@ -4127,7 +4162,15 @@ function MemberModal({ user, squads, onClose }: { user: UserRecord; squads: Squa
   ];
   return (
     <div className={styles.modalOverlay} onClick={onClose}>
-      <div className={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
+      <div
+        className={styles.modalSheet}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Профиль пользователя: ${user.full_name}`}
+        tabIndex={-1}
+        onKeyDown={(event) => { if (event.key === "Escape") onClose(); }}
+        onClick={(event) => event.stopPropagation()}
+      >
         <div className={styles.modalHeader}>
           <strong>{user.full_name}</strong>
           <button type="button" onClick={onClose} aria-label="Закрыть">
@@ -4424,7 +4467,6 @@ function ProfileView({
   onOpenView?: (view: string) => void;
   onLogout?: () => void;
 }) {
-  const avatarInputRef = useRef<HTMLInputElement>(null);
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState({ full_name: "", phone: "", city: "", education_place: "", birth_date: "" });
   const [editPhone, setEditPhone] = useState("+7");
@@ -4529,12 +4571,6 @@ function ProfileView({
     }
   };
 
-  const openAvatarPicker = () => {
-    if (!isAvatarUploading) {
-      avatarInputRef.current?.click();
-    }
-  };
-
   const copyTelegramId = () => {
     navigator.clipboard.writeText(String(profile.telegram_id)).then(() => toast("Telegram ID скопирован", "info")).catch(() => {});
   };
@@ -4564,18 +4600,8 @@ function ProfileView({
         </button>
       </div>
       <div className={styles.profileCard}>
-        <div
+        <label
           className={styles.profileAvatarUpload}
-          onClick={openAvatarPicker}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" || event.key === " ") {
-              event.preventDefault();
-              openAvatarPicker();
-            }
-          }}
-          role="button"
-          tabIndex={isAvatarUploading ? -1 : 0}
-          aria-label={avatar ? "Сменить фото профиля" : "Загрузить фото профиля"}
         >
           <span className={styles.profileAvatar}>
             {avatar ? <img src={avatar} alt="" onError={() => { setAvatarFailed(true); setLocalAvatarPreview(null); }} /> : profile.full_name.charAt(0).toUpperCase()}
@@ -4584,9 +4610,9 @@ function ProfileView({
             {isAvatarUploading ? "Загрузка..." : avatar ? "Сменить фото" : "Загрузить фото"}
           </span>
           <input
-            ref={avatarInputRef}
             type="file"
             accept="image/*"
+            aria-label={avatar ? "Сменить фото профиля" : "Загрузить фото профиля"}
             style={{ position: "absolute", width: 1, height: 1, opacity: 0 }}
             disabled={isAvatarUploading}
             onChange={(e) => {
@@ -4595,7 +4621,7 @@ function ProfileView({
               e.target.value = "";
             }}
           />
-        </div>
+        </label>
 
         {editing ? (
           <div className={styles.formBlock}>
@@ -4702,26 +4728,15 @@ function ProfileView({
               <dt>Дата рождения</dt>
               <dd>{profile.birth_date ? formatDateFull(profile.birth_date) : "—"}</dd>
             </div>
-            <div
-              className={styles.profileRow}
-              style={{ cursor: "pointer" }}
-              onClick={copyTelegramId}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  copyTelegramId();
-                }
-              }}
-              role="button"
-              tabIndex={0}
-              aria-label="Скопировать Telegram ID"
-            >
+            <div className={styles.profileRow}>
               <dt>Telegram ID</dt>
-              <dd style={{ color: "#1a2f5a", textDecoration: "underline dotted" }}>
-                {profile.telegram_id}
-                <svg style={{ display: "inline", verticalAlign: "middle", marginLeft: 4 }} width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                  <path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z"/>
-                </svg>
+              <dd>
+                <button type="button" className={styles.copyTelegramId} onClick={copyTelegramId}>
+                  {profile.telegram_id}
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z"/>
+                  </svg>
+                </button>
               </dd>
             </div>
             {profile.username && (
@@ -5695,7 +5710,7 @@ function AdminView({
             const PipelineRow = ({ name, sub, date, badge, badgeColor, onClick }: {
               name: string; sub?: string; date?: string; badge?: string; badgeColor?: string; onClick: () => void;
             }) => (
-              <div className={styles.pipelineRow} onClick={onClick} role="button" tabIndex={0}>
+              <button type="button" className={styles.pipelineRow} onClick={onClick}>
                 <div className={styles.pipelineRowInfo}>
                   <strong>{name}</strong>
                   {sub && <span>{sub}</span>}
@@ -5705,7 +5720,7 @@ function AdminView({
                   {badge && <span className={styles.pipelineBadge} style={{ background: badgeColor ?? "#65708a" }}>{badge}</span>}
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: "#c0c8da", flexShrink: 0 }}><path d="M9 18l6-6-6-6"/></svg>
                 </div>
-              </div>
+              </button>
             );
 
             return (

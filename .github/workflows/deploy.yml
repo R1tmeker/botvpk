@@ -78,10 +78,11 @@ jobs:
         run: >-
           pytest
           --cov=app.services.auth_security
+          --cov=app.services.attendance
           --cov=app.services.uploads
           --cov=app.services.totp_secrets
           --cov-report=term-missing
-          --cov-fail-under=70
+          --cov-fail-under=90
       - name: Python dependency audit
         run: pip-audit -r backend/requirements.txt
       - name: Alembic has one head

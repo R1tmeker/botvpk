@@ -2420,6 +2420,21 @@ button[data-active="true"] .navIcon {
   }
 }
 
+.copyTelegramId {
+  display: inline-flex;
+  min-height: var(--touch-target);
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font: inherit;
+  font-weight: 800;
+  text-decoration: underline dotted;
+  cursor: pointer;
+}
+
 .bulkUserToolbar {
   display: grid;
   gap: 10px;
@@ -3520,6 +3535,11 @@ button[data-active="true"] .navIcon {
 }
 
 .pipelineRow {
+  width: 100%;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -3832,6 +3852,12 @@ button[data-active="true"] .navIcon {
 
 /* ─── YouTube-style Video Card ─── */
 .videoCard {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   grid-column: 1 / -1;
   border-radius: 12px;
   overflow: hidden;
@@ -3925,6 +3951,11 @@ button[data-active="true"] .navIcon {
     color: #fff;
     background: linear-gradient(135deg, #1a2f5a, #2c4a8a);
     cursor: pointer;
+  }
+
+  &:disabled {
+    cursor: wait;
+    opacity: 0.8;
   }
 }
 

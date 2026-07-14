@@ -1,0 +1,83 @@
+name: Server diagnostics
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install SSH password helper
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sshpass
+
+      - name: Inspect production server
+        env:
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          ssh-keyscan -T 10 -H "$SERVER_HOST" > ~/.ssh/known_hosts 2>/dev/null || true
+          chmod 600 ~/.ssh/known_hosts || true
+          ssh_opts="-o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
+          if [ -s ~/.ssh/known_hosts ]; then
+            ssh_opts="$ssh_opts -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+          else
+            ssh_opts="$ssh_opts -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+          fi
+          export SSHPASS="$SSH_PASSWORD"
+          sshpass -e ssh $ssh_opts "$SERVER_USER@$SERVER_HOST" 'bash -se' <<'REMOTE'
+          set -euo pipefail
+          deploy_path="${DEPLOY_PATH:-/opt/botvpk}"
+          env_file="${deploy_path}/shared/.env"
+          current_dir="${deploy_path}/current"
+
+          echo "== release =="
+          date -u +"utc=%Y-%m-%dT%H:%M:%SZ"
+          test -f "${deploy_path}/shared/current_release" && cat "${deploy_path}/shared/current_release" || true
+          test -L "${current_dir}" && readlink -f "${current_dir}" || true
+
+          echo "== public env =="
+          if [ -f "${env_file}" ]; then
+            grep -E '^(APP_ENV|MINI_APP_URL|SITE_URL|VK_BOT_URL|API_CORS_ORIGINS|CLAMAV_REQUIRED|REDIS_URL)=' "${env_file}" || true
+          else
+            echo "missing ${env_file}"
+          fi
+
+          echo "== compose ps =="
+          if [ -d "${current_dir}" ]; then
+            cd "${current_dir}"
+            docker compose --project-name botvpk --env-file "${env_file}" -f docker-compose.prod.yml ps
+          fi
+
+          echo "== local app probes =="
+          curl -sS -i http://127.0.0.1:8081/version.json | sed -n '1,20p' || true
+          curl -sS -i http://127.0.0.1:8081/health | sed -n '1,20p' || true
+          curl -sS -i http://127.0.0.1:8081/nginx-health | sed -n '1,20p' || true
+
+          echo "== listening ports =="
+          ss -ltnp 2>/dev/null | grep -E ':(80|443|8081|5173|5178)\b' || true
+
+          echo "== cloudflared =="
+          systemctl is-active cloudflared 2>/dev/null || true
+          systemctl status cloudflared --no-pager -l 2>/dev/null | sed -n '1,35p' || true
+          ps aux | grep '[c]loudflared' || true
+          for file in /etc/cloudflared/config.yml /root/.cloudflared/config.yml; do
+            if [ -f "$file" ]; then
+              echo "-- $file --"
+              sed -E '/credentials-file|token|secret|password/d' "$file" | sed -n '1,80p'
+            fi
+          done
+
+          echo "== web server hints =="
+          docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}\t{{.Status}}' | grep -E 'botvpk|nginx|cloud|caddy|traefik' || true
+          systemctl is-active nginx 2>/dev/null || true
+          nginx -T 2>/dev/null | grep -E 'server_name|proxy_pass|listen|8081|5173|5178' | sed -n '1,120p' || true
+          REMOTE

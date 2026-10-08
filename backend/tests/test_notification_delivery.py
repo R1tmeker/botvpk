@@ -7,6 +7,13 @@ from aiogram.types import FSInputFile
 from app.services import notification_delivery as delivery
 
 
+def test_telegram_announcement_button_opens_full_announcement():
+    from app.background import _build_notification_keyboard
+    item = SimpleNamespace(type_code="ANNOUNCEMENT", entity_name="announcements", entity_id=42, deep_link="/announcements?id=42")
+    keyboard = _build_notification_keyboard(item, SimpleNamespace(mini_app_url="https://example.com"))
+    assert keyboard.inline_keyboard[0][0].web_app.url == "https://example.com/announcements?id=42"
+
+
 @pytest.mark.parametrize("mime,method,field", [("image/png", "send_photo", "photo"), ("image/jpeg", "send_photo", "photo"), ("video/mp4", "send_video", "video"), ("application/pdf", "send_document", "document")])
 async def test_announcement_sends_native_media_with_caption(tmp_path, mime, method, field):
     path = tmp_path / "announcement.bin"

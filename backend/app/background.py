@@ -167,6 +167,11 @@ def _build_notification_keyboard(notification: Notification, settings: Settings)
         return InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="Открыть приложение", web_app=WebAppInfo(url=deep_link_url)),
         ]])
+    if settings.mini_app_url and notification.entity_name == "announcements" and notification.entity_id:
+        return InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="Открыть объявление", web_app=WebAppInfo(
+                url=urljoin(f"{settings.mini_app_url.rstrip('/')}/", f"announcements?id={notification.entity_id}"))),
+        ]])
     return None
 
 

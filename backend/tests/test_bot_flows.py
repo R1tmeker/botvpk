@@ -14,6 +14,14 @@ from app.services.bot_navigation import entity_id, menu_rows, page_number
 from app.utils.vk import notification_keyboard
 
 
+@pytest.fixture(autouse=True)
+def isolated_dialog_storage(monkeypatch):
+    # Unit tests must not share a Redis connection across pytest's event loops.
+    monkeypatch.setattr(vk_bot, "_get_redis", lambda: None)
+    monkeypatch.setattr(vk_bot, "_vk_login_state", {})
+    monkeypatch.setattr(vk_bot, "_vk_event_state", {})
+
+
 @pytest.fixture
 def member():
     return SimpleNamespace(id=7, vk_id=42, telegram_id=123, role_code="PARTICIPANT", status_code="ACTIVE", squad_id=2, full_name="Иван Иванов")

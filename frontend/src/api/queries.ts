@@ -3,6 +3,7 @@ import { useEffect } from "react";
 
 import { api, apiBaseUrl } from "./client";
 import { loadOfflineValue, saveOfflineValue } from "../offline/storage";
+import { canUseOfflineCache } from "../offline/cachePolicy";
 import type {
   Announcement,
   AdminUsersBulkResult,
@@ -92,6 +93,7 @@ export function useRealtimeInvalidation(enabled: boolean) {
         const payload = JSON.parse((event as MessageEvent<string>).data) as { query_keys?: string[] };
         for (const key of payload.query_keys ?? []) {
           queryClient.invalidateQueries({ queryKey: [key] });
+          if (key === "appeals") queryClient.invalidateQueries({ queryKey: ["admin", "appeals"] });
         }
       } catch {
         queryClient.invalidateQueries();
@@ -190,6 +192,7 @@ export function useSchedule(enabled: boolean, userId?: number | null) {
     queryKey: ["schedule"],
     queryFn: async () => {
       const fromDt = new Date();
+      fromDt.setDate(fromDt.getDate() - 90);
       fromDt.setHours(0, 0, 0, 0);
       try {
         const { data } = await api.get<ScheduleEvent[]>("/schedule", {
@@ -198,6 +201,7 @@ export function useSchedule(enabled: boolean, userId?: number | null) {
         if (userId) void saveOfflineValue(`cache:schedule:${userId}`, data);
         return data;
       } catch (error) {
+        if (!canUseOfflineCache(error)) throw error;
         const cached = userId ? await loadOfflineValue<ScheduleEvent[]>(`cache:schedule:${userId}`) : null;
         if (cached) return cached;
         throw error;
@@ -328,13 +332,14 @@ export function useNormativesReport(enabled: boolean) {
 
 export function useLearningMaterials(enabled: boolean, userId?: number | null) {
   return useQuery({
-    queryKey: ["learning", "materials"],
+    queryKey: ["learning", "materials", userId ?? null],
     queryFn: async () => {
       try {
         const { data } = await api.get<LearningMaterial[]>("/learning/materials");
         if (userId) void saveOfflineValue(`cache:learning:${userId}`, data);
         return data;
       } catch (error) {
+        if (!canUseOfflineCache(error)) throw error;
         const cached = userId ? await loadOfflineValue<LearningMaterial[]>(`cache:learning:${userId}`) : null;
         if (cached) return cached;
         throw error;
@@ -363,6 +368,7 @@ export function useAppeals(enabled: boolean) {
       return data;
     },
     enabled,
+    ...LIVE_QUERY_OPTIONS,
   });
 }
 
@@ -521,6 +527,7 @@ export function useRespondEvent() {
       );
       queryClient.invalidateQueries({ queryKey: ["schedule", "event", variables.eventId, "responses"] });
       queryClient.invalidateQueries({ queryKey: ["schedule"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
     },
   });
 }
@@ -571,6 +578,7 @@ export function useCreateJoinApplication() {
 }
 
 export function useCreateAppeal() {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (payload: {
       subject: string;
@@ -582,6 +590,10 @@ export function useCreateAppeal() {
     }) => {
       const { data } = await api.post("/appeals", payload);
       return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["appeals"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "appeals"] });
     },
   });
 }
@@ -777,11 +789,12 @@ export function useUpdateUser() {
 export function useAppealMessages(appealId: number | null, enabled: boolean) {
   return useQuery({
     queryKey: ["appeals", appealId, "messages"],
-    queryFn: async () => {
-      const { data } = await api.get<AppealMessage[]>(`/appeals/${appealId}/messages`);
+    queryFn: async ({ signal }) => {
+      const { data } = await api.get<AppealMessage[]>(`/appeals/${appealId}/messages`, { signal });
       return data;
     },
     enabled: enabled && appealId !== null,
+    ...LIVE_QUERY_OPTIONS,
   });
 }
 
@@ -794,6 +807,7 @@ export function useCreateAppealMessage() {
     },
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["appeals", variables.appealId, "messages"] });
+      queryClient.invalidateQueries({ queryKey: ["appeals"], exact: true });
     },
   });
 }
@@ -812,11 +826,14 @@ export function useReadAllNotifications() {
 }
 
 export function useMarkMaterialViewed() {
+  const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (materialId: number) => {
-      const { data } = await api.post(`/learning/materials/${materialId}/view`);
+    mutationFn: async ({ materialId, viewed }: { materialId: number; viewed: boolean }) => {
+      const url = `/learning/materials/${materialId}/view`;
+      const { data } = viewed ? await api.post(url) : await api.delete(url);
       return data;
     },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["learning"] }); },
   });
 }
 
@@ -1062,14 +1079,21 @@ export function useAdminAppeals(enabled: boolean) {
       return data;
     },
     enabled,
+    ...LIVE_QUERY_OPTIONS,
   });
 }
 
 export function useUpdateAppeal() {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ appealId, ...payload }: { appealId: number; status_code?: string; assignee_user_id?: number | null; resolution_text?: string }) => {
       const { data } = await api.patch<Appeal>(`/appeals/${appealId}`, payload);
       return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["appeals"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "appeals"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
     },
   });
 }
@@ -1434,7 +1458,7 @@ export function useAdminLearningMaterials(enabled: boolean) {
   return useQuery({
     queryKey: ["admin", "learning", "materials"],
     queryFn: async () => {
-      const { data } = await api.get<LearningMaterial[]>("/learning/materials?active_only=false");
+      const { data } = await api.get<LearningMaterial[]>("/admin/learning/materials");
       return data;
     },
     enabled,
@@ -1445,7 +1469,7 @@ export function useAdminLearningCourses(enabled: boolean) {
   return useQuery({
     queryKey: ["admin", "learning", "courses"],
     queryFn: async () => {
-      const { data } = await api.get<LearningCourse[]>("/learning/courses?active_only=false");
+      const { data } = await api.get<LearningCourse[]>("/admin/learning/courses");
       return data;
     },
     enabled,

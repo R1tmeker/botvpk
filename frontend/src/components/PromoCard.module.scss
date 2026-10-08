@@ -1,5 +1,8 @@
 /* ── Public card ──────────────────────────────── */
 .card {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   border: 1px solid #e0e5ef;
   border-radius: 14px;
   padding: 14px 16px;
@@ -39,7 +42,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 38px;
+  min-height: 44px;
   padding: 0 18px;
   border: none;
   border-radius: 10px;
@@ -115,7 +118,7 @@
 
   button {
     flex: 1;
-    min-height: 32px;
+    min-height: 44px;
     border: 1px solid #d8deea;
     border-radius: 8px;
     background: #fff;
@@ -187,8 +190,18 @@
 
 .editRow {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+.adminCard, .editFields, .editFields label, .editPreview { min-width: 0; overflow-wrap: anywhere; }
+.editFields label input:not([type="checkbox"]), .editFields label select { min-height: 44px; }
+.editFields label textarea { min-height: 100px; }
+.editSaveBtn, .editCancelBtn { min-height: 44px; }
+
+@media (max-width: 599px) {
+  .editRow { grid-template-columns: minmax(0, 1fr); }
+  .editFields label input, .editFields label select, .editFields label textarea { font-size: 16px; }
 }
 
 .checkboxField {

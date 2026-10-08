@@ -1,6 +1,6 @@
 .container {
   position: fixed;
-  bottom: 96px;
+  bottom: calc(var(--nav-clearance) + var(--app-safe-bottom) + 8px);
   left: 12px;
   right: 12px;
   max-width: 406px;
@@ -39,10 +39,20 @@
 }
 
 .message {
+  overflow-wrap: anywhere;
   font-size: 13px;
   font-weight: 700;
   color: #1a2f5a;
   line-height: 1.35;
+}
+
+@media (min-width: 1024px) {
+  .container { left: auto; right: max(24px, var(--app-safe-right)); width: min(406px, calc(100vw - 48px)); }
+}
+
+:global(html[data-keyboard="true"]) .container {
+  top: calc(var(--app-viewport-top, 0px) + max(12px, var(--app-safe-top)));
+  bottom: auto;
 }
 
 [data-theme="dark"] .toast {

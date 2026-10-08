@@ -5,7 +5,8 @@ export function useCountUp(target: number, duration = 900, enabled = true): numb
   const rafRef = useRef<number>(0);
 
   useEffect(() => {
-    if (!enabled) {
+    if (!enabled || duration <= 0 || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setValue(target);
       return;
     }
     const start = performance.now();

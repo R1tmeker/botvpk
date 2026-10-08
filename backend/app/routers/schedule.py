@@ -15,6 +15,8 @@ from ..roles import CONFIRMED_ROLES, RoleLevel
 from ..schemas.core import (
     AbsenceReasonRead,
     AttendanceRead,
+    BulkEventResponseCreate,
+    BulkEventResponseRead,
     EventResponseCreate,
     MessageResponse,
     ScheduleEventCreate,
@@ -25,7 +27,8 @@ from ..schemas.core import (
     ScheduleTemplateUpdate,
 )
 from ..services.attendance import SelfCheckInError, self_check_in, sync_automatic_grade
-from ..services.events import save_event_response
+from ..services.event_response_policy import EventResponseError, validate_event_available
+from ..services.events import respond_to_event
 from ..services.realtime import publish_realtime_event
 from ..utils.audit import model_snapshot, record_audit, utcnow
 from ..utils.timezones import current_local_date, local_datetime_to_utc, local_day_utc_bounds, utc_to_local_date
@@ -95,8 +98,10 @@ async def list_schedule(
     if to_dt:
         statement = statement.where(ScheduleEvent.start_datetime <= to_dt)
     if squad_id is not None:
+        if current_user.role_level < RoleLevel.SQUAD_COMMANDER and squad_id != current_user.squad_id:
+            raise HTTPException(status_code=403, detail="Cannot view this squad's schedule.")
         statement = statement.where(ScheduleEvent.squad_id == squad_id)
-    elif current_user.squad_id is not None:
+    elif current_user.squad_id is not None or current_user.role_level < RoleLevel.SQUAD_COMMANDER:
         statement = statement.where((ScheduleEvent.squad_id.is_(None)) | (ScheduleEvent.squad_id == current_user.squad_id))
     events = list((await session.scalars(statement)).all())
     response_by_event: dict[int, str | None] = {}
@@ -149,33 +154,19 @@ async def respond_event(
 ) -> MessageResponse:
     if current_user.user_id is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User profile is required.")
-    event = await session.get(ScheduleEvent, event_id)
+    event = await session.scalar(select(ScheduleEvent).where(ScheduleEvent.id == event_id).with_for_update())
     if not event:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
     if not can_view_event(current_user, event):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot respond to this event.")
-    now = utcnow()
-    if event.response_deadline_at and now > event.response_deadline_at and current_user.role_level < RoleLevel.DEPUTY_SQUAD_COMMANDER:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Response deadline has passed.")
-    if payload.response_code in {"NOT_COMING", "NO"} and event.requires_response:
-        if payload.absence_reason_id is None and not payload.custom_reason:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Absence reason is required.")
-        if payload.absence_reason_id is not None:
-            reason = await session.get(AbsenceReason, payload.absence_reason_id)
-            if reason is None or not reason.is_active:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Absence reason not found.")
-            if reason.requires_comment and not payload.custom_reason:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Custom reason is required.")
-    await save_event_response(
-        session,
-        event_id=event_id,
-        user_id=current_user.user_id,
-        response_code=payload.response_code,
-        absence_reason_id=payload.absence_reason_id,
-        custom_reason=payload.custom_reason,
-        source_code="MINI_APP",
-        responded_at=now,
-    )
+    try:
+        await respond_to_event(
+            session, event=event, user_id=current_user.user_id, role=current_user.role_level,
+            squad_id=current_user.squad_id, response_code=payload.response_code,
+            absence_reason_id=payload.absence_reason_id, custom_reason=payload.custom_reason, source_code="MINI_APP",
+        )
+    except EventResponseError as exc:
+        raise response_http_error(exc) from exc
     await record_audit(
         session,
         user_id=current_user.user_id,
@@ -185,7 +176,55 @@ async def respond_event(
         new_value=payload.model_dump(mode="json"),
     )
     await session.commit()
+    await publish_response_update(current_user.user_id)
     return MessageResponse(detail="Response saved.")
+
+
+def response_http_error(exc: EventResponseError) -> HTTPException:
+    code = 403 if exc.code == "FORBIDDEN" else 400 if exc.code in {"INVALID_RESPONSE", "INVALID_REASON", "REASON_REQUIRED"} else 409
+    return HTTPException(status_code=code, detail={"code": exc.code, "message": str(exc)})
+
+
+async def publish_response_update(user_id: int) -> None:
+    await publish_realtime_event(
+        get_settings(), event_type="schedule.response.updated", user_id=user_id,
+        query_keys=["schedule", "dashboard"],
+    )
+
+
+@router.post("/events/respond-bulk", response_model=BulkEventResponseRead)
+async def respond_events_bulk(
+    payload: BulkEventResponseCreate,
+    current_user: CurrentUser = Depends(require_role(RoleLevel.PARTICIPANT)),
+    session: AsyncSession = Depends(get_db_session),
+) -> BulkEventResponseRead:
+    if current_user.user_id is None:
+        raise HTTPException(status_code=403, detail="User profile is required.")
+    # Lock in a stable order and validate the entire selection before writing any answer.
+    events = list((await session.scalars(
+        select(ScheduleEvent).where(ScheduleEvent.id.in_(payload.event_ids)).order_by(ScheduleEvent.id).with_for_update()
+    )).all())
+    if len(events) != len(payload.event_ids):
+        raise HTTPException(status_code=404, detail="Одно из занятий больше не существует. Обновите расписание.")
+    now = utcnow()
+    try:
+        for event in events:
+            validate_event_available(event, role=current_user.role_level, squad_id=current_user.squad_id, now=now)
+        for event in events:
+            await respond_to_event(
+                session, event=event, user_id=current_user.user_id, role=current_user.role_level,
+                squad_id=current_user.squad_id, response_code=payload.response_code, source_code="MINI_APP", now=now,
+            )
+        await record_audit(
+            session, user_id=current_user.user_id, action_code="schedule_event.respond_bulk",
+            entity_name="schedule_events", new_value=payload.model_dump(mode="json"),
+        )
+        await session.commit()
+    except EventResponseError as exc:
+        await session.rollback()
+        raise response_http_error(exc) from exc
+    await publish_response_update(current_user.user_id)
+    return BulkEventResponseRead(event_ids=payload.event_ids, response_code=payload.response_code, count=len(events))
 
 
 @router.post("/events/{event_id}/self-checkin", response_model=AttendanceRead)

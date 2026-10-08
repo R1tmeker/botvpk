@@ -46,6 +46,7 @@
   display: flex;
   gap: 16px;
   align-items: center;
+  flex-wrap: wrap;
   padding: 10px 0;
 }
 
@@ -53,6 +54,7 @@
   display: grid;
   gap: 6px;
   flex: 1;
+  min-width: 130px;
 }
 
 .legendItem {
@@ -80,6 +82,7 @@
 
 /* ── Bar Chart ──────────────────────────────────── */
 .barWrap {
+  max-width: 100%;
   overflow-x: auto;
   scrollbar-width: none;
   padding: 4px 0 0;
@@ -105,6 +108,8 @@
 
 /* ── Calendar Heatmap ───────────────────────────── */
 .heatmapWrap {
+  min-width: 0;
+  max-width: 100%;
   display: grid;
   gap: 8px;
   overflow-x: auto;
@@ -152,6 +157,9 @@
   font-size: 12px;
   font-weight: 800;
   color: #1a2f5a;
+  gap: 12px;
+  > span { min-width: 0; overflow-wrap: anywhere; }
+  > strong { flex-shrink: 0; }
 
   strong {
     font-size: 13px;

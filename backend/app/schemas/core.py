@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time
-from typing import Any
+from typing import Any, Literal
+
+from ..services.join_input import normalize_join_phone, validate_join_birth_date
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -119,14 +121,24 @@ class JoinApplicationRead(ORMModel):
 class JoinApplicationCreate(BaseModel):
     full_name: str = Field(min_length=2, max_length=255)
     birth_date: date | None = None
-    phone: str | None = None
+    phone: str | None = Field(default=None, max_length=40)
     city: str | None = None
     education_place: str | None = None
     experience_text: str | None = None
-    motivation_text: str | None = None
-    source_text: str | None = None
+    motivation_text: str | None = Field(default=None, max_length=1500)
+    source_text: str | None = Field(default=None, max_length=300)
     consent_given: bool
     comment: str | None = None
+
+
+    @model_validator(mode="after")
+    def normalize_input(self) -> JoinApplicationCreate:
+        self.full_name = " ".join(self.full_name.split())
+        if len(self.full_name) < 2:
+            raise ValueError("Укажите ФИО: от 2 до 255 символов.")
+        self.phone = normalize_join_phone(self.phone)
+        self.birth_date = validate_join_birth_date(self.birth_date)
+        return self
 
 
 class JoinApplicationUpdate(BaseModel):
@@ -270,9 +282,26 @@ class ScheduleEventUpdate(BaseModel):
 
 
 class EventResponseCreate(BaseModel):
+    response_code: Literal["COMING", "NOT_COMING", "MAYBE", "YES", "NO"]
+    absence_reason_id: int | None = Field(default=None, gt=0)
+    custom_reason: str | None = Field(default=None, max_length=500)
+
+
+class BulkEventResponseCreate(BaseModel):
+    event_ids: list[int] = Field(min_length=1, max_length=50)
+    response_code: Literal["COMING", "MAYBE"] = "COMING"
+
+    @model_validator(mode="after")
+    def validate_event_ids(self) -> BulkEventResponseCreate:
+        if any(event_id <= 0 for event_id in self.event_ids) or len(set(self.event_ids)) != len(self.event_ids):
+            raise ValueError("Event IDs must be positive and unique.")
+        return self
+
+
+class BulkEventResponseRead(BaseModel):
+    event_ids: list[int]
     response_code: str
-    absence_reason_id: int | None = None
-    custom_reason: str | None = None
+    count: int
 
 
 class ScheduleTemplateRead(ORMModel):
@@ -546,15 +575,29 @@ class AppealCreate(BaseModel):
     is_anonymous: bool = False
     subject: str = Field(min_length=1, max_length=255)
     category_code: str = "OTHER"
-    description: str = Field(min_length=1)
+    description: str = Field(min_length=1, max_length=10000)
     urgency_code: str = "NORMAL"
     file_id: int | None = None
+
+    @model_validator(mode="after")
+    def trim_text(self) -> AppealCreate:
+        self.subject = self.subject.strip()
+        self.description = self.description.strip()
+        if not self.subject or not self.description:
+            raise ValueError("Тема и описание не могут быть пустыми.")
+        return self
 
 
 class AppealUpdate(BaseModel):
     assignee_user_id: int | None = None
-    status_code: str | None = None
-    resolution_text: str | None = None
+    status_code: Literal["CREATED", "IN_PROGRESS", "NEEDS_INFO", "RESOLVED", "REJECTED", "CLOSED"] | None = None
+    resolution_text: str | None = Field(default=None, max_length=10000)
+
+    @model_validator(mode="after")
+    def non_null_status(self) -> AppealUpdate:
+        if "status_code" in self.model_fields_set and self.status_code is None:
+            raise ValueError("Статус не может быть пустым.")
+        return self
 
 
 class AppealMessageRead(ORMModel):
@@ -566,7 +609,14 @@ class AppealMessageRead(ORMModel):
 
 
 class AppealMessageCreate(BaseModel):
-    body: str = Field(min_length=1)
+    body: str = Field(min_length=1, max_length=4000)
+
+    @model_validator(mode="after")
+    def trim_body(self) -> AppealMessageCreate:
+        self.body = self.body.strip()
+        if not self.body:
+            raise ValueError("Сообщение не может быть пустым.")
+        return self
 
 
 class LearningCourseRead(ORMModel):
@@ -594,6 +644,8 @@ class LearningMaterialRead(ORMModel):
     published_at: datetime | None = None
     created_at: datetime
     updated_at: datetime | None = None
+    is_viewed: bool = False
+    viewed_at: datetime | None = None
 
 
 class LearningCourseCreate(BaseModel):

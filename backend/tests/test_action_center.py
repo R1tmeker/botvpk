@@ -111,3 +111,13 @@ async def test_action_center_rolls_back_failed_action(monkeypatch: pytest.Monkey
             squad_id=None,
         )
     session.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_squad_commander_cannot_assign_private_appeals(monkeypatch):
+    assign = AsyncMock()
+    monkeypatch.setattr(action_center, "_assign_appeals", assign)
+    with pytest.raises(ActionCenterError, match="Недостаточно прав"):
+        await execute_action_item(AsyncMock(), item_code="UNPROCESSED_APPEALS", action_code="assign",
+                                  actor_id=10, role_level=RoleLevel.SQUAD_COMMANDER, squad_id=1)
+    assign.assert_not_awaited()

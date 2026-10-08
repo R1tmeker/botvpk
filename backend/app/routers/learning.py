@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db_session
@@ -9,6 +10,7 @@ from ..dependencies.auth import CurrentUser, require_role
 from ..models import LearningCourse, LearningMaterial, LearningProgress
 from ..roles import RoleLevel
 from ..schemas.core import LearningCourseRead, LearningMaterialRead, MessageResponse
+from ..services.audiences import visible_audiences
 
 router = APIRouter(prefix="/learning", tags=["learning"])
 
@@ -20,13 +22,7 @@ def require_profile(current_user: CurrentUser) -> int:
 
 
 def audience_visible(audience_code: str, current_user: CurrentUser) -> bool:
-    if audience_code == "ALL" or audience_code == current_user.role_code:
-        return True
-    if audience_code == "PARTICIPANTS":
-        return current_user.role_level >= RoleLevel.PARTICIPANT
-    if audience_code == "COMMANDERS":
-        return current_user.role_level >= RoleLevel.DEPUTY_SQUAD_COMMANDER
-    return False
+    return audience_code in visible_audiences(current_user.role_code, current_user.role_level)
 
 
 @router.get("/materials", response_model=list[LearningMaterialRead])
@@ -34,16 +30,25 @@ async def learning_materials(
     course_id: int | None = None,
     current_user: CurrentUser = Depends(require_role(RoleLevel.PUBLIC_USER)),
     session: AsyncSession = Depends(get_db_session),
-) -> list[LearningMaterial]:
+) -> list[LearningMaterialRead]:
     statement = (
         select(LearningMaterial)
-        .where(LearningMaterial.is_active.is_(True))
+        .where(LearningMaterial.is_active.is_(True), LearningMaterial.audience_code.in_(visible_audiences(current_user.role_code, current_user.role_level)))
         .order_by(LearningMaterial.sort_order, LearningMaterial.created_at.desc())
     )
     if course_id is not None:
         statement = statement.where(LearningMaterial.course_id == course_id)
     items = list((await session.scalars(statement)).all())
-    return [item for item in items if audience_visible(item.audience_code, current_user)]
+    progress = {}
+    if current_user.user_id is not None and items:
+        rows = (await session.scalars(select(LearningProgress).where(
+            LearningProgress.user_id == current_user.user_id,
+            LearningProgress.material_id.in_([item.id for item in items]),
+        ))).all()
+        progress = {row.material_id: row.viewed_at for row in rows}
+    return [LearningMaterialRead.model_validate(item).model_copy(update={
+        "is_viewed": item.id in progress, "viewed_at": progress.get(item.id),
+    }) for item in items]
 
 
 @router.get("/courses", response_model=list[LearningCourseRead])
@@ -86,10 +91,25 @@ async def mark_material_viewed(
     material = await session.get(LearningMaterial, material_id)
     if material is None or not material.is_active or not audience_visible(material.audience_code, current_user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Material not found.")
-    progress = await session.scalar(
-        select(LearningProgress).where(LearningProgress.user_id == user_id, LearningProgress.material_id == material_id)
-    )
-    if progress is None:
-        session.add(LearningProgress(user_id=user_id, material_id=material_id))
+    # Concurrent taps and retries keep the first completion time and never violate the unique key.
+    await session.execute(insert(LearningProgress).values(user_id=user_id, material_id=material_id)
+                          .on_conflict_do_nothing(index_elements=["user_id", "material_id"]))
     await session.commit()
     return MessageResponse(detail="Learning progress saved.")
+
+
+@router.delete("/materials/{material_id}/view", response_model=MessageResponse)
+async def reset_material_viewed(
+    material_id: int,
+    current_user: CurrentUser = Depends(require_role(RoleLevel.CANDIDATE)),
+    session: AsyncSession = Depends(get_db_session),
+) -> MessageResponse:
+    user_id = require_profile(current_user)
+    material = await session.get(LearningMaterial, material_id)
+    if material is None or not material.is_active or not audience_visible(material.audience_code, current_user):
+        raise HTTPException(status_code=404, detail="Material not found.")
+    await session.execute(delete(LearningProgress).where(
+        LearningProgress.user_id == user_id, LearningProgress.material_id == material_id,
+    ))
+    await session.commit()
+    return MessageResponse(detail="Learning progress reset.")

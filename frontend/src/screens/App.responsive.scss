@@ -1,0 +1,329 @@
+// Included last in App.module.scss so the same CSS-module names are used.
+@mixin layout {
+  .shell {
+    width: min(100%, var(--app-max-width));
+    max-width: 100%;
+    min-height: 100dvh;
+    padding: max(14px, var(--app-safe-top))
+      max(var(--app-gutter), var(--app-safe-right))
+      calc(var(--nav-clearance) + var(--app-safe-bottom))
+      max(var(--app-gutter), var(--app-safe-left));
+    overflow-x: visible;
+  }
+
+  .headerHomeBtn { min-width: 0; }
+  .headerHomeBtn div { min-width: 0; }
+  .headerHomeBtn strong { font-size: clamp(18px, 3vw, 24px); }
+  .headerHomeBtn span { overflow-wrap: anywhere; line-height: 1.35; }
+  .headerSearchBtn { flex: 0 0 44px; }
+  .panel { overflow: visible; }
+  .workspace { gap: 16px; }
+  .panelHeader { gap: 8px 16px; }
+  .panelHeader h2 { font-size: clamp(20px, 2.5vw, 26px); }
+  .panelHeader > span { text-align: start; }
+  .row, .memberRow { align-content: start; }
+  .row > div, .memberRow > div { min-width: 0; }
+  .eventRowActions { flex-wrap: wrap; }
+
+  .tabs, .filterChips, .pipelineStages {
+    max-width: 100%;
+    gap: 8px;
+    padding: 4px 3px 8px;
+    margin-inline: -3px;
+    scroll-padding-inline: 3px;
+    overscroll-behavior-inline: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .tabs button, .chip, .pipelineStageTab, .adminTabGroups button,
+  .fileButton, .iconAction, .compactBtn, .fileIconButton,
+  .editProfileBtn, .avatarUploadButton, .dragMoveBtn,
+  .actions button, .applicationActions button, .memberControls button,
+  .commandStrip button, .formBlock button:not(.linkButton),
+  .exportDropdown summary, .exportDropdown button,
+  .actionCenterActions button, .modalHeader button, .videoCloseBtn,
+  .drawerCloseBtn, .statusPromoContent button {
+    min-height: var(--touch-target);
+  }
+  .iconAction, .fileIconButton, .dragMoveBtn,
+  .modalHeader button, .videoCloseBtn { min-width: var(--touch-target); }
+  .fileIconButton { width: 44px; height: 44px; }
+  .actions button, .applicationActions button { white-space: normal; padding: 8px; }
+  .profileDetailAction, .telegramFallback { min-height: 44px; color: inherit; }
+  .profileDetailAction { display: inline-flex; align-items: center; gap: 6px; padding: 4px 0; border: 0; background: transparent; font: inherit; text-align: start; overflow-wrap: anywhere; text-decoration: underline; }
+  .telegramFallback { border: 0; background: transparent; font: inherit; text-align: start; overflow-wrap: anywhere; }
+  .fieldLabel input:not([type="checkbox"]):not([type="radio"]),
+  .formBlock input:not([type="checkbox"]):not([type="radio"]),
+  .formBlock select, .memberControls select, .adminControls select,
+  .attendanceFilters input, .attendanceFilters select, .adminToolbar input,
+  .drawerInput, .drawerSelect, .quietHoursRow input {
+    min-height: var(--touch-target);
+  }
+  .formBlock textarea { min-height: 100px; }
+  .checkboxLine { min-height: 44px; }
+
+  .nav {
+    width: min(100%, 960px);
+    grid-template-columns: repeat(var(--nav-columns, 5), minmax(0, 1fr));
+    padding-inline: max(8px, var(--app-safe-left)) max(8px, var(--app-safe-right));
+    padding-bottom: calc(10px + var(--app-safe-bottom));
+  }
+  .nav button { padding: 6px 2px; min-height: 52px; }
+  .navMobileLabel { max-width: 100%; line-height: 1.25; }
+  .navDesktopLabel { display: none; }
+
+  .skipLink {
+    position: fixed;
+    top: 8px;
+    left: 16px;
+    z-index: 1100;
+    transform: translateY(-160%);
+    border-radius: 8px;
+    padding: 12px 16px;
+    background: var(--surface);
+    color: var(--text);
+    font-weight: 700;
+    &:focus { transform: none; }
+  }
+
+  .modalOverlay, .drawerOverlay, .videoOverlay {
+    inset: var(--app-viewport-top, 0px) 0 auto;
+    height: 100dvh;
+    height: var(--app-viewport-height, 100dvh);
+    padding-top: var(--app-safe-top);
+    padding-inline: var(--app-safe-left) var(--app-safe-right);
+    overscroll-behavior: contain;
+  }
+  .modalSheet, .drawerSheet {
+    width: 100%;
+    max-width: 640px;
+    max-height: calc(100% - 12px);
+    margin-inline: auto;
+    color: var(--text);
+    background: var(--surface);
+    padding-bottom: max(16px, var(--app-safe-bottom));
+    overscroll-behavior-y: contain;
+  }
+  .modalSheet { padding-bottom: var(--app-safe-bottom); }
+  .modalHeader { gap: 12px; }
+  .modalHeader strong { min-width: 0; overflow-wrap: anywhere; }
+  .modalHeader button { flex: 0 0 44px; display: grid; place-items: center; }
+  .modalBody { min-height: 0; overscroll-behavior: contain; }
+  .drawerSheet { scroll-padding-block: 24px; }
+  .videoOverlay { padding: max(12px, var(--app-safe-top)) max(12px, var(--app-safe-right)) max(12px, var(--app-safe-bottom)) max(12px, var(--app-safe-left)); }
+  .videoModalBox { max-width: 960px; max-height: 100%; }
+  .videoPlayer { max-height: calc(var(--app-viewport-height, 100dvh) - 48px); object-fit: contain; }
+  .videoCloseBtn { width: 44px; height: 44px; }
+
+  .rosterTableWrap, .reportTableWrapper {
+    max-width: 100%;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: thin;
+    &:focus-visible { outline: 3px solid #63b3ff; outline-offset: 3px; }
+  }
+  .rosterTable { min-width: 760px; }
+  .rosterTable[data-compact="true"] { min-width: 540px; }
+  .rosterNameButton {
+    padding: 6px 0;
+    min-height: 44px;
+    background: none;
+    border: 0;
+    color: inherit;
+    font: inherit;
+    font-weight: 800;
+    text-align: start;
+    overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 599px) {
+    .shell { padding-inline: max(12px, var(--app-safe-left)) max(12px, var(--app-safe-right)); }
+    .panel, .profileCard, .chartsSection, .webAccessCard { padding: 14px; }
+    .twoCol, .announcementTopGrid, .bulkUserGrid, .attendanceFilters { grid-template-columns: minmax(0, 1fr); }
+    .formBlock input:not([type="checkbox"]):not([type="radio"]),
+    .formBlock select, .formBlock textarea, .memberControls select,
+    .drawerInput, .drawerSelect, .adminToolbar input,
+    .quietHoursRow input, .messageInput input, .messageInput textarea {
+      font-size: 16px;
+    }
+    .metrics, .commandSummary, .statsGrid2, .preferenceGrid, .achievementGrid,
+    .announcementChannels, .tokenBar, .statsGrid4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .reportOverview { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .reportStat { padding: 10px 8px; }
+    .reportStat strong { font-size: clamp(16px, 4.5vw, 22px); }
+    .eventMetaGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .actions { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+    .memberControls, .applicationActions { grid-template-columns: minmax(0, 1fr); }
+    .statusPanel { grid-template-columns: minmax(0, 1fr); }
+    .statusPanel dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .statusPanel h1 { font-size: clamp(22px, 6vw, 28px); line-height: 1.15; }
+    .profileRow, .detailRow { grid-template-columns: 100px minmax(0, 1fr); gap: 8px; }
+    .authGateMeta div { grid-template-columns: 100px minmax(0, 1fr); }
+    .rosterTableWrap { border: 0; background: transparent; overflow: visible; }
+    .rosterTable, .rosterTable[data-compact="true"] {
+      display: block;
+      min-width: 0;
+      width: 100%;
+      thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+      tbody { display: grid; gap: 12px; }
+      tr { display: block; padding: 8px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+      td {
+        display: grid;
+        grid-template-columns: 100px minmax(0, 1fr);
+        align-items: start;
+        gap: 8px;
+        padding: 8px 0;
+        font-size: 13px;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        &::before { content: attr(data-label); color: var(--text-soft); font-weight: 700; }
+        &:first-child { display: block; font-size: 15px; font-weight: 800; &::before { display: none; } }
+        &:last-child { border-bottom: 0; }
+      }
+    }
+  }
+
+  @media (max-width: 359px) {
+    .shell { padding-inline: max(10px, var(--app-safe-left)) max(10px, var(--app-safe-right)); }
+    .menuGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .menuCard { min-height: 126px; padding: 12px; }
+    .menuCard span { font-size: 14px; line-height: 1.25; }
+    .profileRow, .detailRow, .authGateMeta div { grid-template-columns: minmax(0, 1fr); gap: 3px; }
+    .headerHomeBtn { gap: 8px; }
+    .headerHomeBtn img { width: 40px; height: 40px; }
+    .reportOverview { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  @media (min-width: 600px) {
+    .panel { padding: 24px; }
+    .menuGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+    .menuCard { min-height: 144px; padding: 20px; }
+    .menuCard span { font-size: 17px; line-height: 1.25; }
+    .menuCard small { font-size: 13px; line-height: 1.4; }
+    .statusPanel { padding: 24px; min-height: 150px; }
+    .statusPanel h1 { font-size: 32px; }
+    .statusPanel dl { min-width: 180px; }
+    .statusPromoPanel { grid-template-columns: minmax(0, 1fr); }
+    .modalOverlay, .drawerOverlay { align-items: center; padding: max(24px, var(--app-safe-top)) max(24px, var(--app-safe-right)) max(24px, var(--app-safe-bottom)) max(24px, var(--app-safe-left)); }
+    .modalSheet, .drawerSheet { max-height: 100%; border-radius: 20px; box-shadow: var(--shadow); }
+    .drawerHandle { display: none; }
+    .drawerSheet { padding-top: 16px; }
+    .tabs, .filterChips, .pipelineStages { flex-wrap: wrap; overflow: visible; }
+    .adminTabGroups section { grid-template-columns: 90px minmax(0, 1fr); }
+    .adminToolbar { background: var(--surface-soft); padding-block: 8px; }
+    .profileCard { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 24px; align-items: start; }
+    .profileAvatarUpload { align-self: start; }
+    .profileCard > dl { margin: 0; }
+  }
+
+  @media (min-width: 768px) {
+    .metrics, .statsGrid4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .dashboardStack { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 20px; }
+    .dashboardStack > * { min-width: 0; }
+    .dashboardStack > :last-child:nth-child(odd) { grid-column: 1 / -1; }
+    .dashboardStack .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .shell[data-view="schedule"] .list,
+    .shell[data-view="normatives"] .list,
+    .shell[data-view="learning"] .list,
+    .shell[data-view="announcements"] .list {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      align-items: start;
+      gap: 16px;
+      > .chartsSection, > .empty { grid-column: 1 / -1; }
+    }
+    .eventMetaGrid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .attendanceFilters { grid-template-columns: minmax(0, 1fr) minmax(180px, 0.4fr); }
+    .memberControls { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+  }
+
+  @media (min-width: 1024px) {
+    .shell { padding-left: calc(216px + max(var(--app-gutter), var(--app-safe-left))); padding-bottom: calc(28px + var(--app-safe-bottom)); }
+    .nav {
+      top: max(100px, calc(var(--app-safe-top) + 86px));
+      left: calc(max(0px, (100vw - var(--app-max-width)) / 2) + max(var(--app-gutter), var(--app-safe-left)));
+      right: auto;
+      bottom: auto;
+      transform: none;
+      width: 192px;
+      max-height: calc(100dvh - 128px - var(--app-safe-top) - var(--app-safe-bottom));
+      grid-template-columns: minmax(0, 1fr);
+      gap: 8px;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      overflow-y: auto;
+      &[data-admin="true"] { grid-template-columns: minmax(0, 1fr); }
+      button {
+        grid-template-columns: 26px minmax(0, 1fr);
+        grid-template-rows: auto;
+        gap: 12px;
+        justify-items: start;
+        padding: 12px 10px;
+        font-size: 14px;
+        text-align: start;
+        > span:last-child { white-space: normal; line-height: 1.35; overflow: visible; }
+      }
+    }
+    .navMobileLabel { display: none; }
+    .navDesktopLabel { display: block; }
+    .workspace { margin-top: 24px; }
+    .statusPanel { min-height: 170px; }
+    .header { margin-bottom: 16px; }
+    .menuGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .reportTable, .rosterTable { font-size: 14px; }
+    .rosterTable th, .rosterTable td { padding: 12px; }
+    .statusPanel h1 { font-size: clamp(28px, 3vw, 38px); }
+  }
+
+  .statusPanel:has(.statusDots) { padding-bottom: 48px; }
+  .statusDots {
+    right: 8px;
+    bottom: 0;
+    gap: 0;
+    button, button[data-active="true"] {
+      position: relative;
+      width: 44px;
+      height: 44px;
+      min-width: 44px;
+      min-height: 44px;
+      background: transparent;
+      &::after {
+        position: absolute;
+        content: "";
+        top: 19px;
+        left: 19px;
+        width: 6px;
+        height: 6px;
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.5);
+      }
+    }
+    button[data-active="true"]::after { left: 13px; width: 18px; background: #fff; }
+  }
+
+  @media (min-width: 1280px) {
+    .menuGrid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .profileCard > dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 24px; }
+    .profileRow { grid-template-columns: 100px minmax(0, 1fr); }
+  }
+
+  @media (max-height: 500px) and (min-width: 600px) {
+    .modalOverlay, .drawerOverlay { padding-block: max(8px, var(--app-safe-top)) max(8px, var(--app-safe-bottom)); }
+    .nav { padding-block: 4px calc(4px + var(--app-safe-bottom)); }
+    .nav button { min-height: 44px; }
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .menuCard:hover { box-shadow: 0 8px 24px rgba(18, 32, 68, 0.15); }
+    .nav button:hover:not([data-active="true"]) { background: var(--surface-strong); }
+    .rosterNameButton:hover { text-decoration: underline; }
+  }
+
+  :global(html[data-keyboard="true"]) .nav { visibility: hidden; pointer-events: none; }
+  :global(html[data-keyboard="true"]) .shell { padding-bottom: 24px; }
+  .row > .checkboxLine { grid-column: 1 / -1; }
+  [data-linked="true"] {
+    outline: 2px solid var(--color-primary, #4468be);
+    outline-offset: 3px;
+  }
+}

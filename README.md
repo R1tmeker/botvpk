@@ -24,6 +24,10 @@ docker compose up --build
 - nginx: `http://localhost:8080`
 
 ## Проверки
+Новые функции бота, приложения и фактические результаты проверок описаны в [IMPROVEMENTS.md](IMPROVEMENTS.md).
+
+Доработки адаптации, размеры экранов и команды браузерных проверок описаны в [docs/responsive-interface.md](docs/responsive-interface.md).
+
 ```powershell
 .\.venv\Scripts\python.exe -m compileall -q backend main.py bot
 cd frontend

@@ -7,8 +7,10 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "vitest run src",
-    "test:e2e": "playwright test"
+    "test": "vitest run src && npm run test:functional",
+    "test:e2e": "playwright test",
+    "test:responsive": "playwright test --config=playwright.responsive.config.ts",
+    "test:functional": "node --test tests/unit/*.test.cjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.59.0",

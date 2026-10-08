@@ -11,7 +11,7 @@ from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.memory import MemoryStorage, SimpleEventIsolation
 from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import (
     BotCommand,
@@ -29,16 +29,25 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     WebAppInfo,
 )
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from .config import get_settings
 from .database import AsyncSessionLocal
-from .models import AbsenceReason, Appeal, Attendance, EventResponse, JoinApplication, Normative, NormativeSubmission, Notification, ScheduleEvent, Squad, User
+from .models import AbsenceReason, Appeal, AppealMessage, Attendance, EventResponse, JoinApplication, Normative, NormativeSubmission, Notification, ScheduleEvent, Squad, User
 from .roles import RoleLevel, role_level
 from .services.auth_security import PasswordPolicyError, bump_token_version, validate_password_policy
+from .services.appeal_policy import APPEAL_STATUS_LABELS, can_access_appeal, validate_appeal_text
+from .services.appeals import add_appeal_reply, notify_appeal_commanders, publish_appeal_update
+from .services.bot_callbacks import callback_ids
 from .services.attendance import SelfCheckInError, self_check_in, sync_automatic_grade
 from .services.delivery import call_telegram_with_rate_limit
-from .services.events import save_event_response as save_event_response_service
+from .services.events import respond_to_event
+from .services.join_input import join_text, normalize_join_phone, parse_join_birth_date as parse_birth_date
+from .services.event_response_policy import EventResponseError, validate_event_available
+from .services.notification_inbox import inbox_counts, inbox_page, mark_inbox_read, mark_notification_read
+from .services.search import search_accessible
+from .services.realtime import publish_realtime_event
+from zoneinfo import ZoneInfo
 from .services.heartbeat import heartbeat_loop
 from .services.observability import configure_json_logging, init_sentry
 from .services.normatives import submit_normative as submit_normative_service
@@ -52,6 +61,7 @@ router = Router(name="vpk-zvezda-db-bot")
 _CF_URL_RE = re.compile(r'https://[a-z0-9-]+\.trycloudflare\.com')
 _CF_LOG_PATH = "/tmp/cf_tunnel.log"
 JOIN_STATE_TIMEOUT = timedelta(days=1)
+INBOX_PAGE_SIZE = 6
 ATTENDANCE_PAGE_SIZE = 8
 
 
@@ -84,6 +94,10 @@ class AppealStates(StatesGroup):
     urgency = State()
 
 
+class AppealReplyStates(StatesGroup):
+    body = State()
+
+
 class PasswordResetStates(StatesGroup):
     new_password = State()
     confirm_password = State()
@@ -113,25 +127,13 @@ PARTICIPANT_ROLE_CODES = (
 )
 
 
-def parse_birth_date(value: str) -> date | None:
-    text = value.strip()
-    if text.casefold() in {"-", "нет", "пропустить"}:
-        return None
-    for fmt in ("%d.%m.%Y", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(text, fmt).date()
-        except ValueError:
-            continue
-    raise ValueError("Invalid birth date")
-
-
 async def find_user(telegram_id: int) -> User | None:
     async with AsyncSessionLocal() as session:
         return await session.scalar(select(User).where(User.telegram_id == telegram_id))
 
 
 def user_role(user: User | None) -> RoleLevel:
-    return role_level(user.role_code if user else "PUBLIC_USER")
+    return role_level(user.role_code if user and user.status_code == "ACTIVE" else "PUBLIC_USER")
 
 
 def main_keyboard(role: RoleLevel) -> ReplyKeyboardMarkup:
@@ -141,7 +143,7 @@ def main_keyboard(role: RoleLevel) -> ReplyKeyboardMarkup:
     if role >= RoleLevel.DEPUTY_SQUAD_COMMANDER:
         rows.append([KeyboardButton(text="Заявки")])
     if role >= RoleLevel.PARTICIPANT:
-        rows.append([KeyboardButton(text="Отметиться")])
+        rows.append([KeyboardButton(text="Отметиться"), KeyboardButton(text="Поиск")])
     if settings.mini_app_url:
         rows.append([KeyboardButton(text="Открыть приложение", web_app=WebAppInfo(url=settings.mini_app_url))])
     if role >= RoleLevel.SUPER_ADMIN:
@@ -171,10 +173,11 @@ def main_menu_inline(role: RoleLevel) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="Моя явка", callback_data="menu:attendance"),
             ]
         )
-        rows.append([InlineKeyboardButton(text="Отметиться", callback_data="menu:checkin")])
+        rows.append([InlineKeyboardButton(text="Отметиться", callback_data="menu:checkin"), InlineKeyboardButton(text="Поиск", callback_data="menu:search")])
         rows.append(
             [
-                InlineKeyboardButton(text="Обращение", callback_data="menu:appeal"),
+                InlineKeyboardButton(text="Создать обращение", callback_data="menu:appeal"),
+                InlineKeyboardButton(text="Мои обращения", callback_data="menu:myappeals"),
                 InlineKeyboardButton(text="Привязать VK", callback_data="menu:vk"),
             ]
         )
@@ -227,16 +230,24 @@ async def save_event_response(
     custom_reason: str | None = None,
 ) -> None:
     async with AsyncSessionLocal() as session:
-        await save_event_response_service(
-            session,
-            event_id=event_id,
-            user_id=user_id,
-            response_code=response_code,
-            absence_reason_id=absence_reason_id,
-            custom_reason=custom_reason,
-            source_code="BOT",
+        user = await session.get(User, user_id)
+        event = await session.scalar(select(ScheduleEvent).where(ScheduleEvent.id == event_id).with_for_update())
+        if user is None or user.status_code != "ACTIVE":
+            raise EventResponseError("FORBIDDEN", "Нужна активная привязка к составу.")
+        if event is None:
+            raise EventResponseError("NOT_FOUND", "Занятие не найдено. Обновите расписание.")
+        await respond_to_event(
+            session, event=event, user_id=user.id, role=user_role(user), squad_id=user.squad_id,
+            response_code=response_code, absence_reason_id=absence_reason_id, custom_reason=custom_reason, source_code="BOT",
+        )
+        await record_audit(
+            session, user_id=user.id, action_code="schedule_event.respond", entity_name="schedule_events",
+            entity_id=event_id, new_value={"response_code": response_code, "source_code": "BOT"},
         )
         await session.commit()
+    await publish_realtime_event(
+        get_settings(), event_type="schedule.response.updated", user_id=user_id, query_keys=["schedule", "dashboard"],
+    )
 
 
 async def ensure_dialog_not_expired(message: Message, state: FSMContext) -> bool:
@@ -394,45 +405,138 @@ async def cancel_dialog(message: Message, state: FSMContext) -> None:
         await show_main_menu(message, user)
 
 
+def app_deep_link(path: str | None) -> str | None:
+    from urllib.parse import urljoin, urlsplit
+    base = get_settings().mini_app_url
+    if not base or not path or not path.startswith("/") or path.startswith("//") or "\\" in path:
+        return None
+    result = urljoin(base.rstrip("/") + "/", path.lstrip("/"))
+    return result if urlsplit(result).scheme == "https" else None
+
+
+@router.message(Command("search"))
+@router.message(F.text.casefold().in_({"поиск"}))
+async def search_command(message: Message) -> None:
+    user = await find_user(message.from_user.id)
+    if user is None or user_role(user) < RoleLevel.PARTICIPANT:
+        await message.answer("Поиск доступен после подтверждения участия.")
+        return
+    query = (message.text or "").partition(" ")[2].strip()
+    if not 2 <= len(query) <= 100:
+        await message.answer("Отправьте /search и от 2 до 100 символов. Например: /search тренировка", parse_mode=None)
+        return
+    async with AsyncSessionLocal() as session:
+        results = await search_accessible(session, query, role=user_role(user), role_code=user.role_code, squad_id=user.squad_id, user_id=user.id, limit=10)
+    if not results:
+        await message.answer("По вашему запросу ничего доступного не найдено.")
+        return
+    labels = {"event": "Занятие", "normative": "Норматив", "material": "Материал", "appeal": "Обращение", "person": "Участник"}
+    lines = [f"Найдено по запросу «{query}»:"]
+    buttons = []
+    for number, item in enumerate(results, start=1):
+        lines.append(f"{number}. {labels[item.type]}: {item.title[:180]}")
+        if item.description:
+            lines.append(item.description[:150])
+        url = app_deep_link(item.deep_link)
+        if url:
+            buttons.append([InlineKeyboardButton(text=f"{number}. {item.title[:45]}", web_app=WebAppInfo(url=url))])
+    await message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None, parse_mode=None)
+
+
+JOIN_STEPS = [JoinApplicationStates.full_name, JoinApplicationStates.birth_date, JoinApplicationStates.phone,
+              JoinApplicationStates.motivation, JoinApplicationStates.source, JoinApplicationStates.confirm]
+
+
+def join_keyboard(*, phone: bool = False, private: bool = True) -> ReplyKeyboardMarkup:
+    rows = [[KeyboardButton(text="Назад"), KeyboardButton(text="Отмена")]]
+    if phone and private:
+        rows.insert(0, [KeyboardButton(text="Поделиться своим телефоном", request_contact=True)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+async def prompt_join_step(message: Message, state: FSMContext) -> None:
+    current = await state.get_state()
+    data = await state.get_data()
+    prompts = {
+        JoinApplicationStates.full_name.state: ("ФИО кандидата (от 2 до 255 символов).", "full_name"),
+        JoinApplicationStates.birth_date.state: ("Дата рождения в формате ДД.ММ.ГГГГ или «пропустить».", "birth_date"),
+        JoinApplicationStates.phone.state: ("Телефон с кодом страны, например +7 999 123-45-67, или «пропустить».", "phone"),
+        JoinApplicationStates.motivation.state: ("Почему хотите вступить в ВПК «Звезда»? От 3 до 1500 символов.", "motivation_text"),
+        JoinApplicationStates.source.state: ("Откуда узнали о ВПК? До 300 символов или «пропустить».", "source_text"),
+    }
+    if current == JoinApplicationStates.confirm.state:
+        lines = ["Проверьте заявку:", f"ФИО: {data.get('full_name')}",
+                 f"Дата рождения: {data.get('birth_date') or 'не указана'}",
+                 f"Телефон: {data.get('phone') or 'не указан'}", f"Мотивация: {data.get('motivation_text')}",
+                 f"Источник: {data.get('source_text') or 'не указан'}", "",
+                 "Напишите «да», чтобы отправить заявку и дать согласие на обработку указанных персональных данных для её рассмотрения ВПК «Звезда».",
+                 "«Назад» или /back — исправить данные. «Нет» или /cancel — отменить."]
+        text = "\n".join(lines)
+    else:
+        prompt, field = prompts.get(current, prompts[JoinApplicationStates.full_name.state])
+        text = prompt
+        if data.get(field):
+            text += f"\nРанее указано: {data[field]}\nВведите новое значение или отправьте прежнее ещё раз."
+    step = next((i + 1 for i, item in enumerate(JOIN_STEPS) if item.state == current), 1)
+    await message.answer(f"Шаг {step}/{len(JOIN_STEPS)}\n{text}",
+                         reply_markup=join_keyboard(phone=current == JoinApplicationStates.phone.state, private=message.chat.type == "private"), parse_mode=None)
+
+
+@router.message(Command("back"))
+@router.message(F.text.casefold() == "назад")
+async def join_back(message: Message, state: FSMContext) -> None:
+    current = await state.get_state()
+    states = [item.state for item in JOIN_STEPS]
+    if current not in states:
+        await message.answer("Возврат по шагам доступен во время заполнения /join.", parse_mode=None)
+        return
+    if await ensure_dialog_not_expired(message, state):
+        return
+    await state.set_state(JOIN_STEPS[max(0, states.index(current) - 1)])
+    await prompt_join_step(message, state)
+
+
 @router.message(Command("join"))
 async def join(message: Message, state: FSMContext) -> None:
     user = await find_user(message.from_user.id)
-    role = user_role(user)
-    if role >= RoleLevel.PARTICIPANT:
+    if user_role(user) >= RoleLevel.PARTICIPANT:
         await message.answer("Вы уже в составе. Откройте личный кабинет через Mini App.", reply_markup=mini_app_keyboard())
         return
+    current = await state.get_state()
+    if current in [item.state for item in JOIN_STEPS] and not await ensure_dialog_not_expired(message, state):
+        await message.answer("Продолжаем вашу анкету. Данные предыдущих шагов сохранены.", parse_mode=None)
+        await prompt_join_step(message, state)
+        return
+    if current and current not in [item.state for item in JOIN_STEPS]:
+        await message.answer("Завершите текущий диалог или отмените его командой /cancel, затем используйте /join.", parse_mode=None)
+        return
     async with AsyncSessionLocal() as session:
-        application = await session.scalar(
-            select(JoinApplication)
-            .where(JoinApplication.telegram_id == message.from_user.id)
-            .order_by(JoinApplication.id.desc())
-        )
+        application = await session.scalar(select(JoinApplication).where(
+            JoinApplication.telegram_id == message.from_user.id,
+            JoinApplication.status_code.not_in(["REJECTED", "ARCHIVED"]),
+        ).order_by(JoinApplication.id.desc()))
     if application:
         await message.answer(f"Ваша заявка уже есть. Статус: {application.status_code}", reply_markup=mini_app_keyboard())
-    else:
-        await state.set_state(JoinApplicationStates.full_name)
-        await state.update_data(started_at=datetime.now(timezone.utc).isoformat())
-        await message.answer(
-            "Заполним заявку прямо здесь.\n\nНапишите ФИО кандидата.",
-            reply_markup=cancel_keyboard(),
-            parse_mode=None,
-        )
+        return
+    await state.clear()
+    await state.set_state(JoinApplicationStates.full_name)
+    await state.update_data(started_at=datetime.now(timezone.utc).isoformat())
+    await message.answer("Заполним заявку здесь. Для исправления предыдущего поля — /back, для отмены — /cancel.", parse_mode=None)
+    await prompt_join_step(message, state)
 
 
 @router.message(JoinApplicationStates.full_name)
 async def join_full_name(message: Message, state: FSMContext) -> None:
     if await ensure_dialog_not_expired(message, state):
         return
-    full_name = (message.text or "").strip()
-    if len(full_name) < 2:
-        await message.answer("ФИО слишком короткое. Напишите фамилию и имя.")
+    try:
+        full_name = join_text(" ".join((message.text or "").split()), label="ФИО", minimum=2, maximum=255)
+    except ValueError as exc:
+        await message.answer(str(exc), parse_mode=None)
         return
     await state.update_data(full_name=full_name)
     await state.set_state(JoinApplicationStates.birth_date)
-    await message.answer(
-        "Дата рождения в формате ДД.ММ.ГГГГ. Если не хотите указывать, напишите «пропустить».",
-        reply_markup=cancel_keyboard(),
-    )
+    await prompt_join_step(message, state)
 
 
 @router.message(JoinApplicationStates.birth_date)
@@ -441,56 +545,57 @@ async def join_birth_date(message: Message, state: FSMContext) -> None:
         return
     try:
         birth_date = parse_birth_date(message.text or "")
-    except ValueError:
-        await message.answer("Не понял дату. Пример: 14.02.2010. Можно написать «пропустить».")
+    except ValueError as exc:
+        await message.answer(str(exc), parse_mode=None)
         return
     await state.update_data(birth_date=birth_date.isoformat() if birth_date else None)
     await state.set_state(JoinApplicationStates.phone)
-    await message.answer("Телефон для связи. Если не хотите указывать, напишите «пропустить».", reply_markup=cancel_keyboard())
+    await prompt_join_step(message, state)
 
 
 @router.message(JoinApplicationStates.phone)
 async def join_phone(message: Message, state: FSMContext) -> None:
     if await ensure_dialog_not_expired(message, state):
         return
-    phone = (message.text or "").strip()
-    await state.update_data(phone=None if phone.casefold() in {"-", "нет", "пропустить"} else phone)
+    if message.contact and message.contact.user_id != message.from_user.id:
+        await message.answer("Поделитесь своим контактом или укажите телефон текстом.", parse_mode=None)
+        return
+    try:
+        phone = normalize_join_phone(message.contact.phone_number if message.contact else message.text)
+    except ValueError as exc:
+        await message.answer(str(exc), parse_mode=None)
+        return
+    await state.update_data(phone=phone)
     await state.set_state(JoinApplicationStates.motivation)
-    await message.answer("Почему хотите вступить в ВПК «Звезда»?", reply_markup=cancel_keyboard())
+    await prompt_join_step(message, state)
 
 
 @router.message(JoinApplicationStates.motivation)
 async def join_motivation(message: Message, state: FSMContext) -> None:
     if await ensure_dialog_not_expired(message, state):
         return
-    motivation = (message.text or "").strip()
-    if len(motivation) < 3:
-        await message.answer("Напишите хотя бы коротко, зачем хотите вступить.")
+    try:
+        motivation = join_text(message.text or "", label="Мотивация", minimum=3, maximum=1500)
+    except ValueError as exc:
+        await message.answer(str(exc), parse_mode=None)
         return
     await state.update_data(motivation_text=motivation)
     await state.set_state(JoinApplicationStates.source)
-    await message.answer("Откуда узнали о ВПК? Можно написать «пропустить».", reply_markup=cancel_keyboard())
+    await prompt_join_step(message, state)
 
 
 @router.message(JoinApplicationStates.source)
 async def join_source(message: Message, state: FSMContext) -> None:
     if await ensure_dialog_not_expired(message, state):
         return
-    source = (message.text or "").strip()
-    await state.update_data(source_text=None if source.casefold() in {"-", "нет", "пропустить"} else source)
-    data = await state.get_data()
-    lines = [
-        "Проверьте заявку:",
-        f"ФИО: {data.get('full_name')}",
-        f"Дата рождения: {data.get('birth_date') or 'не указана'}",
-        f"Телефон: {data.get('phone') or 'не указан'}",
-        f"Мотивация: {data.get('motivation_text')}",
-        f"Источник: {data.get('source_text') or 'не указан'}",
-        "",
-        "Отправить заявку? Напишите «да» или «нет».",
-    ]
+    try:
+        source = join_text(message.text or "", label="Источник", maximum=300, optional=True)
+    except ValueError as exc:
+        await message.answer(str(exc), parse_mode=None)
+        return
+    await state.update_data(source_text=source)
     await state.set_state(JoinApplicationStates.confirm)
-    await message.answer("\n".join(lines), reply_markup=cancel_keyboard(), parse_mode=None)
+    await prompt_join_step(message, state)
 
 
 @router.message(JoinApplicationStates.confirm)
@@ -591,10 +696,14 @@ async def help_command(message: Message) -> None:
         "/schedule — ближайшие занятия. Под уведомлением о занятии нажмите «Приду», «Не приду» или «Пока не знаю».\n"
         "/normatives — активные нормативы. Чтобы сдать норматив, просто пришлите фото, видео или документ в бот и выберите норматив.\n"
         "/attendance — ваши отметки посещаемости.\n"
-        "/notifications — последние уведомления.\n"
+        "/notifications — уведомления, текст, страницы и отметка прочтения.\n"
+        "/search текст — поиск занятий, нормативов, материалов и обращений.\n"
         "/appeal — обращение командиру без Mini App.\n"
+        "/myappeals — обращения по страницам и переписка.\n"
+        "/appealview номер — открыть обращение и ответить прямо здесь.\n"
         "/vk — код для привязки ВКонтакте.\n"
         "/resetpassword — код сброса и смена пароля через Telegram.\n"
+        "/back — исправить предыдущий шаг анкеты. /join продолжает начатую анкету.\n"
         "/join — заявка на вступление.\n"
         "/profile — ваш профиль.\n"
         "/cancel — отменить текущий диалог.\n\n"
@@ -747,6 +856,8 @@ async def menu_callback(callback: CallbackQuery, state: FSMContext) -> None:
             await message.answer("Уведомления доступны после подтверждения участия.")
         else:
             await send_notifications_text(message, user)
+    elif action == "search":
+        await message.answer("Для поиска отправьте /search и текст. Например: /search тренировка", parse_mode=None)
     elif action == "normatives":
         if user is None or role < RoleLevel.PARTICIPANT:
             await message.answer("Нормативы доступны после подтверждения участия.")
@@ -762,6 +873,11 @@ async def menu_callback(callback: CallbackQuery, state: FSMContext) -> None:
             await message.answer("Самоотметка доступна после подтверждения участия.")
         else:
             await send_self_checkin_result(message, user)
+    elif action == "myappeals":
+        if user is None or role < RoleLevel.PARTICIPANT:
+            await message.answer("Обращения доступны после подтверждения участия.")
+        else:
+            await send_my_appeals(message, user)
     elif action == "appeal":
         await start_appeal_dialog(message, state, callback.from_user.id)
     elif action == "vk":
@@ -894,115 +1010,121 @@ async def self_checkin_command(message: Message) -> None:
     await send_self_checkin_result(message, user)
 
 
+def bot_event_time(value: datetime) -> str:
+    return value.astimezone(ZoneInfo(get_settings().timezone)).strftime("%d.%m %H:%M")
+
+
 @router.callback_query(F.data.startswith("event:"))
 async def event_response(callback: CallbackQuery, state: FSMContext) -> None:
     parts = (callback.data or "").split(":")
-    if len(parts) != 3:
+    if len(parts) != 3 or not parts[1].isdigit() or parts[2] not in {"COMING", "NOT_COMING", "MAYBE"}:
         await callback.answer("Некорректный ответ.", show_alert=True)
         return
-    event_id = int(parts[1])
-    response_code = parts[2]
+    event_id, response_code = int(parts[1]), parts[2]
     user = await find_user(callback.from_user.id)
     if user is None or user_role(user) < RoleLevel.PARTICIPANT:
         await callback.answer("Нужна привязка к составу.", show_alert=True)
         return
-    async with AsyncSessionLocal() as session:
-        event = await session.get(ScheduleEvent, event_id)
-        if event is None:
-            await callback.answer("Событие не найдено.", show_alert=True)
-            return
-        if event.response_deadline_at and datetime.now(timezone.utc) > event.response_deadline_at:
-            await callback.answer("Дедлайн ответа уже прошёл.", show_alert=True)
-            return
-        if response_code == "NOT_COMING" and event.requires_response:
-            reasons = list(
-                (
-                    await session.scalars(
-                        select(AbsenceReason).where(AbsenceReason.is_active.is_(True)).order_by(AbsenceReason.sort_order)
+    try:
+        async with AsyncSessionLocal() as session:
+            event = await session.get(ScheduleEvent, event_id)
+            if event is None:
+                raise EventResponseError("NOT_FOUND", "Занятие не найдено.")
+            validate_event_available(event, role=user_role(user), squad_id=user.squad_id, now=datetime.now(timezone.utc))
+            if response_code == "NOT_COMING":
+                reasons = list((await session.scalars(
+                    select(AbsenceReason).where(AbsenceReason.is_active.is_(True)).order_by(AbsenceReason.sort_order)
+                )).all())
+                if callback.message:
+                    await callback.message.answer(
+                        f"Причина отсутствия на «{event.title}»:",
+                        reply_markup=absence_reasons_keyboard(event_id, reasons), parse_mode=None,
                     )
-                ).all()
-            )
-            await callback.message.edit_text(
-                "Выберите причину отсутствия:",
-                reply_markup=absence_reasons_keyboard(event_id, reasons),
-            )
-            await callback.answer()
-            return
-    maybe_deadline: datetime | None = None
-    if response_code == "MAYBE":
-        async with AsyncSessionLocal() as session2:
-            ev = await session2.get(ScheduleEvent, event_id)
-            if ev and ev.response_deadline_at:
-                maybe_deadline = ev.response_deadline_at
-                reminder_at = maybe_deadline - timedelta(hours=1)
-                if reminder_at > datetime.now(timezone.utc):
-                    session2.add(
-                        Notification(
-                            user_id=user.id,
-                            type_code="SCHEDULE",
-                            title="Напоминание об ответе",
-                            body=f"Вы ещё не дали окончательный ответ на «{ev.title}». Дедлайн: {maybe_deadline.strftime('%d.%m %H:%M')} UTC.",
-                            entity_name="schedule_events",
-                            entity_id=event_id,
-                            send_to_tg=True,
-                        )
-                    )
-                    await session2.commit()
-    await save_event_response(event_id=event_id, user_id=user.id, response_code=response_code)
-    label = {"COMING": "буду", "MAYBE": "уточню позже"}.get(response_code, "ответ сохранён")
-    extra = ""
-    if response_code == "MAYBE" and maybe_deadline:
-        extra = f" Напомним до {maybe_deadline.strftime('%d.%m %H:%M')}."
+                    if not reasons:
+                        await state.set_state(AbsenceReasonStates.awaiting_custom)
+                        await state.update_data(event_id=event_id, reason_id=None, user_id=user.id,
+                                                started_at=datetime.now(timezone.utc).isoformat())
+                        await callback.message.answer("Напишите причину текстом (до 500 символов).", reply_markup=cancel_keyboard())
+                await callback.answer()
+                return
+        await save_event_response(event_id=event_id, user_id=user.id, response_code=response_code)
+        if await state.get_state() == AbsenceReasonStates.awaiting_custom.state:
+            await state.clear()
+    except EventResponseError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    label = {"COMING": "приду", "MAYBE": "уточню позже"}[response_code]
     if callback.message:
-        await callback.message.edit_text(f"Ответ записан: {label}.{extra}")
+        await callback.message.answer(f"Ответ на «{event.title}»: {label}.", reply_markup=event_keyboard(event_id), parse_mode=None)
     await callback.answer("Ответ сохранён.")
 
 
 @router.callback_query(F.data.startswith("reason:"))
 async def absence_reason(callback: CallbackQuery, state: FSMContext) -> None:
-    parts = (callback.data or "").split(":")
-    if len(parts) != 3:
+    values = callback_ids(callback.data, "reason", 2)
+    if values is None:
         await callback.answer("Некорректная причина.", show_alert=True)
         return
-    event_id = int(parts[1])
-    reason_id = int(parts[2])
+    event_id, reason_id = values
     user = await find_user(callback.from_user.id)
     if user is None or user_role(user) < RoleLevel.PARTICIPANT:
         await callback.answer("Нужна привязка к составу.", show_alert=True)
         return
-    async with AsyncSessionLocal() as session:
-        reason = await session.get(AbsenceReason, reason_id)
-        if reason is None:
-            await callback.answer("Причина не найдена.", show_alert=True)
-            return
-        if reason.requires_comment:
-            await state.set_state(AbsenceReasonStates.awaiting_custom)
-            await state.update_data(event_id=event_id, reason_id=reason_id, user_id=user.id, reason_label=reason.label)
-            await callback.message.edit_text("Напишите причину одним сообщением.")
-            await callback.answer()
-            return
-    await save_event_response(event_id=event_id, user_id=user.id, response_code="NOT_COMING", absence_reason_id=reason_id)
+    try:
+        async with AsyncSessionLocal() as session:
+            event = await session.get(ScheduleEvent, event_id)
+            reason = await session.get(AbsenceReason, reason_id)
+            if event is None or reason is None or not reason.is_active:
+                raise EventResponseError("NOT_FOUND", "Занятие или причина недоступны. Обновите расписание.")
+            validate_event_available(event, role=user_role(user), squad_id=user.squad_id, now=datetime.now(timezone.utc))
+            if reason.requires_comment:
+                await state.set_state(AbsenceReasonStates.awaiting_custom)
+                await state.update_data(event_id=event_id, reason_id=reason_id, user_id=user.id,
+                                        reason_label=reason.label, started_at=datetime.now(timezone.utc).isoformat())
+                if callback.message:
+                    await callback.message.answer("Напишите причину одним сообщением (до 500 символов).", reply_markup=cancel_keyboard())
+                await callback.answer()
+                return
+        await save_event_response(event_id=event_id, user_id=user.id, response_code="NOT_COMING", absence_reason_id=reason_id)
+        if await state.get_state() == AbsenceReasonStates.awaiting_custom.state:
+            await state.clear()
+    except EventResponseError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
     if callback.message:
-        await callback.message.edit_text(f"Ответ записан: не приду. Причина: {reason.label}")
+        await callback.message.answer(f"Ответ записан: не приду. Причина: {reason.label}", reply_markup=event_keyboard(event_id), parse_mode=None)
     await callback.answer("Причина сохранена.")
 
 
 @router.message(AbsenceReasonStates.awaiting_custom)
 async def absence_custom_reason(message: Message, state: FSMContext) -> None:
+    if await ensure_dialog_not_expired(message, state):
+        return
     data = await state.get_data()
     text = (message.text or "").strip()
-    if not text:
-        await message.answer("Напишите причину текстом.")
+    if text.startswith("/"):
+        await message.answer("Сначала завершите ввод причины или отмените его командой /cancel.", parse_mode=None)
         return
-    await save_event_response(
-        event_id=int(data["event_id"]),
-        user_id=int(data["user_id"]),
-        response_code="NOT_COMING",
-        absence_reason_id=int(data["reason_id"]),
-        custom_reason=text,
-    )
+    if not text or len(text) > 500:
+        await message.answer("Напишите причину текстом: от 1 до 500 символов.")
+        return
+    user = await find_user(message.from_user.id)
+    if user is None or user.id != data.get("user_id"):
+        await state.clear()
+        await message.answer("Привязка к составу изменилась. Откройте /schedule заново.")
+        return
+    try:
+        await save_event_response(
+            event_id=int(data["event_id"]), user_id=user.id, response_code="NOT_COMING",
+            absence_reason_id=data.get("reason_id"), custom_reason=text,
+        )
+    except EventResponseError as exc:
+        await message.answer(str(exc))
+        if exc.code not in {"INVALID_REASON", "REASON_REQUIRED"}:
+            await state.clear()
+        return
     await state.clear()
-    await message.answer(f"Ответ записан: не приду. Причина: {data.get('reason_label')}: {text}", parse_mode=None)
+    await message.answer(f"Ответ записан: не приду. Причина: {text}", reply_markup=main_keyboard(user_role(user)), parse_mode=None)
 
 
 @router.message(Command("attendance"))
@@ -1054,25 +1176,184 @@ async def normatives(message: Message) -> None:
 
 async def send_normatives_text(message: Message, user: User) -> None:
     async with AsyncSessionLocal() as session:
-        rows = list(
-            (
-                await session.scalars(
-                    select(Normative)
-                    .where(Normative.is_active.is_(True))
-                    .where((Normative.squad_id.is_(None)) | (Normative.squad_id == user.squad_id))
-                    .order_by(Normative.deadline_at.nullslast(), Normative.created_at.desc())
-                    .limit(10)
-                )
-            ).all()
-        )
+        rows = list((await session.scalars(
+            select(Normative).where(Normative.is_active.is_(True))
+            .where((Normative.squad_id.is_(None)) | (Normative.squad_id == user.squad_id))
+            .order_by(Normative.deadline_at.nullslast(), Normative.created_at.desc()).limit(10)
+        )).all())
+        submissions = list((await session.scalars(
+            select(NormativeSubmission).where(NormativeSubmission.user_id == user.id, NormativeSubmission.normative_id.in_([item.id for item in rows]))
+            .order_by(NormativeSubmission.submitted_at.desc())
+        )).all()) if rows else []
     if not rows:
         await message.answer("Активных нормативов пока нет.")
         return
-    lines = ["Нормативы:"]
+    latest = {}
+    for submission in submissions:
+        latest.setdefault(submission.normative_id, submission)
+    labels = {"PENDING": "На проверке", "SUBMITTED": "На проверке", "PENDING_REVIEW": "На проверке", "ACCEPTED": "Принят", "REJECTED": "Отклонён", "NEEDS_REDO": "Нужна доработка"}
+    lines = ["Активные нормативы и ваши последние сдачи:"]
+    buttons = []
     for item in rows:
-        deadline = item.deadline_at.strftime("%d.%m %H:%M") if item.deadline_at else "без дедлайна"
-        lines.append(f"• {item.title}: {deadline}")
-    await message.answer("\n".join(lines), parse_mode=None)
+        deadline = bot_event_time(item.deadline_at) if item.deadline_at else "без срока"
+        submission = latest.get(item.id)
+        label = labels.get(submission.status_code, submission.status_code) if submission else "Ещё не сдавали"
+        lines.append(f"• {item.title[:160]} · {deadline}\n  {label}")
+        if submission and submission.reviewer_comment:
+            lines.append(f"  Комментарий проверяющего: {submission.reviewer_comment[:120]}")
+        url = app_deep_link(f"/normatives?id={item.id}")
+        if url:
+            buttons.append([InlineKeyboardButton(text=item.title[:45], web_app=WebAppInfo(url=url))])
+    lines.append("\nДля сдачи пришлите в бот фото, видео или документ и выберите норматив.")
+    await message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None, parse_mode=None)
+
+
+@router.message(Command("myappeals"))
+async def my_appeals_command(message: Message) -> None:
+    user = await find_user(message.from_user.id)
+    if user is None or user_role(user) < RoleLevel.PARTICIPANT:
+        await message.answer("Обращения доступны после подтверждения участия.")
+        return
+    await send_my_appeals(message, user)
+
+
+async def send_my_appeals(message: Message, user: User, page: int = 0) -> None:
+    page = max(0, min(page, 10000))
+    async with AsyncSessionLocal() as session:
+        rows = list((await session.scalars(select(Appeal).where(Appeal.author_user_id == user.id).order_by(Appeal.created_at.desc(), Appeal.id.desc()).offset(page * 6).limit(7))).all())
+    has_more = len(rows) > 6
+    lines = [f"Ваши обращения · страница {page + 1}:"]
+    buttons = []
+    for item in rows[:6]:
+        lines.append(f"#{item.id} · {item.subject[:160]}\n{APPEAL_STATUS_LABELS.get(item.status_code, item.status_code)} · {bot_event_time(item.created_at)}")
+        buttons.append([InlineKeyboardButton(text=f"#{item.id} · {item.subject[:40]}", callback_data=f"appealthread:{item.id}:0")])
+    navigation = []
+    if page:
+        navigation.append(InlineKeyboardButton(text="← Назад", callback_data=f"appeallist:{page - 1}"))
+    if has_more:
+        navigation.append(InlineKeyboardButton(text="Далее →", callback_data=f"appeallist:{page + 1}"))
+    if navigation:
+        buttons.append(navigation)
+    lines.append("\nНовое обращение: /appeal" if rows else "Обращений пока нет. Создать: /appeal")
+    await message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None, parse_mode=None)
+
+
+async def send_appeal_thread(message: Message, user: User, appeal_id: int, page: int = 0) -> bool:
+    page = max(0, min(page, 10000))
+    async with AsyncSessionLocal() as session:
+        appeal = await session.get(Appeal, appeal_id)
+        if appeal is None or not can_access_appeal(author_id=appeal.author_user_id, user_id=user.id, role=user_role(user)):
+            await message.answer("Обращение не найдено или недоступно.", parse_mode=None)
+            return False
+        # Latest messages first so an incoming answer is immediately visible.
+        rows = list((await session.scalars(select(AppealMessage).where(AppealMessage.appeal_id == appeal.id)
+                    .order_by(AppealMessage.created_at.desc(), AppealMessage.id.desc()).offset(page * 3).limit(4))).all())
+    await message.answer(f"Обращение #{appeal.id}: {appeal.subject}\n{APPEAL_STATUS_LABELS.get(appeal.status_code, appeal.status_code)}", parse_mode=None)
+    if page == 0:
+        # Older bot appeals have no initial AppealMessage; keep their original text visible too.
+        for label, text in (("Описание", appeal.description), ("Решение", appeal.resolution_text)):
+            if text:
+                for start in range(0, len(text), 1600):
+                    await message.answer(f"{label}:\n{text[start:start + 1600]}", parse_mode=None)
+    for item in reversed(rows[:3]):
+        label = "Вы" if item.author_id == user.id else "Автор" if item.author_id == appeal.author_user_id else "Командование"
+        for start in range(0, len(item.body), 1600):
+            await message.answer(f"{label} · {bot_event_time(item.created_at)}\n{item.body[start:start + 1600]}", parse_mode=None)
+    buttons = [[InlineKeyboardButton(text="Ответить", callback_data=f"appealreply:{appeal.id}")]]
+    navigation = []
+    if page:
+        navigation.append(InlineKeyboardButton(text="← Новее", callback_data=f"appealthread:{appeal.id}:{page - 1}"))
+    if len(rows) > 3:
+        navigation.append(InlineKeyboardButton(text="Раньше →", callback_data=f"appealthread:{appeal.id}:{page + 1}"))
+    if navigation:
+        buttons.append(navigation)
+    url = app_deep_link(f"/appeals?id={appeal.id}")
+    if url:
+        buttons.append([InlineKeyboardButton(text="Открыть в приложении", web_app=WebAppInfo(url=url))])
+    buttons.append([InlineKeyboardButton(text="Мои обращения", callback_data="appeallist:0")])
+    await message.answer("Можно ответить здесь или открыть приложение.", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=None)
+    return True
+
+
+@router.message(Command("appealview"))
+async def appeal_view_command(message: Message) -> None:
+    parts = (message.text or "").split(maxsplit=1)
+    ids = callback_ids(f"view:{parts[1]}" if len(parts) == 2 else None, "view", 1)
+    user = await find_user(message.from_user.id)
+    if user is None or user_role(user) < RoleLevel.PARTICIPANT:
+        await message.answer("Обращения доступны после подтверждения участия.", parse_mode=None)
+    elif ids is None:
+        await message.answer("Используйте /appealview номер, например /appealview 12.", parse_mode=None)
+    else:
+        await send_appeal_thread(message, user, ids[0])
+
+
+@router.callback_query(F.data.startswith("appeallist:") | F.data.startswith("appealthread:") | F.data.startswith("appealreply:"))
+async def appeal_thread_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    user = await find_user(callback.from_user.id)
+    if callback.message is None or user is None or user_role(user) < RoleLevel.PARTICIPANT:
+        await callback.answer("Обращение недоступно.", show_alert=True)
+        return
+    data = callback.data or ""
+    if data.startswith("appeallist:"):
+        ids = callback_ids(data, "appeallist", 1)
+        # callback_ids intentionally requires positive values; page zero is encoded separately.
+        page = 0 if data == "appeallist:0" else ids[0] if ids else None
+        if page is None or page > 10000:
+            await callback.answer("Кнопка устарела.", show_alert=True)
+            return
+        await callback.answer()
+        await send_my_appeals(callback.message, user, page)
+    elif data.startswith("appealthread:"):
+        parts = data.split(":")
+        ids = callback_ids(":".join(parts[:2]), "appealthread", 1)
+        if ids is None or len(parts) != 3 or not re.fullmatch(r"[0-9]{1,5}", parts[2]) or int(parts[2]) > 10000:
+            await callback.answer("Кнопка устарела.", show_alert=True)
+            return
+        await callback.answer()
+        await send_appeal_thread(callback.message, user, ids[0], int(parts[2]))
+    else:
+        ids = callback_ids(data, "appealreply", 1)
+        if ids is None:
+            await callback.answer("Кнопка устарела.", show_alert=True)
+            return
+        async with AsyncSessionLocal() as session:
+            appeal = await session.get(Appeal, ids[0])
+            if appeal is None or not can_access_appeal(author_id=appeal.author_user_id, user_id=user.id, role=user_role(user)):
+                await callback.answer("Обращение недоступно.", show_alert=True)
+                return
+        await state.clear()
+        await state.set_state(AppealReplyStates.body)
+        await state.update_data(appeal_id=appeal.id, user_id=user.id, started_at=datetime.now(timezone.utc).isoformat())
+        await callback.answer()
+        await callback.message.answer(f"Напишите ответ на обращение #{appeal.id} одним сообщением (до 4000 символов). Для отмены /cancel.", reply_markup=cancel_keyboard(), parse_mode=None)
+
+
+@router.message(AppealReplyStates.body)
+async def appeal_reply_body(message: Message, state: FSMContext) -> None:
+    if await ensure_dialog_not_expired(message, state):
+        return
+    if (message.text or "").startswith("/"):
+        await message.answer("Команда не отправлена как ответ. Для выхода используйте /cancel.", parse_mode=None)
+        return
+    try:
+        body = validate_appeal_text(message.text or "")
+    except ValueError as exc:
+        await message.answer(str(exc), parse_mode=None)
+        return
+    data = await state.get_data()
+    user = await find_user(message.from_user.id)
+    async with AsyncSessionLocal() as session:
+        appeal = await session.scalar(select(Appeal).where(Appeal.id == data.get("appeal_id")).with_for_update())
+        if user is None or user.id != data.get("user_id") or appeal is None or not can_access_appeal(author_id=appeal.author_user_id, user_id=user.id, role=user_role(user)):
+            await state.clear()
+            await message.answer("Обращение недоступно. Откройте /myappeals заново.", parse_mode=None)
+            return
+        await add_appeal_reply(session, appeal, sender_id=user.id, role=user_role(user), body=body)
+        await session.commit()
+    await state.clear()
+    await publish_appeal_update()
+    await message.answer("Ответ отправлен.", reply_markup=main_keyboard(user_role(user)), parse_mode=None)
 
 
 @router.message(Command("notifications"))
@@ -1085,27 +1366,72 @@ async def notifications(message: Message) -> None:
     await send_notifications_text(message, user)
 
 
-async def send_notifications_text(message: Message, user: User) -> None:
+async def send_notifications_text(message: Message, user: User, page: int = 0, unread_only: bool = False) -> None:
+    page = max(0, min(page, 10000))
+    mode = int(unread_only)
     async with AsyncSessionLocal() as session:
-        rows = list(
-            (
-                await session.scalars(
-                    select(Notification)
-                    .where(Notification.user_id == user.id)
-                    .order_by(Notification.is_pinned.desc(), Notification.created_at.desc())
-                    .limit(10)
-                )
-            ).all()
-        )
+        counts = await inbox_counts(session, user.id)
+        rows = await inbox_page(session, user.id, unread_only=unread_only, limit=INBOX_PAGE_SIZE + 1, offset=page * INBOX_PAGE_SIZE)
+    has_next = len(rows) > INBOX_PAGE_SIZE
+    rows = rows[:INBOX_PAGE_SIZE]
+    lines = [f"Уведомления: {counts['unread']} непрочитанных из {counts['total']}."]
+    keyboard_rows = []
+    for number, item in enumerate(rows, start=1):
+        marker = "●" if not item.is_read else "○"
+        lines.append(f"{number}. {marker} {item.title[:180]}")
+        keyboard_rows.append([InlineKeyboardButton(text=f"{number}. {item.title[:45]}", callback_data=f"inbox:view:{item.id}:{page}:{mode}")])
     if not rows:
-        await message.answer("Уведомлений пока нет.")
+        lines.append("Новых уведомлений нет." if unread_only else "На этой странице уведомлений нет.")
+    navigation = []
+    if page > 0:
+        navigation.append(InlineKeyboardButton(text="← Назад", callback_data=f"inbox:page:{page - 1}:{mode}"))
+    if has_next:
+        navigation.append(InlineKeyboardButton(text="Далее →", callback_data=f"inbox:page:{page + 1}:{mode}"))
+    if navigation:
+        keyboard_rows.append(navigation)
+    keyboard_rows.append([InlineKeyboardButton(text="Все уведомления" if unread_only else "Только непрочитанные", callback_data=f"inbox:page:0:{1 - mode}")])
+    if counts["unread"]:
+        keyboard_rows.append([InlineKeyboardButton(text="Прочитать все", callback_data="inbox:readall")])
+    await message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_rows), parse_mode=None)
+
+
+@router.callback_query(F.data.startswith("inbox:"))
+async def inbox_callback(callback: CallbackQuery) -> None:
+    user = await find_user(callback.from_user.id)
+    if user is None or user_role(user) < RoleLevel.PARTICIPANT or callback.message is None:
+        await callback.answer("Нужна активная привязка к составу.", show_alert=True)
         return
-    unread = [r for r in rows if not r.is_read]
-    lines = [f"Уведомления ({len(unread)} новых):"]
-    for item in rows:
-        prefix = "новое:" if not item.is_read else "•"
-        lines.append(f"{prefix} {item.title}")
-    await message.answer("\n".join(lines), parse_mode=None)
+    parts = (callback.data or "").split(":")
+    action = parts[1] if len(parts) > 1 else ""
+    if action == "page" and len(parts) == 4 and parts[2].isdigit() and parts[3] in {"0", "1"}:
+        await callback.answer()
+        await send_notifications_text(callback.message, user, int(parts[2]), parts[3] == "1")
+        return
+    if action == "readall" and len(parts) == 2:
+        async with AsyncSessionLocal() as session:
+            count = await mark_inbox_read(session, user.id)
+            await record_audit(session, user_id=user.id, action_code="notifications.read_all", entity_name="notifications", new_value={"count": count, "source": "BOT"})
+            await session.commit()
+        await callback.answer(f"Прочитано: {count}")
+        await send_notifications_text(callback.message, user)
+    elif action == "view" and len(parts) == 5 and all(part.isdigit() for part in parts[2:]) and parts[4] in {"0", "1"}:
+        async with AsyncSessionLocal() as session:
+            item = await mark_notification_read(session, user.id, int(parts[2]))
+            if item is None:
+                await callback.answer("Уведомление не найдено.", show_alert=True)
+                return
+            await session.commit()
+            text = f"{item.title[:255]}\n{bot_event_time(item.created_at)}\n\n{(item.body or 'Без дополнительного текста.')[:3000]}"
+            buttons = [[InlineKeyboardButton(text="К уведомлениям", callback_data=f"inbox:page:{parts[3]}:{parts[4]}")]]
+            url = app_deep_link(item.deep_link)
+            if url:
+                buttons.insert(0, [InlineKeyboardButton(text="Открыть в приложении", web_app=WebAppInfo(url=url))])
+        await callback.answer()
+        await callback.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=None)
+    else:
+        await callback.answer("Кнопка устарела. Откройте /notifications заново.", show_alert=True)
+        return
+    await publish_realtime_event(get_settings(), event_type="notifications.read", user_id=user.id, query_keys=["notifications", "dashboard"])
 
 
 @router.message(Command("appeal"))
@@ -1118,6 +1444,7 @@ async def start_appeal_dialog(message: Message, state: FSMContext, telegram_id: 
     if user is None or user_role(user) < RoleLevel.PARTICIPANT:
         await message.answer("Обращения доступны после подтверждения участия.", parse_mode=None)
         return
+    await state.clear()
     await state.set_state(AppealStates.subject)
     await state.update_data(started_at=datetime.now(timezone.utc).isoformat(), user_id=user.id)
     await message.answer("Напишите тему обращения.", reply_markup=cancel_keyboard(), parse_mode=None)
@@ -1128,8 +1455,8 @@ async def appeal_subject(message: Message, state: FSMContext) -> None:
     if await ensure_dialog_not_expired(message, state):
         return
     subject = (message.text or "").strip()
-    if len(subject) < 3:
-        await message.answer("Тема слишком короткая. Напишите чуть подробнее.")
+    if len(subject) < 3 or len(subject) > 255:
+        await message.answer("Тема должна содержать от 3 до 255 символов.", parse_mode=None)
         return
     await state.update_data(subject=subject[:255])
     await state.set_state(AppealStates.description)
@@ -1141,8 +1468,8 @@ async def appeal_description(message: Message, state: FSMContext) -> None:
     if await ensure_dialog_not_expired(message, state):
         return
     description = (message.text or "").strip()
-    if len(description) < 5:
-        await message.answer("Описание слишком короткое. Добавьте деталей.")
+    if len(description) < 5 or len(description) > 10000:
+        await message.answer("Описание должно содержать от 5 до 10000 символов.", parse_mode=None)
         return
     await state.update_data(description=description)
     await state.set_state(AppealStates.urgency)
@@ -1162,30 +1489,38 @@ async def appeal_description(message: Message, state: FSMContext) -> None:
 async def appeal_urgency_text(message: Message, state: FSMContext) -> None:
     if await ensure_dialog_not_expired(message, state):
         return
-    low = (message.text or "").casefold()
-    urgency = "URGENT" if "очень" in low else "HIGH" if "сроч" in low else "NORMAL"
+    low = (message.text or "").strip().casefold()
+    urgency = {"обычная": "NORMAL", "нормальная": "NORMAL", "срочная": "HIGH", "срочно": "HIGH", "очень срочно": "URGENT"}.get(low)
+    if urgency is None:
+        await message.answer("Выберите срочность кнопкой или напишите: обычная, срочная, очень срочно.", parse_mode=None)
+        return
     await create_appeal_from_state(message, state, urgency)
 
 
 @router.callback_query(F.data.startswith("appeal_urgency:"))
 async def appeal_urgency_callback(callback: CallbackQuery, state: FSMContext) -> None:
     urgency = (callback.data or "").split(":", 1)[1]
-    if urgency not in {"LOW", "NORMAL", "HIGH", "URGENT"}:
-        urgency = "NORMAL"
-    if callback.message:
-        await create_appeal_from_state(callback.message, state, urgency)
-    await callback.answer("Обращение отправлено.")
+    if urgency not in {"LOW", "NORMAL", "HIGH", "URGENT"} or callback.message is None:
+        await callback.answer("Кнопка устарела.", show_alert=True)
+        return
+    created = await create_appeal_from_state(callback.message, state, urgency, telegram_id=callback.from_user.id)
+    await callback.answer("Обращение отправлено." if created else "Откройте /appeal заново.", show_alert=not created)
 
 
-async def create_appeal_from_state(message: Message, state: FSMContext, urgency: str) -> None:
+async def create_appeal_from_state(message: Message, state: FSMContext, urgency: str, *, telegram_id: int | None = None) -> bool:
+    if await state.get_state() != AppealStates.urgency.state or await ensure_dialog_not_expired(message, state):
+        return False
     data = await state.get_data()
     user_id = int(data.get("user_id") or 0)
+    if not data.get("subject") or not data.get("description"):
+        await state.clear()
+        return False
     async with AsyncSessionLocal() as session:
         user = await session.get(User, user_id)
-        if user is None:
+        if user is None or user.telegram_id != (telegram_id if telegram_id is not None else message.from_user.id) or user_role(user) < RoleLevel.PARTICIPANT:
             await state.clear()
             await message.answer("Профиль не найден. Обратитесь к командиру.", parse_mode=None)
-            return
+            return False
         appeal = Appeal(
             author_user_id=user.id,
             is_anonymous=False,
@@ -1197,6 +1532,7 @@ async def create_appeal_from_state(message: Message, state: FSMContext, urgency:
         )
         session.add(appeal)
         await session.flush()
+        session.add(AppealMessage(appeal_id=appeal.id, author_id=user.id, body=appeal.description))
         await record_audit(
             session,
             user_id=user.id,
@@ -1205,33 +1541,16 @@ async def create_appeal_from_state(message: Message, state: FSMContext, urgency:
             entity_id=appeal.id,
             new_value={"source": "telegram", "urgency_code": urgency},
         )
-        commanders = list(
-            (
-                await session.scalars(
-                    select(User).where(
-                        User.status_code == "ACTIVE",
-                        User.role_code.in_(("DEPUTY_PLATOON_COMMANDER", "PLATOON_COMMANDER", "ADMIN", "SUPER_ADMIN")),
-                    )
-                )
-            ).all()
-        )
-        for commander in commanders:
-            session.add(
-                Notification(
-                    user_id=commander.id,
-                    type_code="APPEAL",
-                    title=f"Новое обращение: {appeal.subject}",
-                    body=f"{user.full_name} отправил обращение через Telegram. Срочность: {urgency}.",
-                    entity_name="appeals",
-                    entity_id=appeal.id,
-                    send_to_tg=True,
-                )
-            )
+        await notify_appeal_commanders(session, appeal, sender_id=user.id, title="Новое обращение",
+                                      body=f"{user.full_name}: {appeal.subject}. Срочность: {urgency}.")
         await session.commit()
     await state.clear()
-    await message.answer("Обращение отправлено. Ответ придёт в уведомления.", reply_markup=main_keyboard(user_role(user)), parse_mode=None)
+    await publish_appeal_update()
+    await message.answer(f"Обращение #{appeal.id} отправлено. Переписка: /appealview {appeal.id}. Ответ придёт в уведомления.", reply_markup=main_keyboard(user_role(user)), parse_mode=None)
+    return True
 
 
+@router.message(Command("applications"))
 @router.message(F.text.casefold().in_({"заявки"}))
 async def cmd_applications(message: Message) -> None:
     user = await find_user(message.from_user.id)
@@ -1328,96 +1647,74 @@ async def normative_review_callback(callback: CallbackQuery) -> None:
 
 
 def batch_events_keyboard(events: list[ScheduleEvent]) -> InlineKeyboardMarkup:
-    """Show 'Answer all' shortcut when there are 2+ upcoming unanswered events."""
-    rows = [
-        [
-            InlineKeyboardButton(text="На все", callback_data="batch:COMING"),
-            InlineKeyboardButton(text="Ни на одно", callback_data="batch:NOT_COMING"),
-        ],
-        [InlineKeyboardButton(text="По одному", callback_data="batch:ONE_BY_ONE")],
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Приду на все", callback_data="batch:COMING")],
+        [InlineKeyboardButton(text="Ответить по одному", callback_data="batch:ONE_BY_ONE")],
+    ])
 
 
 async def _upcoming_unanswered_events(session, user: User, limit: int = 7) -> list[ScheduleEvent]:
     now = datetime.now(timezone.utc)
-    events = list(
-        (
-            await session.scalars(
-                select(ScheduleEvent)
-                .where(
-                    ScheduleEvent.start_datetime >= now,
-                    ScheduleEvent.status_code != "CANCELLED",
-                    (ScheduleEvent.squad_id.is_(None)) | (ScheduleEvent.squad_id == user.squad_id),
-                    ScheduleEvent.requires_response.is_(True),
-                )
-                .order_by(ScheduleEvent.start_datetime)
-                .limit(limit)
-            )
-        ).all()
+    statement = select(ScheduleEvent).outerjoin(
+        EventResponse, (EventResponse.event_id == ScheduleEvent.id) & (EventResponse.user_id == user.id),
+    ).where(
+        ScheduleEvent.start_datetime > now, ScheduleEvent.status_code != "CANCELLED",
+        or_(ScheduleEvent.squad_id.is_(None), ScheduleEvent.squad_id == user.squad_id),
+        ScheduleEvent.requires_response.is_(True),
+        or_(EventResponse.id.is_(None), EventResponse.response_code == "MAYBE"),
     )
-    if not events:
-        return []
-    response_rows = (
-        await session.execute(
-            select(EventResponse.event_id).where(
-                EventResponse.user_id == user.id,
-                EventResponse.event_id.in_([event.id for event in events]),
-            )
-        )
-    ).all()
-    answered_ids = {event_id for (event_id,) in response_rows}
-    return [event for event in events if event.id not in answered_ids]
+    if user_role(user) < RoleLevel.DEPUTY_SQUAD_COMMANDER:
+        statement = statement.where(or_(ScheduleEvent.response_deadline_at.is_(None), ScheduleEvent.response_deadline_at >= now))
+    return list((await session.scalars(statement.order_by(ScheduleEvent.start_datetime).limit(limit))).all())
 
 
 @router.callback_query(F.data.startswith("batch:"))
 async def batch_response(callback: CallbackQuery) -> None:
-    action = (callback.data or "").split(":")[1]
+    action = (callback.data or "").partition(":")[2]
     user = await find_user(callback.from_user.id)
     if user is None or user_role(user) < RoleLevel.PARTICIPANT:
         await callback.answer("Нужна привязка к составу.", show_alert=True)
         return
-    now = datetime.now(timezone.utc)
+    if action not in {"COMING", "NOT_COMING", "ONE_BY_ONE"}:
+        await callback.answer("Некорректный ответ.", show_alert=True)
+        return
     async with AsyncSessionLocal() as session:
         events = await _upcoming_unanswered_events(session, user)
-        if action == "ONE_BY_ONE":
-            await callback.answer()
-            if callback.message:
-                await callback.message.delete()
+    if not events:
+        await callback.answer("Нет занятий, ожидающих ответа.", show_alert=True)
+        return
+    # Old 'NOT_COMING' buttons also collect a reason for each event.
+    if action != "COMING":
+        await callback.answer()
+        if callback.message:
             for event in events:
-                start_at = event.start_datetime.strftime("%d.%m %H:%M")
-                place = f"\nМесто: {event.place}" if event.place else ""
-                await callback.message.answer(
-                    f"{event.title}\n{start_at}{place}",
-                    reply_markup=event_keyboard(event.id),
-                    parse_mode=None,
-                )
-            return
-        if action not in {"COMING", "NOT_COMING"}:
-            await callback.answer("Некорректный ответ.", show_alert=True)
-            return
-        if not events:
-            if callback.message:
-                await callback.message.edit_text("Нет занятий без ответа.")
-            await callback.answer("Нечего обновлять.")
-            return
-        saved = 0
-        for event in events:
-            existing = await session.scalar(
-                select(EventResponse).where(EventResponse.event_id == event.id, EventResponse.user_id == user.id)
-            )
-            if existing is None:
-                existing = EventResponse(event_id=event.id, user_id=user.id)
-                session.add(existing)
-            existing.response_code = action
-            existing.responded_at = now
-            existing.source_code = "BOT"
-            saved += 1
-        await session.commit()
-    label = "буду на всех" if action == "COMING" else "не приду ни на одно"
+                await callback.message.answer(f"{event.title}\n{bot_event_time(event.start_datetime)}", reply_markup=event_keyboard(event.id), parse_mode=None)
+        return
+    try:
+        async with AsyncSessionLocal() as session:
+            locked = list((await session.scalars(select(ScheduleEvent).where(ScheduleEvent.id.in_([event.id for event in events])).order_by(ScheduleEvent.id).with_for_update())).all())
+            if len(locked) != len(events):
+                raise EventResponseError("NOT_FOUND", "Одно из занятий удалено. Обновите /schedule.")
+            responses = dict((await session.execute(select(EventResponse.event_id, EventResponse.response_code).where(
+                EventResponse.user_id == user.id, EventResponse.event_id.in_([event.id for event in locked]),
+            ))).all())
+            locked = [event for event in locked if responses.get(event.id) in {None, "MAYBE"}]
+            if not locked:
+                raise EventResponseError("ALREADY_ANSWERED", "Все ответы уже сохранены. Изменить их можно через /schedule.")
+            now = datetime.now(timezone.utc)
+            for event in locked:
+                validate_event_available(event, role=user_role(user), squad_id=user.squad_id, now=now)
+            for event in locked:
+                await respond_to_event(session, event=event, user_id=user.id, role=user_role(user), squad_id=user.squad_id, response_code="COMING", source_code="BOT", now=now)
+            await record_audit(session, user_id=user.id, action_code="schedule_event.respond_bulk", entity_name="schedule_events", new_value={"event_ids": [event.id for event in locked], "source": "BOT"})
+            await session.commit()
+    except EventResponseError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer("Ответы сохранены.")
     if callback.message:
-        await callback.message.edit_text(f"Ответ записан: {label}. Затронуто {saved} событий.")
-    await callback.answer("Готово!")
+        await callback.message.answer(f"Ответ «Приду» сохранён для {len(locked)} занятий. Изменить: /schedule", parse_mode=None)
+    await publish_realtime_event(get_settings(), event_type="schedule.response.updated", user_id=user.id, query_keys=["schedule", "dashboard"])
 
 
 # ──────────────────────── commander attendance via bot ─────────────────────
@@ -1634,38 +1931,26 @@ async def _send_schedule_with_batch(message: Message, user: User) -> None:
         if not events:
             await message.answer("Ближайших событий пока нет.")
             return
-        unanswered = []
-        for event in events:
-            resp = await session.scalar(
-                select(EventResponse).where(EventResponse.event_id == event.id, EventResponse.user_id == user.id)
-            )
-            if resp is None and event.requires_response:
-                unanswered.append(event)
-        # If 2+ unanswered events — offer batch
-        if len(unanswered) >= 2:
-            titles = "\n".join(
-                f"• {e.title} {e.start_datetime.strftime('%d.%m %H:%M')}" for e in unanswered[:5]
-            )
-            await message.answer(
-                f"Вы не ответили на {len(unanswered)} занятий:\n{titles}\n\nОтветить сразу на все?",
-                reply_markup=batch_events_keyboard(unanswered),
-                parse_mode=None,
-            )
-        else:
-            for event in events:
-                start_at = event.start_datetime.strftime("%d.%m %H:%M")
-                place = f"\nМесто: {event.place}" if event.place else ""
-                resp = await session.scalar(
-                    select(EventResponse).where(EventResponse.event_id == event.id, EventResponse.user_id == user.id)
-                )
-                resp_label = ""
-                if resp:
-                    resp_label = {"COMING": " Вы идёте", "NOT_COMING": " Вы не идёте", "MAYBE": " Вы уточняете"}.get(resp.response_code, "")
-                await message.answer(
-                    f"{event.title}\n{start_at}{place}{resp_label}",
-                    reply_markup=event_keyboard(event.id) if event.requires_response else None,
-                    parse_mode=None,
-                )
+        response_rows = (await session.execute(select(EventResponse.event_id, EventResponse.response_code).where(
+            EventResponse.user_id == user.id, EventResponse.event_id.in_([event.id for event in events]),
+        ))).all()
+        responses = dict(response_rows)
+        unanswered = await _upcoming_unanswered_events(session, user)
+    for event in events:
+        try:
+            validate_event_available(event, role=user_role(user), squad_id=user.squad_id, now=now)
+            actionable = True
+        except EventResponseError:
+            actionable = False
+        label = {"COMING": "Приду", "NOT_COMING": "Не приду", "MAYBE": "Уточню позже"}.get(responses.get(event.id), "Нет ответа" if event.requires_response else "Ответ не требуется")
+        place = f"\nМесто: {event.place}" if event.place else ""
+        await message.answer(
+            f"{event.title}\n{bot_event_time(event.start_datetime)}{place}\nОтвет: {label}" + ("\nПриём ответов закрыт" if event.requires_response and not actionable else ""),
+            reply_markup=event_keyboard(event.id) if actionable else None, parse_mode=None,
+        )
+    if len(unanswered) >= 2:
+        titles = "\n".join(f"• {event.title[:120]} {bot_event_time(event.start_datetime)}" for event in unanswered)
+        await message.answer(f"Нужен окончательный ответ на {len(unanswered)} занятий:\n{titles}", reply_markup=batch_events_keyboard(unanswered), parse_mode=None)
 
 
 # ──────────────────────── video/photo/doc → normative ───────────────────────
@@ -1984,20 +2269,26 @@ async def main() -> None:
         BotCommand(command="start", description="Главное меню"),
         BotCommand(command="schedule", description="Расписание занятий"),
         BotCommand(command="notifications", description="Мои уведомления"),
+        BotCommand(command="search", description="Поиск: /search текст"),
         BotCommand(command="normatives", description="Нормативы"),
         BotCommand(command="attendance", description="Моя посещаемость"),
         BotCommand(command="checkin", description="Отметиться на занятии"),
         BotCommand(command="appeal", description="Обращение командиру"),
+        BotCommand(command="myappeals", description="Статусы моих обращений"),
+        BotCommand(command="appealview", description="Переписка: /appealview номер"),
         BotCommand(command="vk", description="Привязать VK"),
         BotCommand(command="resetpassword", description="Сбросить пароль сайта"),
         BotCommand(command="cancel", description="Отменить диалог"),
+        BotCommand(command="back", description="Предыдущий шаг анкеты"),
         BotCommand(command="id", description="Показать мой Telegram ID"),
         BotCommand(command="join", description="Заявка на вступление"),
         BotCommand(command="profile", description="Мой профиль"),
         BotCommand(command="export", description="Выгрузка состава (CSV/Excel)"),
         BotCommand(command="help", description="Помощь"),
     ])
-    dispatcher = Dispatcher(storage=build_storage(settings))
+    storage = build_storage(settings)
+    isolation = storage.create_isolation() if isinstance(storage, RedisStorage) else SimpleEventIsolation()
+    dispatcher = Dispatcher(storage=storage, events_isolation=isolation)
     dispatcher.include_router(router)
     logger.info("Starting VPK Zvezda Telegram bot")
     await dispatcher.start_polling(bot)

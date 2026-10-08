@@ -75,8 +75,9 @@ async def _send_response_reminders(
     event_query = select(ScheduleEvent).where(
         ScheduleEvent.requires_response.is_(True),
         ScheduleEvent.status_code != "CANCELLED",
-        ScheduleEvent.start_datetime >= now,
+        ScheduleEvent.start_datetime > now,
         ScheduleEvent.start_datetime <= now + timedelta(days=14),
+        (ScheduleEvent.response_deadline_at.is_(None)) | (ScheduleEvent.response_deadline_at >= now),
     )
     if scoped_squad_id is not None:
         event_query = event_query.where(
@@ -101,6 +102,7 @@ async def _send_response_reminders(
                     select(EventResponse.user_id).where(
                         EventResponse.event_id == event.id,
                         EventResponse.user_id.in_(user_ids),
+                        EventResponse.response_code.in_(("COMING", "NOT_COMING")),
                     )
                 )
             ).all()
@@ -324,6 +326,8 @@ async def execute_action_item(
     }
     if (item_code, action_code) not in allowed:
         raise ActionCenterError("Это массовое действие не поддерживается.")
+    if item_code == "UNPROCESSED_APPEALS" and role_level < RoleLevel.DEPUTY_PLATOON_COMMANDER:
+        raise ActionCenterError("Недостаточно прав для работы с чужими обращениями.")
     if item_code == "OVERDUE_APPLICATIONS" and role_level < RoleLevel.SQUAD_COMMANDER:
         raise ActionCenterError("Недостаточно прав для работы с заявками.")
     if item_code == "NOTIFICATION_DELIVERY_ERRORS" and role_level < RoleLevel.ADMIN:

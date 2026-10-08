@@ -180,6 +180,8 @@ export type Notification = {
   type_code: string;
   entity_name?: string | null;
   entity_id?: number | null;
+  category_code?: string;
+  deep_link?: string | null;
   is_read: boolean;
   is_pinned: boolean;
   created_at: string;
@@ -297,6 +299,8 @@ export type LearningMaterial = {
   duration_minutes: number | null;
   audience_code: string;
   is_active: boolean;
+  is_viewed?: boolean;
+  viewed_at?: string | null;
 };
 
 export type LearningCourse = {

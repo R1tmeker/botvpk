@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { NotificationInbox } from "../features/notifications/NotificationInbox";
+import { useNotificationSummary } from "../features/notifications/api";
+import { safeAppLink } from "../features/notifications/model";
+import { useBulkEventResponse, useScheduleEvent } from "../features/schedule/api";
+import { checkInIsOpen, eventIsArchived, needsFinalResponse, recordId, responseIsOpen, sameDayInTimezone } from "../features/schedule/model";
+import { useRecordFocus } from "../shared/ui/useRecordFocus";
+import { usePersistentDraft } from "../offline/usePersistentDraft";
+import { filterMaterials, learningProgress, type LearningFilter } from "../features/learning/model";
+import { DraftStatus } from "../shared/ui/DraftStatus";
+import { APPEAL_MESSAGE_LIMIT, filterAppeals, messageDraftKey, validMessageBody } from "../features/appeals/model";
 import {
   BarChart3,
   AlertTriangle,
@@ -71,8 +81,6 @@ import {
   usePendingNormativeSubmissions,
   usePublicContent,
   usePublicEvents,
-  useReadAllNotifications,
-  useReadNotification,
   useRealtimeInvalidation,
   useResetDashboardSettings,
   useReviewSubmission,
@@ -199,6 +207,8 @@ import type {
   UserProfile,
   UserRecord,
 } from "../types/api";
+import { Dialog } from "../shared/ui/Dialog";
+import { useAppViewport } from "../shared/ui/useAppViewport";
 import styles from "./App.module.scss";
 import {
   AnimatedProgress,
@@ -212,22 +222,26 @@ import { ToastContainer, toast } from "../components/Toast";
 import { PromoCard, PromoStrip, AdminPromoCard, PromoEditForm } from "../components/PromoCard";
 import { MilestoneToast } from "../components/Confetti";
 
-function FilePicker({ accept, onFile, label = "Прикрепить файл", className, iconSrc }: {
+function FilePicker({ accept, onFile, label = "Прикрепить файл", className, iconSrc, disabled = false }: {
   accept: string;
   onFile: (file: File) => void;
   label?: string;
   className?: string;
   iconSrc?: string;
+  disabled?: boolean;
 }) {
   const ref = useRef<HTMLInputElement>(null);
   return (
     <>
-      <button type="button" className={className} onClick={() => ref.current?.click()} aria-label={label} title={label}>
+      <button type="button" disabled={disabled} className={className} onClick={() => ref.current?.click()} aria-label={label} title={label}>
         {iconSrc ? <img src={iconSrc} alt="" aria-hidden="true" /> : label}
       </button>
       <input
         ref={ref}
         type="file"
+        disabled={disabled}
+        tabIndex={-1}
+        aria-label={label}
         accept={accept}
         style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
         onChange={(e) => {
@@ -255,22 +269,9 @@ function toYouTubeEmbedUrl(url: string): string | null {
 }
 
 function VideoPlayerModal({ src, embedSrc, onClose }: { src?: string; embedSrc?: string; onClose: () => void }) {
-  const dialogRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    dialogRef.current?.focus();
-  }, []);
   return (
-    <div className={styles.videoOverlay} onClick={onClose}>
-      <div
-        ref={dialogRef}
-        className={styles.videoModalBox}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Просмотр видео"
-        tabIndex={-1}
-        onKeyDown={(event) => { if (event.key === "Escape") onClose(); }}
-        onClick={(event) => event.stopPropagation()}
-      >
+    <Dialog overlayClassName={styles.videoOverlay} className={styles.videoModalBox}
+      label="Просмотр видео" onClose={onClose}>
         <button type="button" className={styles.videoCloseBtn} onClick={onClose} aria-label="Закрыть">✕</button>
         {embedSrc ? (
           <iframe
@@ -283,8 +284,7 @@ function VideoPlayerModal({ src, embedSrc, onClose }: { src?: string; embedSrc?:
         ) : src ? (
           <video src={src} controls autoPlay playsInline className={styles.videoPlayer} />
         ) : null}
-      </div>
-    </div>
+    </Dialog>
   );
 }
 
@@ -381,16 +381,8 @@ function ApplicantDetailDrawer({
     ) : null;
 
   return (
-    <div className={styles.drawerOverlay} onClick={onClose}>
-      <div
-        className={styles.drawerSheet}
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Карточка пользователя: ${item.full_name}`}
-        tabIndex={-1}
-        onKeyDown={(event) => { if (event.key === "Escape") onClose(); }}
-        onClick={(event) => event.stopPropagation()}
-      >
+    <Dialog overlayClassName={styles.drawerOverlay} className={styles.drawerSheet}
+      label={`Карточка пользователя: ${item.full_name}`} onClose={onClose}>
         <div className={styles.drawerHandle} />
         <div className={styles.drawerHeader}>
           <div>
@@ -464,8 +456,7 @@ function ApplicantDetailDrawer({
         )}
 
         <button type="button" className={styles.drawerCloseBtn} onClick={onClose}>Закрыть</button>
-      </div>
-    </div>
+    </Dialog>
   );
 }
 
@@ -820,6 +811,11 @@ type NavItem = {
   minLevel: number;
 };
 
+const desktopNavLabels: Partial<Record<ViewKey, string>> = {
+  schedule: "Расписание", attendance: "Посещаемость", normatives: "Нормативы",
+  profile: "Профиль и настройки", admin: "Управление",
+};
+
 const navItems: NavItem[] = [
   { view: "dashboard", iconCode: "home", label: "Главная", minLevel: 0 },
   { view: "schedule", iconCode: "schedule", label: "План", minLevel: 0 },
@@ -898,6 +894,7 @@ function StatusCarousel({
     [promo],
   );
   const [index, setIndex] = useState(0);
+  const [carouselPaused, setCarouselPaused] = useState(false);
   const touchStartX = useRef<number | null>(null);
   const current = slides[index % slides.length];
   const goTo = useCallback((next: number) => {
@@ -909,10 +906,12 @@ function StatusCarousel({
   }, [index, slides.length]);
 
   useEffect(() => {
-    if (slides.length <= 1) return undefined;
-    const timer = window.setInterval(() => goTo(index + 1), 6500);
+    if (slides.length <= 1 || carouselPaused || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return undefined;
+    const timer = window.setInterval(() => {
+      if (!document.hidden) goTo(index + 1);
+    }, 6500);
     return () => window.clearInterval(timer);
-  }, [goTo, index, slides.length]);
+  }, [goTo, index, slides.length, carouselPaused]);
 
   const promoTheme: Record<string, string> = {
     INFO: "linear-gradient(135deg, rgba(41,128,185,0.96), rgba(31,111,168,0.96))",
@@ -927,6 +926,12 @@ function StatusCarousel({
     <section
       className={`${styles.statusPanel} ${styles.statusCarousel} ${current.type === "promo" ? styles.statusPromoPanel : ""}`}
       style={current.type === "promo" ? { background: promoTheme[current.block.style_code] ?? promoTheme.DEFAULT } : undefined}
+      onMouseEnter={() => setCarouselPaused(true)}
+      onMouseLeave={() => setCarouselPaused(false)}
+      onFocusCapture={() => setCarouselPaused(true)}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setCarouselPaused(false);
+      }}
       onTouchStart={(event) => { touchStartX.current = event.touches[0].clientX; }}
       onTouchEnd={(event) => {
         if (touchStartX.current === null || slides.length <= 1) return;
@@ -984,6 +989,7 @@ function StatusCarousel({
 /* ─────────────────────────── App ─────────────────────────── */
 
 export function App({ webApp }: Props) {
+  useAppViewport(webApp);
   const location = useLocation();
   const navigate = useNavigate();
   const auth = useTelegramAuth();
@@ -1022,7 +1028,8 @@ export function App({ webApp }: Props) {
   const mySubmissions = useMyNormativeSubmissions(hasToken && level >= 1 && onView("normatives", "profile"));
   const pendingSubmissions = usePendingNormativeSubmissions(hasToken && level >= 4 && onView("normatives"));
   const submissionHistory = useNormativeSubmissionsHistory(hasToken && level >= 4 && onView("normatives"));
-  const notifications = useNotifications(internalMode && onView("dashboard", "notifications"));
+  const notifications = useNotifications(internalMode && onView("dashboard"));
+  const notificationSummary = useNotificationSummary(internalMode);
   const announcements = useAnnouncements(internalMode && onView("announcements"));
   const attendanceReport = useAttendanceReport(hasToken && level >= 5 && onView("reports", "attendance"));
   const gradesReport = useGradesReport(hasToken && level >= 5 && onView("reports"));
@@ -1051,8 +1058,6 @@ export function App({ webApp }: Props) {
 
   const respondEvent = useRespondEvent();
   const respondCandidateEvent = useRespondCandidateEvent();
-  const readNotification = useReadNotification();
-  const readAll = useReadAllNotifications();
   const createJoinApplication = useCreateJoinApplication();
   const createAppeal = useCreateAppeal();
   const createAnnouncement = useCreateAnnouncement();
@@ -1141,7 +1146,7 @@ export function App({ webApp }: Props) {
   const visibleSchedule = schedule.data ?? [];
   const visibleNormatives = normatives.data ?? [];
   const visibleAttendance = attendance.data ?? [];
-  const unreadCount = notifications.data?.filter((item) => !item.is_read).length ?? 0;
+  const unreadCount = notificationSummary.data?.unread ?? notifications.data?.filter((item) => !item.is_read).length ?? 0;
   const appealNoticeCount = notifications.data?.filter((item) => {
     if (item.is_read) return false;
     const entity = (item.entity_name ?? "").toLowerCase();
@@ -1252,7 +1257,8 @@ export function App({ webApp }: Props) {
     {milestoneStreak !== null && (
       <MilestoneToast streak={milestoneStreak} onDismiss={() => setMilestoneStreak(null)} />
     )}
-    <main className={styles.shell}>
+    <main className={styles.shell} data-view={activeView}>
+      <a className={styles.skipLink} href="#app-content">Перейти к содержимому</a>
       <header className={styles.header}>
         <button
           type="button"
@@ -1325,7 +1331,7 @@ export function App({ webApp }: Props) {
         </>
       )}
 
-      <section className={styles.workspace} data-compact={!showDashboardChrome}>
+      <section id="app-content" className={styles.workspace} data-compact={!showDashboardChrome} tabIndex={-1}>
         {isAuthenticating && (
           <div className={styles.panel}>
             <SkeletonCard />
@@ -1365,16 +1371,17 @@ export function App({ webApp }: Props) {
             />
           ) : level < 3 ? (
             <PublicScreen
+              userId={profile.telegram_id}
               content={publicContent.data}
               events={publicEvents.data ?? []}
-              onSubmit={(payload) =>
-                createJoinApplication.mutate(payload, {
-                  onSuccess: () => {
-                    setProfile({ ...profile, full_name: payload.full_name, role_code: "CANDIDATE" });
-                    webApp.HapticFeedback?.notificationOccurred?.("success");
-                  },
-                })
-              }
+              onSubmit={async (payload) => {
+                await createJoinApplication.mutateAsync({
+                  ...payload, full_name: payload.full_name.trim(), birth_date: payload.birth_date || undefined,
+                  phone: payload.phone || undefined,
+                });
+                setProfile({ ...profile, full_name: payload.full_name, role_code: "CANDIDATE" });
+                hapticSuccess(); toast("Заявка отправлена", "success");
+              }}
               isSubmitting={createJoinApplication.isPending}
             />
           ) : (
@@ -1424,7 +1431,7 @@ export function App({ webApp }: Props) {
                       const labels: Record<string, string> = { COMING: "Ответ «Приду» сохранён", NOT_COMING: "Ответ «Не приду» сохранён", MAYBE: "Ответ «Пока не знаю» сохранён" };
                       toast(labels[responseCode] ?? "Ответ сохранён", "success");
                     },
-                    onError: () => { hapticError(); toast("Не удалось сохранить ответ", "error"); },
+                    onError: (error) => { hapticError(); toast(apiErrorDetail(error) ?? "Не удалось сохранить ответ", "error"); },
                   },
                 )
               }
@@ -1448,6 +1455,7 @@ export function App({ webApp }: Props) {
             />
           ) : (
             <ScheduleView
+              userId={profile.id}
               events={visibleSchedule}
               weekType={scheduleWeekType.data}
               level={level}
@@ -1455,9 +1463,10 @@ export function App({ webApp }: Props) {
               onRespond={(eventId, responseCode, absenceReasonId, customReason) => {
                 respondEvent.mutate(
                   { eventId, responseCode, absenceReasonId, customReason },
-                  { onSuccess: () => webApp.HapticFeedback?.notificationOccurred?.("success") },
+                  { onSuccess: () => { hapticSuccess(); toast("Ответ сохранён", "success"); }, onError: (error) => toast(apiErrorDetail(error) ?? "Не удалось сохранить ответ", "error") },
                 );
               }}
+              isResponding={respondEvent.isPending}
             />
           )
         )}
@@ -1518,12 +1527,7 @@ export function App({ webApp }: Props) {
         )}
 
         {!isAuthenticating && hasToken && activeView === "notifications" && level >= 3 && (
-          <NotificationsView
-            items={notifications.data ?? []}
-            onRead={(id) => readNotification.mutate(id)}
-            onReadAll={() => readAll.mutate()}
-            isBusy={readAll.isPending}
-          />
+          <NotificationInbox onOpen={(path) => navigate(path)} />
         )}
 
         {!isAuthenticating && hasToken && activeView === "announcements" && level >= 4 && (
@@ -1545,6 +1549,9 @@ export function App({ webApp }: Props) {
           <AppealsView
             items={appeals.data ?? []}
             currentUserId={profile.id}
+            isLoading={appeals.isPending}
+            loadError={appeals.isError}
+            onReload={() => void appeals.refetch()}
             onCreate={(payload) =>
               createAppeal.mutateAsync(payload).then(() => {
                 hapticSuccess();
@@ -1636,13 +1643,15 @@ export function App({ webApp }: Props) {
           className={styles.nav}
           data-admin={visibleNav.length > 5}
           aria-label="Основная навигация"
-          style={{ gridTemplateColumns: `repeat(${visibleNav.length}, minmax(0, 1fr))` }}
+          style={{ ["--nav-columns" as string]: visibleNav.length }}
         >
           {visibleNav.map(({ view, iconCode, label }) => (
             <button
               key={view}
               type="button"
               data-active={activeView === view}
+              aria-current={activeView === view ? "page" : undefined}
+              aria-label={label}
               onClick={() => openView(view)}
             >
               <span
@@ -1651,7 +1660,8 @@ export function App({ webApp }: Props) {
               >
                 <AppIcon code={iconCode} />
               </span>
-              <span>{label}</span>
+              <span className={styles.navMobileLabel}>{label}</span>
+              <span className={styles.navDesktopLabel}>{desktopNavLabels[view] ?? label}</span>
             </button>
           ))}
         </nav>
@@ -1702,6 +1712,8 @@ function SearchView({ onOpen }: { onOpen: (deepLink: string) => void }) {
           autoFocus
           type="search"
           value={value}
+          aria-label="Глобальный поиск"
+          maxLength={100}
           placeholder="Люди, события, нормативы, материалы…"
           onChange={(event) => setValue(event.target.value)}
         />
@@ -1709,11 +1721,12 @@ function SearchView({ onOpen }: { onOpen: (deepLink: string) => void }) {
       <div className={styles.searchResults} aria-live="polite">
         {query.length < 2 && <Empty text="Введите минимум два символа" />}
         {query.length >= 2 && search.isLoading && <SkeletonCard />}
-        {query.length >= 2 && !search.isLoading && (search.data?.length ?? 0) === 0 && (
+        {query.length >= 2 && search.isError && <div className={styles.commandStrip}><span>Не удалось выполнить поиск.</span><button type="button" onClick={() => void search.refetch()}>Повторить</button></div>}
+        {query.length >= 2 && !search.isLoading && !search.isError && (search.data?.length ?? 0) === 0 && (
           <Empty text="Ничего доступного для вашей роли не найдено" />
         )}
-        {search.data?.map((item) => (
-          <button key={`${item.type}-${item.id}`} type="button" onClick={() => onOpen(item.deep_link)}>
+        {query.length >= 2 && query === value.trim() && !search.isError && search.data?.map((item) => (
+          <button key={`${item.type}-${item.id}`} type="button" onClick={() => { const link = safeAppLink(item.deep_link); if (link) onOpen(link); }}>
             <span>{typeLabels[item.type]}</span>
             <strong>{item.title}</strong>
             {item.description && <small>{item.description}</small>}
@@ -1732,15 +1745,18 @@ function ResponseButtons({
   requiresResponse = true,
   currentResponse,
   onRespond,
+  isBusy = false,
 }: {
   eventId: number;
   requiresResponse?: boolean;
   currentResponse?: string | null;
   onRespond: RespondFn;
+  isBusy?: boolean;
 }) {
   const [pickingReason, setPickingReason] = useState(false);
   const [changing, setChanging] = useState(false);
   const [customReason, setCustomReason] = useState("");
+  const [commentReasonId, setCommentReasonId] = useState<number | null>(null);
   const reasons = useAbsenceReasons();
   const activeReasons = reasons.data?.filter((r) => r.is_active) ?? [];
 
@@ -1755,15 +1771,19 @@ function ResponseButtons({
       <div className={styles.actions} style={{ gridTemplateColumns: "1fr" }}>
         <div style={{ gridColumn: "1/-1", display: "grid", gap: 6 }}>
           <small style={{ color: "#65708a", fontSize: 11, fontWeight: 800 }}>Укажите причину отсутствия:</small>
+          {reasons.isPending && <small>Загружаем причины…</small>}
+          {reasons.isError && <small>Список причин недоступен. Можно указать причину текстом.</small>}
+          {commentReasonId !== null && <small>Комментарий: {activeReasons.find((reason) => reason.id === commentReasonId)?.label}</small>}
           {activeReasons.map((reason) => (
             <button
               key={reason.id}
-              type="button"
+              type="button" disabled={isBusy}
               className={styles.btnMaybeOutline}
               style={{ justifySelf: "stretch" }}
               onClick={() => {
                 if (reason.requires_comment) {
                   setCustomReason("");
+                  setCommentReasonId(reason.id);
                 } else {
                   handleRespond("NOT_COMING", reason.id, undefined);
                 }
@@ -1773,21 +1793,23 @@ function ResponseButtons({
             </button>
           ))}
           <input
-            placeholder="Другая причина (текст)"
+            aria-label="Комментарий к причине отсутствия"
+            maxLength={500}
+            placeholder="Причина отсутствия (до 500 символов)"
             value={customReason}
             onChange={(e) => setCustomReason(e.target.value)}
             style={{ border: "1px solid #d9deea", borderRadius: 10, padding: "8px 12px", fontSize: 16, fontFamily: "inherit", color: "#1a2f5a" }}
           />
           {customReason.trim().length >= 2 && (
             <button
-              type="button"
+              type="button" disabled={isBusy}
               className={styles.btnNotComing}
-              onClick={() => handleRespond("NOT_COMING", null, customReason.trim())}
+              onClick={() => handleRespond("NOT_COMING", commentReasonId, customReason.trim())}
             >
               Отправить причину
             </button>
           )}
-          <button type="button" className={styles.btnMaybeOutline} onClick={() => { setPickingReason(false); setChanging(false); }}>
+          <button type="button" disabled={isBusy} className={styles.btnMaybeOutline} onClick={() => { setPickingReason(false); setChanging(false); }}>
             Отмена
           </button>
         </div>
@@ -1799,7 +1821,7 @@ function ResponseButtons({
     return (
       <div className={styles.actions} style={{ gridTemplateColumns: "1fr" }}>
         <button
-          type="button"
+          type="button" disabled={isBusy}
           className={styles.btnMaybeOutline}
           style={{ gridColumn: "1/-1" }}
           onClick={() => setChanging(true)}
@@ -1813,17 +1835,18 @@ function ResponseButtons({
   return (
     <div className={styles.actions}>
       <button
-        type="button"
+        type="button" disabled={isBusy}
         className={styles.btnComingOutline}
         onClick={() => handleRespond("COMING")}
       >
         Приду
       </button>
       <button
-        type="button"
+        type="button" disabled={isBusy}
         className={styles.btnNotComingOutline}
         onClick={() => {
           if (requiresResponse) {
+            setCommentReasonId(null);
             setPickingReason(true);
           } else {
             handleRespond("NOT_COMING");
@@ -1833,7 +1856,7 @@ function ResponseButtons({
         Не приду
       </button>
       <button
-        type="button"
+        type="button" disabled={isBusy}
         className={styles.btnMaybeOutline}
         onClick={() => handleRespond("MAYBE")}
       >
@@ -2080,16 +2103,8 @@ function WelcomeBanner({ blocks }: { blocks: PromoBlock[] }) {
 /* ─────────── PrivacyModal ─────────── */
 function PrivacyModal({ onClose }: { onClose: () => void }) {
   return (
-    <div className={styles.modalOverlay} onClick={onClose}>
-      <div
-        className={styles.modalSheet}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="privacy-dialog-title"
-        tabIndex={-1}
-        onKeyDown={(event) => { if (event.key === "Escape") onClose(); }}
-        onClick={(event) => event.stopPropagation()}
-      >
+    <Dialog overlayClassName={styles.modalOverlay} className={styles.modalSheet}
+      labelledBy="privacy-dialog-title" onClose={onClose}>
         <div className={styles.modalHeader}>
           <strong id="privacy-dialog-title">Политика обработки данных</strong>
           <button type="button" onClick={onClose} aria-label="Закрыть">
@@ -2108,24 +2123,25 @@ function PrivacyModal({ onClose }: { onClose: () => void }) {
           <p><strong>Контакт</strong></p>
           <p>По вопросам обработки данных обращайтесь к командиру через раздел «Обращения» в приложении.</p>
         </div>
-      </div>
-    </div>
+    </Dialog>
   );
 }
 
 /* ─────────── PublicScreen ─────────── */
 function PublicScreen({
+  userId,
   content,
   events,
   onSubmit,
   isSubmitting,
 }: {
+  userId: number;
   content?: PublicContent;
   events: CandidateEvent[];
-  onSubmit: (payload: JoinApplicationPayload) => void;
+  onSubmit: (payload: JoinApplicationPayload) => Promise<void>;
   isSubmitting: boolean;
 }) {
-  const [form, setForm] = useState<JoinApplicationPayload>({
+  const applicationDraft = usePersistentDraft<JoinApplicationPayload>(`draft:join:${userId}`, {
     full_name: "",
     birth_date: "",
     phone: "",
@@ -2137,10 +2153,20 @@ function PublicScreen({
     consent_given: false,
     comment: "",
   });
+  const { value: form, setValue: setForm } = applicationDraft;
   const [phoneDisplay, setPhoneDisplay] = useState("+7");
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [screen, setScreen] = useState<"overview" | "application">("overview");
-  const canSubmit = form.full_name.trim().length >= 2 && form.consent_given;
+  useEffect(() => { if (applicationDraft.ready) setPhoneDisplay(form.phone ? applyPhoneMask(form.phone) : "+7"); }, [applicationDraft.ready, form.phone]);
+  const canSubmit = applicationDraft.ready && form.full_name.trim().length >= 2 && form.consent_given && (form.motivation_text?.trim().length ?? 0) >= 3;
+  const applicationSending = useRef(false);
+  const sendApplication = async () => {
+    if (!canSubmit || applicationSending.current) return;
+    applicationSending.current = true;
+    try { await onSubmit(form); await applicationDraft.clear(); }
+    catch (error) { await applicationDraft.flush(); toast(apiErrorDetail(error) ?? "Не удалось отправить заявку. Введённые данные сохранены.", "error"); }
+    finally { applicationSending.current = false; }
+  };
   const materials = (content?.materials ?? []).map((item) => item.title).slice(0, 4);
 
   if (screen === "application") {
@@ -2148,14 +2174,15 @@ function PublicScreen({
       <div className={styles.panel}>
         <div className={styles.panelHeader}>
           <h2>Анкета вступления</h2>
-          <button type="button" className={styles.editProfileBtn} onClick={() => setScreen("overview")}>
+          <button type="button" className={styles.editProfileBtn} disabled={isSubmitting} onClick={() => setScreen("overview")}>
             Назад
           </button>
         </div>
-        <div className={styles.formBlock}>
+        <DraftStatus {...applicationDraft} />
+        <fieldset className={styles.formBlock} disabled={!applicationDraft.ready || isSubmitting} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
           <label className={styles.fieldLabel}>
             <span>ФИО *</span>
-            <input placeholder="Иванов Иван Иванович" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} />
+            <input maxLength={255} placeholder="Иванов Иван Иванович" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} />
           </label>
           <label className={styles.fieldLabel}>
             <span>Дата рождения</span>
@@ -2201,11 +2228,11 @@ function PublicScreen({
           </label>
           <label className={styles.fieldLabel}>
             <span>Почему хотите вступить *</span>
-            <textarea placeholder="Мотивация кандидата" rows={3} value={form.motivation_text} onChange={(e) => setForm({ ...form, motivation_text: e.target.value })} />
+            <textarea maxLength={1500} placeholder="Мотивация кандидата" rows={3} value={form.motivation_text} onChange={(e) => setForm({ ...form, motivation_text: e.target.value })} />
           </label>
           <label className={styles.fieldLabel}>
             <span>Откуда узнали о ВПК</span>
-            <input placeholder="Друзья, школа, соцсети" value={form.source_text} onChange={(e) => setForm({ ...form, source_text: e.target.value })} />
+            <input maxLength={300} placeholder="Друзья, школа, соцсети" value={form.source_text} onChange={(e) => setForm({ ...form, source_text: e.target.value })} />
           </label>
           <label className={styles.fieldLabel}>
             <span>Комментарий</span>
@@ -2228,10 +2255,11 @@ function PublicScreen({
               </button>
             </span>
           </label>
-          <button type="button" disabled={!canSubmit || isSubmitting} onClick={() => onSubmit(form)}>
+          <button type="button" disabled={!canSubmit || isSubmitting} onClick={() => void sendApplication()}>
             {isSubmitting ? "Отправляем..." : "Подать заявку"}
           </button>
-        </div>
+          {applicationDraft.restored && <button type="button" onClick={() => void applicationDraft.clear()}>Очистить черновик</button>}
+        </fieldset>
         {showPrivacy && <PrivacyModal onClose={() => setShowPrivacy(false)} />}
       </div>
     );
@@ -2525,65 +2553,104 @@ function EventVoterList({ eventId, squads, canView }: { eventId: number; squads:
 
 /* ─────────── ScheduleView ─────────── */
 function ScheduleView({
-  events,
+  userId,
+  events: loadedEvents,
   weekType,
   level,
   squads,
   onRespond,
+  isResponding = false,
 }: {
+  userId: number | null;
   events: ScheduleEvent[];
   weekType?: { parity: "A" | "B" | null; week_a_start: string | null };
   level: number;
   squads: Squad[];
   onRespond: RespondFn;
+  isResponding?: boolean;
 }) {
   const selfCheckIn = useSelfCheckIn();
+  const checkInKey = (eventId: number) => `queue:self-checkin:${userId}:${eventId}`;
   const [queuedCheckins, setQueuedCheckins] = useState<Set<number>>(new Set());
   const [tab, setTab] = useState<"today" | "week" | "month" | "archive">("week");
   const [filter, setFilter] = useState<"all" | "unanswered" | "coming" | "not_coming">("all");
-  const now = Date.now();
+  const location = useLocation();
+  const requestedId = recordId(location.search, "event");
+  const requested = useScheduleEvent(requestedId);
+  const events = useMemo(() => requested.data && !loadedEvents.some((event) => event.id === requested.data!.id)
+    ? [...loadedEvents, requested.data] : loadedEvents, [loadedEvents, requested.data]);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const bulk = useBulkEventResponse();
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const refresh = () => setNow(Date.now());
+    const timer = window.setInterval(refresh, 30_000);
+    window.addEventListener("focus", refresh);
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", refresh); };
+  }, []);
+  const openedEventLink = useRef("");
+  const focusId = useRecordFocus("event", "event", `${tab}:${events.map((event) => event.id).join(",")}`);
+  useEffect(() => {
+    const event = events.find((item) => item.id === requestedId);
+    const key = `${location.key}:${requestedId}`;
+    if (!event || openedEventLink.current === key) return;
+    openedEventLink.current = key;
+    setTab(eventIsArchived(event, Date.now()) ? "archive" : "month");
+    setFilter("all");
+  }, [requestedId, requested.data, loadedEvents, location.key]);
   useEffect(() => {
     let cancelled = false;
     const restore = async () => {
+      if (!userId) return;
       const queued = new Set<number>();
       for (const event of events) {
-        const item = await loadOfflineValue<{ eventId: number; closesAt: number }>(`queue:self-checkin:${event.id}`);
+        const item = await loadOfflineValue<{ eventId: number; closesAt: number }>(checkInKey(event.id));
         if (item && item.closesAt >= Date.now()) queued.add(event.id);
-        else if (item) await deleteOfflineValue(`queue:self-checkin:${event.id}`);
+        else if (item) await deleteOfflineValue(checkInKey(event.id));
       }
       if (!cancelled) setQueuedCheckins(queued);
     };
     void restore();
     return () => { cancelled = true; };
-  }, [events]);
+  }, [events, userId]);
 
   useEffect(() => {
+    let cancelled = false;
     const flush = async () => {
-      if (!navigator.onLine || queuedCheckins.size === 0) return;
+      if (cancelled || !navigator.onLine || queuedCheckins.size === 0) return;
+      const cleared = new Set<number>();
       for (const eventId of queuedCheckins) {
-        const queued = await loadOfflineValue<{ eventId: number; closesAt: number }>(`queue:self-checkin:${eventId}`);
-        if (!queued) continue;
+        const queued = await loadOfflineValue<{ eventId: number; closesAt: number }>(checkInKey(eventId));
+        if (cancelled) return;
+        if (!queued) { cleared.add(eventId); continue; }
         if (queued.closesAt < Date.now()) {
-          await deleteOfflineValue(`queue:self-checkin:${eventId}`);
+          await deleteOfflineValue(checkInKey(eventId));
+          cleared.add(eventId);
           toast("Окно самоотметки закрылось до восстановления сети", "warning");
           continue;
         }
         try {
           await selfCheckIn.mutateAsync(eventId);
-          await deleteOfflineValue(`queue:self-checkin:${eventId}`);
+          await deleteOfflineValue(checkInKey(eventId));
+          cleared.add(eventId);
           toast("Отложенная самоотметка отправлена", "success");
         } catch (error) {
-          toast(apiErrorDetail(error) ?? "Сервер отклонил отложенную самоотметку", "error");
+          const status = (error as { response?: { status?: number } }).response?.status;
+          if (status && status >= 400 && status < 500) {
+            await deleteOfflineValue(checkInKey(eventId)); cleared.add(eventId);
+          }
+          toast(apiErrorDetail(error) ?? "Самоотметка сохранена в очереди. Повторите при восстановлении сети.", "error");
         }
       }
-      setQueuedCheckins(new Set());
+      if (!cancelled && cleared.size) setQueuedCheckins((previous) => new Set([...previous].filter((id) => !cleared.has(id))));
     };
     window.addEventListener("online", flush);
     void flush();
-    return () => window.removeEventListener("online", flush);
-  }, [queuedCheckins]);
+    return () => { cancelled = true; window.removeEventListener("online", flush); };
+  }, [queuedCheckins, userId]);
 
   const checkIn = async (event: ScheduleEvent) => {
+    if (!userId || !checkInIsOpen(event, Date.now())) return;
     if (!navigator.onLine) {
       const closesAt = event.self_checkin_closes_at
         ? new Date(event.self_checkin_closes_at).getTime()
@@ -2592,37 +2659,46 @@ function ScheduleView({
         toast("Окно самоотметки уже закрыто", "warning");
         return;
       }
-      await saveOfflineValue(`queue:self-checkin:${event.id}`, { eventId: event.id, closesAt });
+      await saveOfflineValue(checkInKey(event.id), { eventId: event.id, closesAt });
       setQueuedCheckins((previous) => new Set(previous).add(event.id));
       toast("Самоотметка ждёт восстановления сети", "info");
       return;
     }
     selfCheckIn.mutate(event.id, {
-      onSuccess: (attendance) => toast(
-        attendance.status_code === "LATE" ? "Отмечено опоздание" : "Присутствие отмечено",
-        attendance.status_code === "LATE" ? "warning" : "success",
-      ),
+      onSuccess: (attendance) => {
+        void deleteOfflineValue(checkInKey(event.id));
+        setQueuedCheckins((previous) => { const next = new Set(previous); next.delete(event.id); return next; });
+        toast(attendance.status_code === "LATE" ? "Отмечено опоздание" : "Присутствие отмечено", attendance.status_code === "LATE" ? "warning" : "success");
+      },
       onError: (error) => toast(apiErrorDetail(error) ?? "Не удалось отметить присутствие", "error"),
     });
   };
-  const isArchivedEvent = (event: ScheduleEvent) =>
-    event.status_code === "CANCELLED" || new Date(event.start_datetime).getTime() < now;
+  const isArchivedEvent = (event: ScheduleEvent) => eventIsArchived(event, now);
 
   const byDate = events.filter((event) => {
     const t = new Date(event.start_datetime).getTime();
     if (tab === "archive") return isArchivedEvent(event);
     if (isArchivedEvent(event)) return false;
-    if (tab === "today") return new Date(event.start_datetime).toDateString() === new Date(now).toDateString();
+    if (event.id === requestedId) return true;
+    if (tab === "today") return sameDayInTimezone(event.start_datetime, now, getAppTimezone());
     if (tab === "week") return t <= now + 7 * 86400000;
     return t <= now + 31 * 86400000;
   });
 
   const filtered = byDate.filter((event) => {
     if (tab === "archive" || filter === "all") return true;
-    if (filter === "unanswered") return event.requires_response && !event.my_response_code;
+    if (filter === "unanswered") return event.requires_response && needsFinalResponse(event);
     if (filter === "coming") return event.my_response_code === "COMING";
     if (filter === "not_coming") return event.my_response_code === "NOT_COMING";
     return true;
+  });
+
+  const selectable = filtered.filter((event) => responseIsOpen(event, level, now) && needsFinalResponse(event));
+  const selectedIds = selectable.filter((event) => selected.has(event.id)).map((event) => event.id);
+  const busy = bulk.isPending || isResponding;
+  const saveSelected = () => bulk.mutate(selectedIds, {
+    onSuccess: (result) => { setSelected(new Set()); toast(`Ответ «Приду» сохранён: ${result.count} занятий`, "success"); },
+    onError: (error) => toast(apiErrorDetail(error) ?? "Не удалось сохранить ответы. Выбор сохранён; попробуйте снова.", "error"),
   });
 
   return (
@@ -2650,10 +2726,24 @@ function ScheduleView({
           <button type="button" className={styles.chip} data-active={filter === "not_coming"} data-color="red" onClick={() => setFilter("not_coming")}>Не иду</button>
         </div>
       )}
+      {requested.isError && <p role="alert">Занятие по ссылке недоступно или удалено.</p>}
+      {tab !== "archive" && selectable.length > 0 && <div className={styles.commandStrip}>
+        <button type="button" disabled={busy} onClick={() => setSelected(new Set(selectable.slice(0, 50).map((event) => event.id)))}>Выбрать без окончательного ответа</button>
+        {selectedIds.length > 0 && <>
+          <button type="button" disabled={busy} onClick={saveSelected}>{bulk.isPending ? "Сохраняем…" : `Приду на выбранные (${selectedIds.length})`}</button>
+          <button type="button" disabled={busy} onClick={() => setSelected(new Set())}>Снять выбор</button>
+        </>}
+      </div>}
       <div className={styles.list}>
         {filtered.length === 0 && <Empty text="В этой вкладке пока пусто" />}
         {filtered.map((event) => (
-          <article className={styles.row} key={event.id}>
+          <article className={styles.row} key={event.id} id={`event-${event.id}`} tabIndex={-1} data-linked={focusId === event.id}>
+            {tab !== "archive" && responseIsOpen(event, level, now) && needsFinalResponse(event) && <label className={styles.checkboxLine}>
+              <input type="checkbox" aria-label={`Выбрать занятие: ${event.title}`} disabled={busy || (!selected.has(event.id) && selectedIds.length >= 50)} checked={selected.has(event.id)} onChange={(input) => setSelected((previous) => {
+                const next = new Set(previous); if (input.target.checked) next.add(event.id); else next.delete(event.id); return next;
+              })} />
+              <span>Выбрать</span>
+            </label>}
             <AppIcon code="schedule" />
             <div>
               <strong>
@@ -2662,23 +2752,27 @@ function ScheduleView({
                 {event.status_code === "CANCELLED" && <span className={styles.inlineBadge} data-tone="warning">закрыт</span>}
               </strong>
               <span>{formatDate(event.start_datetime)} · {event.place ?? "место уточняется"}</span>
+              {event.description && <p>{event.description}</p>}
+              {event.response_deadline_at && <small>Ответ до {formatDate(event.response_deadline_at)}</small>}
             </div>
-            {event.requires_response && event.status_code !== "CANCELLED" && tab !== "archive" && (
+            {responseIsOpen(event, level, now) && tab !== "archive" && (
               <ResponseButtons
                 eventId={event.id}
                 requiresResponse={event.requires_response}
                 currentResponse={event.my_response_code}
+                isBusy={busy}
                 onRespond={onRespond}
               />
             )}
+            {event.requires_response && !responseIsOpen(event, level, now) && tab !== "archive" && <span>Приём ответов закрыт</span>}
             {event.self_checkin_enabled && event.status_code !== "CANCELLED" && tab !== "archive" && (
               <button
                 type="button"
                 className={styles.compactBtn}
-                disabled={selfCheckIn.isPending}
+                disabled={selfCheckIn.isPending || !checkInIsOpen(event, now)}
                 onClick={() => void checkIn(event)}
               >
-                {queuedCheckins.has(event.id) ? "Ждёт сеть" : selfCheckIn.isPending ? "Отмечаем…" : "Отметиться"}
+                {queuedCheckins.has(event.id) ? "Повторить самоотметку" : selfCheckIn.isPending ? "Отмечаем…" : checkInIsOpen(event, now) ? "Отметиться" : "Окно самоотметки закрыто"}
               </button>
             )}
             {event.requires_response && level >= 4 && (
@@ -3100,6 +3194,11 @@ function NormativesView({
   const [videoModal, setVideoModal] = useState<{ src?: string; embedSrc?: string } | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<Record<number, Array<{ id: number; name: string }>>>({});
   const [comments, setComments] = useState<Record<number, string>>({});
+  const linkedNormative = useRecordFocus("id", "normative", `${tab}:${items.map((item) => item.id).join(",")}`);
+  useEffect(() => {
+    const item = items.find((row) => row.id === linkedNormative);
+    if (item) setTab(item.is_active ? "active" : canReview ? "archive" : "active");
+  }, [linkedNormative, items, canReview]);
   const [offlineFiles, setOfflineFiles] = useState<Record<number, File[]>>({});
 
   const openVideoModal = async (url?: string | null, fileId?: number | null) => {
@@ -3140,7 +3239,7 @@ function NormativesView({
           setOfflineFiles((previous) => ({ ...previous, [item.id]: saved }));
           setUploadedFiles((previous) => ({
             ...previous,
-            [item.id]: saved.map((file, index) => ({ id: -(index + 1), name: `${file.name} · ждёт сеть` })),
+            [item.id]: saved.map((file, index) => ({ id: -(index + 1), name: `${file.name} · не загружен` })),
           }));
         }
       });
@@ -3188,7 +3287,7 @@ function NormativesView({
       setOfflineFiles((previous) => ({ ...previous, [normativeId]: next }));
       setUploadedFiles((previous) => ({
         ...previous,
-        [normativeId]: next.map((entry, index) => ({ id: -(index + 1), name: `${entry.name} · ждёт сеть` })),
+        [normativeId]: next.map((entry, index) => ({ id: -(index + 1), name: `${entry.name} · не загружен` })),
       }));
       toast("Файл сохранён до восстановления сети", "info");
       return;
@@ -3258,7 +3357,7 @@ function NormativesView({
               (s) => s.normative_id === item.id && isPendingNormativeStatus(s.status_code),
             );
             return (
-              <article className={styles.row} key={item.id}>
+              <article className={styles.row} key={item.id} id={`normative-${item.id}`} tabIndex={-1} data-linked={linkedNormative === item.id}>
                 <AppIcon code="norms" />
                 <div>
                   <strong>{item.title}</strong>
@@ -3299,7 +3398,7 @@ function NormativesView({
                               setOfflineFiles((previous) => ({ ...previous, [item.id]: next }));
                               setUploadedFiles((previous) => ({
                                 ...previous,
-                                [item.id]: next.map((entry, fileIndex) => ({ id: -(fileIndex + 1), name: `${entry.name} · ждёт сеть` })),
+                                [item.id]: next.map((entry, fileIndex) => ({ id: -(fileIndex + 1), name: `${entry.name} · не загружен` })),
                               }));
                               if (next.length) void saveOfflineValue(`draft:normative:${userId}:${item.id}:files`, next);
                               else void deleteOfflineValue(`draft:normative:${userId}:${item.id}:files`);
@@ -3371,7 +3470,7 @@ function NormativesView({
         {tab === "archive" && (archiveItems.length === 0
           ? <Empty text="Архив нормативов пуст" />
           : archiveItems.map((item) => (
-            <article className={styles.row} key={item.id}>
+            <article className={styles.row} key={item.id} id={`normative-${item.id}`} tabIndex={-1} data-linked={linkedNormative === item.id}>
               <AppIcon code="norms" />
               <div>
                 <strong>{item.title}</strong>
@@ -3387,49 +3486,6 @@ function NormativesView({
             </article>
           ))
         )}
-      </div>
-    </div>
-  );
-}
-
-/* ─────────── NotificationsView ─────────── */
-function NotificationsView({
-  items,
-  onRead,
-  onReadAll,
-  isBusy,
-}: {
-  items: Notification[];
-  onRead: (id: number) => void;
-  onReadAll: () => void;
-  isBusy: boolean;
-}) {
-  const unread = items.filter((item) => !item.is_read);
-  return (
-    <div className={styles.panel}>
-      <div className={styles.panelHeader}>
-        <h2>Уведомления</h2>
-        <span>{formatUnreadCount(unread.length)}</span>
-      </div>
-      {unread.length > 1 && (
-        <div className={styles.commandStrip}>
-          <button type="button" disabled={isBusy} onClick={onReadAll}>Прочитать все</button>
-        </div>
-      )}
-      <div className={styles.list}>
-        {items.length === 0 && <Empty text="Уведомлений пока нет" />}
-        {items.map((item) => (
-          <article className={styles.row} key={item.id} data-muted={item.is_read}>
-            <AppIcon code="notifications" />
-            <div>
-              <strong>{item.title}</strong>
-              <span>{item.body ?? item.type_code} · {formatDate(item.created_at)}</span>
-            </div>
-            {!item.is_read && (
-              <button className={styles.iconAction} type="button" onClick={() => onRead(item.id)}>Прочитано</button>
-            )}
-          </article>
-        ))}
       </div>
     </div>
   );
@@ -3594,13 +3650,20 @@ function AppealsView({
   currentUserId,
   onCreate,
   isSubmitting,
+  isLoading,
+  loadError,
+  onReload,
 }: {
   items: Appeal[];
   currentUserId: number | null;
   onCreate: (payload: AppealPayload) => Promise<void>;
   isSubmitting: boolean;
+  isLoading: boolean;
+  loadError: boolean;
+  onReload: () => void;
 }) {
-  const [form, setForm] = useState<AppealPayload>({
+  const draftKey = currentUserId ? `draft:appeal:${currentUserId}` : null;
+  const appealDraft = usePersistentDraft<AppealPayload>(draftKey, {
     subject: "",
     description: "",
     category_code: "OTHER",
@@ -3608,69 +3671,115 @@ function AppealsView({
     is_anonymous: false,
     file_id: null,
   });
+  const { value: form, setValue: setForm } = appealDraft;
   const [appealAttachment, setAppealAttachment] = useState<{ id: number; name: string } | null>(null);
   const [offlineFile, setOfflineFile] = useState<File | null>(null);
-  const canSubmit = form.subject.trim().length > 0 && form.description.trim().length > 0;
+  const attachmentEpoch = useRef(0);
+  const attachmentUploading = useRef(false);
+  const [attachmentRetry, setAttachmentRetry] = useState(0);
+  const canSubmit = appealDraft.ready && form.subject.trim().length > 0 && form.subject.length <= 255
+    && form.description.trim().length > 0 && form.description.length <= 10000;
+  const [appealSearch, setAppealSearch] = useState("");
+  const [appealStatus, setAppealStatus] = useState("");
+  const visibleAppeals = filterAppeals(items, appealSearch, appealStatus);
   const [openAppealId, setOpenAppealId] = useState<number | null>(null);
+  const appealLocation = useLocation();
+  const linkedAppeal = recordId(appealLocation.search, "id");
+  const openedAppealLink = useRef("");
+  useEffect(() => {
+    const key = `${appealLocation.key}:${linkedAppeal}`;
+    if (linkedAppeal !== null && openedAppealLink.current !== key && items.some((item) => item.id === linkedAppeal)) {
+      openedAppealLink.current = key; setOpenAppealId(linkedAppeal);
+    }
+  }, [linkedAppeal, items, appealLocation.key]);
 
   const upload = useUploadFile();
   const openFile = useOpenFile();
   const messages = useAppealMessages(openAppealId, openAppealId !== null);
   const createMessage = useCreateAppealMessage();
-  const [msgText, setMsgText] = useState("");
-  const draftKey = currentUserId ? `draft:appeal:${currentUserId}` : null;
+  const replyDraft = usePersistentDraft<string>(messageDraftKey(currentUserId, openAppealId), "");
+  const { value: msgText, setValue: setMsgText } = replyDraft;
+  const messageSending = useRef(false);
+  const messageTarget = useRef(openAppealId);
+  messageTarget.current = openAppealId;
+  const [messageError, setMessageError] = useState<string | null>(null);
+  const sendMessage = async () => {
+    if (!openAppealId || !replyDraft.ready || !validMessageBody(msgText) || messageSending.current) return;
+    const targetId = openAppealId;
+    messageSending.current = true;
+    setMessageError(null);
+    try {
+      await createMessage.mutateAsync({ appealId: openAppealId, body: msgText.trim() });
+      await replyDraft.clear();
+      toast("Сообщение отправлено", "success");
+    } catch (error) {
+      await replyDraft.flush();
+      if (messageTarget.current === targetId) setMessageError(apiErrorDetail(error) ?? "Сообщение не отправлено. Текст сохранён в поле; попробуйте ещё раз.");
+    } finally {
+      messageSending.current = false;
+    }
+  };
+  useEffect(() => { setMessageError(null); }, [openAppealId]);
 
   useEffect(() => {
+    const epoch = ++attachmentEpoch.current;
+    setOfflineFile(null);
+    setAppealAttachment(null);
     if (!draftKey) return;
-    void loadOfflineValue<AppealPayload>(draftKey).then((saved) => {
-      if (saved) setForm(saved);
-    });
+    let cancelled = false;
     void loadOfflineValue<File>(`${draftKey}:file`).then((saved) => {
-      if (saved) {
-        setOfflineFile(saved);
-        setAppealAttachment({ id: 0, name: `${saved.name} · ждёт сеть` });
-      }
+      if (!cancelled && epoch === attachmentEpoch.current && saved) { setOfflineFile(saved); setAppealAttachment({ id: 0, name: `${saved.name} · не загружен` }); }
     });
+    return () => { cancelled = true; };
   }, [draftKey]);
+  useEffect(() => {
+    if (appealDraft.ready && form.file_id && !appealAttachment) setAppealAttachment({ id: form.file_id, name: "Вложение из черновика" });
+  }, [appealDraft.ready, form.file_id, appealAttachment]);
 
   useEffect(() => {
-    if (!draftKey || (!form.subject.trim() && !form.description.trim())) return;
-    const timeout = window.setTimeout(() => void saveOfflineValue(draftKey, form), 400);
-    return () => window.clearTimeout(timeout);
-  }, [draftKey, form]);
-
-  useEffect(() => {
-    if (!draftKey || !offlineFile) return;
+    if (!draftKey || !offlineFile || !appealDraft.ready) return;
+    let cancelled = false;
     const uploadWhenOnline = async () => {
-      if (!navigator.onLine) return;
+      if (!navigator.onLine || attachmentUploading.current) return;
+      attachmentUploading.current = true;
+      const epoch = attachmentEpoch.current;
       try {
         const result = await upload.mutateAsync(offlineFile);
+        if (cancelled || epoch !== attachmentEpoch.current) return;
         setAppealAttachment({ id: result.id, name: result.original_name || offlineFile.name });
         setForm((previous) => ({ ...previous, file_id: result.id }));
+        await appealDraft.flush();
         setOfflineFile(null);
         await deleteOfflineValue(`${draftKey}:file`);
         toast("Вложение из черновика загружено", "success");
       } catch {
         // Keep the local draft and retry on the next online event.
+      } finally {
+        attachmentUploading.current = false;
       }
     };
     window.addEventListener("online", uploadWhenOnline);
     void uploadWhenOnline();
-    return () => window.removeEventListener("online", uploadWhenOnline);
-  }, [draftKey, offlineFile]);
+    return () => { cancelled = true; window.removeEventListener("online", uploadWhenOnline); };
+  }, [draftKey, offlineFile, appealDraft.ready, attachmentRetry, setForm, appealDraft.flush]);
 
+  const appealSubmitting = useRef(false);
   const submitAppeal = async () => {
+    if (!canSubmit || appealSubmitting.current || offlineFile || upload.isPending) return;
+    appealSubmitting.current = true;
     try {
       await onCreate(form);
-      setForm({ subject: "", description: "", category_code: "OTHER", urgency_code: "NORMAL", is_anonymous: false, file_id: null });
+      await appealDraft.clear();
+      attachmentEpoch.current += 1;
       setAppealAttachment(null);
+      setOfflineFile(null);
       if (draftKey) {
-        await deleteOfflineValue(draftKey);
         await deleteOfflineValue(`${draftKey}:file`);
       }
     } catch {
-      toast("Черновик сохранён и не будет потерян", "warning");
-    }
+      await appealDraft.flush();
+      toast("Обращение не отправлено. Введённые данные сохранены.", "warning");
+    } finally { appealSubmitting.current = false; }
   };
 
   return (
@@ -3682,13 +3791,18 @@ function AppealsView({
 
       {openAppealId === null ? (
         <>
-          <div className={styles.formBlock}>
+          <DraftStatus {...appealDraft} />
+          <fieldset className={styles.formBlock} disabled={!appealDraft.ready || isSubmitting} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
             <input
+              aria-label="Тема обращения"
+              maxLength={255}
               placeholder="Тема обращения"
               value={form.subject}
               onChange={(e) => setForm({ ...form, subject: e.target.value })}
             />
             <textarea
+              aria-label="Описание обращения"
+              maxLength={10000}
               placeholder="Опишите проблему или предложение"
               rows={3}
               value={form.description}
@@ -3722,6 +3836,7 @@ function AppealsView({
               <div className={styles.fileAttached}>
                 <span>{appealAttachment.name}</span>
                 <button type="button" onClick={() => {
+                  attachmentEpoch.current += 1;
                   setAppealAttachment(null);
                   setOfflineFile(null);
                   setForm({ ...form, file_id: null });
@@ -3732,40 +3847,63 @@ function AppealsView({
             <FilePicker
               accept={FILE_PREVIEW_ACCEPT}
               label={upload.isPending ? "Загружаем..." : appealAttachment ? "Заменить вложение" : "Прикрепить файл или видео"}
+              disabled={upload.isPending || !appealDraft.ready}
               className={styles.fileButton}
               onFile={async (file) => {
+                if (attachmentUploading.current) return;
+                const epoch = ++attachmentEpoch.current;
                 if (!navigator.onLine) {
                   if (!draftKey || !(await canStoreFile(file))) {
                     toast("Недостаточно места: сохранён только текст черновика", "warning");
                     return;
                   }
                   await saveOfflineValue(`${draftKey}:file`, file);
+                  if (epoch !== attachmentEpoch.current) return;
+                  setForm((previous) => ({ ...previous, file_id: null }));
                   setOfflineFile(file);
-                  setAppealAttachment({ id: 0, name: `${file.name} · ждёт сеть` });
+                  setAppealAttachment({ id: 0, name: `${file.name} · не загружен` });
                   toast("Файл сохранён до восстановления сети", "info");
                   return;
                 }
+                attachmentUploading.current = true;
                 try {
                   const result = await upload.mutateAsync(file);
+                  if (epoch !== attachmentEpoch.current) return;
                   setAppealAttachment({ id: result.id, name: result.original_name || file.name });
                   setForm((prev) => ({ ...prev, file_id: result.id }));
+                  await appealDraft.flush();
+                  setOfflineFile(null);
+                  if (draftKey) await deleteOfflineValue(`${draftKey}:file`);
                 } catch {
                   toast("Не удалось загрузить вложение", "error");
+                } finally {
+                  attachmentUploading.current = false;
                 }
               }}
             />
+            {offlineFile && <button type="button" disabled={upload.isPending} onClick={() => setAttachmentRetry((value) => value + 1)}>Повторить загрузку вложения</button>}
             <button type="button" disabled={!canSubmit || isSubmitting || upload.isPending || Boolean(offlineFile)} onClick={() => void submitAppeal()}>
               {isSubmitting ? "Отправляем..." : "Отправить обращение"}
             </button>
-          </div>
+            {appealDraft.restored && <button type="button" onClick={() => { attachmentEpoch.current += 1; void appealDraft.clear(); setAppealAttachment(null); setOfflineFile(null); if (draftKey) void deleteOfflineValue(`${draftKey}:file`); }}>Очистить черновик</button>}
+          </fieldset>
 
+          <div className={styles.formBlock}>
+            <input type="search" aria-label="Поиск обращений" placeholder="Найти по номеру, теме или описанию" value={appealSearch} maxLength={100} onChange={(event) => setAppealSearch(event.target.value)} />
+            <select aria-label="Статус обращения" value={appealStatus} onChange={(event) => setAppealStatus(event.target.value)}>
+              <option value="">Все статусы</option>
+              {["CREATED", "IN_PROGRESS", "NEEDS_INFO", "RESOLVED", "REJECTED", "CLOSED"].map((code) => <option key={code} value={code}>{appealStatusLabel(code)}</option>)}
+            </select>
+          </div>
+          {isLoading && <p role="status">Загружаем обращения…</p>}
+          {loadError && <div className={styles.commandStrip} role="alert"><span>Не удалось загрузить обращения.</span><button type="button" onClick={onReload}>Повторить</button></div>}
           <div className={styles.list}>
-            {items.length === 0 && <Empty text="Обращений пока нет" />}
-            {items.map((item) => (
-              <article className={styles.row} key={item.id} style={{ cursor: "pointer" }} onClick={() => setOpenAppealId(item.id)}>
+            {!isLoading && !loadError && visibleAppeals.length === 0 && <Empty text={items.length ? "По выбранным условиям обращений нет" : "Обращений пока нет"} />}
+            {visibleAppeals.map((item) => (
+              <article className={styles.row} key={item.id} style={{ cursor: "pointer" }}><button type="button" className={styles.compactBtn} style={{ gridColumn: "1/-1" }} onClick={() => setOpenAppealId(item.id)} aria-label={`Открыть обращение: ${item.subject}`}>Открыть</button>
                 <AppIcon code="appeals" />
                 <div>
-                  <strong>{item.subject}</strong>
+                  <strong>#{item.id} · {item.subject}</strong>
                   <span>{appealStatusLabel(item.status_code)} · {codeLabel(item.category_code)} · {formatDate(item.created_at)}</span>
                 </div>
                 {item.file_id && (
@@ -3790,7 +3928,7 @@ function AppealsView({
       ) : (
         <>
           <div className={styles.commandStrip}>
-            <button type="button" onClick={() => setOpenAppealId(null)}>← Назад к списку</button>
+            <button type="button" disabled={createMessage.isPending} onClick={() => setOpenAppealId(null)}>← Назад к списку</button>
           </div>
           {(() => {
             const appeal = items.find((a) => a.id === openAppealId);
@@ -3799,6 +3937,7 @@ function AppealsView({
                 <span>Тема</span>
                 <strong>{appeal.subject}</strong>
                 <small>{appealStatusLabel(appeal.status_code)} · {appeal.urgency_code}</small>
+                <p style={{ whiteSpace: "pre-wrap" }}>{appeal.description}</p>
                 {appeal.resolution_text && <small>Решение: {appeal.resolution_text}</small>}
                 {appeal.file_id && (
                   <div className={styles.filePreviewActions}>
@@ -3812,36 +3951,39 @@ function AppealsView({
           })()}
           <div className={styles.messageThread}>
             {messages.isLoading && <Empty text="Загрузка переписки..." />}
+            {messages.isError && <div className={styles.commandStrip} role="alert"><span>Не удалось загрузить переписку.</span><button type="button" onClick={() => void messages.refetch()}>Повторить</button></div>}
             {(messages.data ?? []).map((msg) => (
               <MessageBubble key={msg.id} msg={msg} isMine={msg.author_id === currentUserId} />
             ))}
             {messages.data?.length === 0 && <Empty text="Переписка пуста" />}
           </div>
+          <DraftStatus {...replyDraft} />
           <div className={styles.messageInput}>
-            <input
+            <textarea
+              aria-label="Сообщение в обращении"
+              rows={3}
+              maxLength={APPEAL_MESSAGE_LIMIT}
+              disabled={!replyDraft.ready || createMessage.isPending}
               placeholder="Написать сообщение..."
               value={msgText}
               onChange={(e) => setMsgText(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && msgText.trim() && openAppealId) {
-                  createMessage.mutate({ appealId: openAppealId, body: msgText.trim() });
-                  setMsgText("");
+                if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  void sendMessage();
                 }
               }}
             />
             <button
               type="button"
-              disabled={!msgText.trim() || createMessage.isPending}
-              onClick={() => {
-                if (msgText.trim() && openAppealId) {
-                  createMessage.mutate({ appealId: openAppealId, body: msgText.trim() });
-                  setMsgText("");
-                }
-              }}
+              disabled={!replyDraft.ready || !validMessageBody(msgText) || createMessage.isPending}
+              onClick={() => void sendMessage()}
             >
-              Отправить
+              {createMessage.isPending ? "Отправляем…" : "Отправить"}
             </button>
           </div>
+          <small>{msgText.length}/{APPEAL_MESSAGE_LIMIT} · Enter — новая строка, Ctrl/⌘+Enter — отправить</small>
+          {messageError && <p role="alert">{messageError}</p>}
         </>
       )}
     </div>
@@ -4028,7 +4170,22 @@ function ReportsView({
 function LearningView({ items, courses, canTrack }: { items: LearningMaterial[]; courses: LearningCourse[]; canTrack: boolean }) {
   const [tab, setTab] = useState<"main" | "candidates" | "courses">("main");
   const [selectedCourseId, setSelectedCourseId] = useState<number | null>(null);
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState<LearningFilter>("all");
+  const navigate = useNavigate();
+  const learningLocation = useLocation();
+  const openedMaterialLink = useRef("");
   const [videoModal, setVideoModal] = useState<{ src?: string; embedSrc?: string } | null>(null);
+  const linkedMaterial = useRecordFocus("material", "material", `${tab}:${selectedCourseId}:${items.map((item) => item.id).join(",")}`);
+  useEffect(() => {
+    const item = items.find((row) => row.id === linkedMaterial);
+    const key = `${learningLocation.key}:${linkedMaterial}`;
+    if (item && openedMaterialLink.current !== key) {
+      openedMaterialLink.current = key;
+      setTab(item.audience_code === "CANDIDATE" ? "candidates" : "main");
+      setSelectedCourseId(item.course_id ?? null); setSearch(""); setFilter("all");
+    }
+  }, [linkedMaterial, items, learningLocation.key]);
   const markViewed = useMarkMaterialViewed();
   const openFile = useOpenFile();
   const getFileBlob = useGetFileBlob();
@@ -4051,7 +4208,9 @@ function LearningView({ items, courses, canTrack }: { items: LearningMaterial[];
     if (tab === "candidates") return item.audience_code === "CANDIDATE";
     return item.audience_code !== "CANDIDATE";
   });
-  const visibleItems = selectedCourseId === null ? audienceItems : audienceItems.filter((item) => item.course_id === selectedCourseId);
+  const scopeItems = selectedCourseId === null ? audienceItems : items.filter((item) => item.course_id === selectedCourseId);
+  const visibleItems = filterMaterials(scopeItems, search, filter);
+  const progress = learningProgress(scopeItems);
   const selectedCourse = courses.find((course) => course.id === selectedCourseId);
 
   const typeLabels: Record<string, string> = {
@@ -4086,6 +4245,19 @@ function LearningView({ items, courses, canTrack }: { items: LearningMaterial[];
         active={tab}
         onChange={(value) => { setTab(value as typeof tab); setSelectedCourseId(null); }}
       />
+      {tab !== "courses" && <>
+        <div className={styles.formBlock}>
+          <input aria-label="Поиск учебных материалов" placeholder="Поиск по названию и описанию" value={search} maxLength={100} onChange={(event) => setSearch(event.target.value)} />
+          {canTrack && <select aria-label="Статус изучения" value={filter} onChange={(event) => setFilter(event.target.value as LearningFilter)}>
+            <option value="all">Все материалы</option><option value="unread">Не изученные</option><option value="viewed">Изученные</option>
+          </select>}
+        </div>
+        {canTrack && progress.total > 0 && <div className={styles.commandStrip}>
+          <progress max={progress.total} value={progress.completed} aria-label="Прогресс изучения" />
+          <span>Изучено {progress.completed} из {progress.total} · {progress.percent}%</span>
+          {progress.nextId !== null && <button type="button" onClick={() => navigate(`/learning?material=${progress.nextId}`)}>Продолжить обучение</button>}
+        </div>}
+      </>}
       <div className={styles.list}>
         {tab !== "courses" && selectedCourse && (
           <div className={styles.commandStrip}>
@@ -4094,15 +4266,23 @@ function LearningView({ items, courses, canTrack }: { items: LearningMaterial[];
           </div>
         )}
         {tab !== "courses" && visibleItems.length === 0 && (
-          <Empty text={tab === "candidates" ? "Материалы отбора появятся после публикации" : "Материалы основного состава появятся после публикации"} />
+          <Empty text={search || filter !== "all" ? "Материалы по выбранным условиям не найдены" : tab === "candidates" ? "Материалы отбора появятся после публикации" : "Материалы основного состава появятся после публикации"} />
         )}
         {tab !== "courses" && visibleItems.map((item) => (
-          <article className={styles.row} key={item.id} style={{ cursor: "default" }}>
+          <article className={styles.row} key={item.id} id={`material-${item.id}`} tabIndex={-1} data-linked={linkedMaterial === item.id} style={{ cursor: "default" }}>
             <AppIcon code="learning" />
             <div>
               <strong>{item.title}</strong>
-              <span>{typeLabels[item.type_code] ?? item.type_code} · {item.description ?? "материал подготовки"}{item.duration_minutes ? ` · ${item.duration_minutes} мин` : ""}</span>
+              <span>{typeLabels[item.type_code] ?? item.type_code}{item.duration_minutes ? ` · ${item.duration_minutes} мин` : ""}</span>
+              <p style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", margin: "6px 0", fontSize: 13 }}>{item.description ?? "Материал подготовки"}</p>
+              {canTrack && <small>{item.is_viewed ? "✓ Изучено" : "Ещё не изучено"}</small>}
             </div>
+            {canTrack && <button type="button" className={styles.iconAction} disabled={markViewed.isPending} aria-pressed={Boolean(item.is_viewed)} onClick={() => {
+              markViewed.mutate({ materialId: item.id, viewed: !item.is_viewed }, {
+                onSuccess: () => toast(item.is_viewed ? "Отметка снята" : "Прогресс сохранён", "success"),
+                onError: () => toast("Не удалось сохранить прогресс. Проверьте сеть и повторите.", "error"),
+              });
+            }}>{item.is_viewed ? "Снять отметку" : "Отметить изученным"}</button>}
             {(item.external_url || item.file_id) && (item.type_code === "VIDEO" ? (
               <VideoThumbnailCard
                 title={item.external_url ? "Смотреть видео" : "Смотреть видео"}
@@ -4128,7 +4308,7 @@ function LearningView({ items, courses, canTrack }: { items: LearningMaterial[];
                     if (typeof window !== "undefined" && (window as unknown as Record<string, unknown>).Telegram) {
                       (window as unknown as { Telegram: { WebApp: { openLink: (url: string) => void } } }).Telegram.WebApp.openLink(item.external_url!);
                     } else {
-                      window.open(item.external_url!, "_blank");
+                      window.open(item.external_url!, "_blank", "noopener,noreferrer");
                     }
                   }}>
                     Открыть материал
@@ -4139,23 +4319,16 @@ function LearningView({ items, courses, canTrack }: { items: LearningMaterial[];
           </article>
         ))}
         {tab === "courses" && courses.length === 0 && <Empty text="Курсы появятся после публикации" />}
-        {tab === "courses" && courses.map((item) => (
-          <article
-            className={styles.row}
-            key={item.id}
-            style={{ cursor: "pointer" }}
-            onClick={() => {
-              setSelectedCourseId(item.id);
-              setTab(item.audience_code === "CANDIDATE" ? "candidates" : "main");
-            }}
-          >
+        {tab === "courses" && courses.map((item) => {
+          const courseProgress = learningProgress(items.filter((material) => material.course_id === item.id));
+          return <article className={styles.row} key={item.id}>
             <AppIcon code="learning" />
-            <div>
-              <strong>{item.title}</strong>
-              <span>{item.audience_code} · {item.description ?? "мини-курс"} · {items.filter((material) => material.course_id === item.id).length} материалов</span>
+            <div><strong>{item.title}</strong><span>{item.description ?? "Мини-курс"} · {courseProgress.total} материалов</span>
+              {canTrack && <small>Изучено {courseProgress.completed} из {courseProgress.total} · {courseProgress.percent}%</small>}
             </div>
-          </article>
-        ))}
+            <button type="button" className={styles.iconAction} onClick={() => { setSelectedCourseId(item.id); setTab(item.audience_code === "CANDIDATE" ? "candidates" : "main"); setSearch(""); setFilter("all"); }}>Открыть курс</button>
+          </article>;
+        })}
       </div>
     </div>
   );
@@ -4176,16 +4349,8 @@ function MemberModal({ user, squads, onClose }: { user: UserRecord; squads: Squa
     ...(user.username ? [{ label: "Telegram", value: `@${user.username}`, link: `https://t.me/${user.username}` }] : []),
   ];
   return (
-    <div className={styles.modalOverlay} onClick={onClose}>
-      <div
-        className={styles.modalSheet}
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Профиль пользователя: ${user.full_name}`}
-        tabIndex={-1}
-        onKeyDown={(event) => { if (event.key === "Escape") onClose(); }}
-        onClick={(event) => event.stopPropagation()}
-      >
+    <Dialog overlayClassName={styles.modalOverlay} className={styles.modalSheet}
+      label={`Профиль пользователя: ${user.full_name}`} onClose={onClose}>
         <div className={styles.modalHeader}>
           <strong>{user.full_name}</strong>
           <button type="button" onClick={onClose} aria-label="Закрыть">
@@ -4195,31 +4360,25 @@ function MemberModal({ user, squads, onClose }: { user: UserRecord; squads: Squa
         <div className={styles.modalBody} style={{ padding: "0 16px 16px" }}>
           <dl style={{ margin: 0 }}>
             {rows.map(({ label, value, copyable, link }) => (
-              <div
-                key={label}
-                className={styles.profileRow}
-                style={copyable || link ? { cursor: "pointer" } : undefined}
-                onClick={() => {
-                  if (link) { window.open(link, "_blank"); return; }
-                  if (copyable && value !== "—") {
-                    navigator.clipboard.writeText(value).then(() => toast(`${label} скопирован`, "info")).catch(() => {});
-                  }
-                }}
-              >
+              <div key={label} className={styles.profileRow}>
                 <dt>{label}</dt>
-                <dd style={link ? { color: "#1a2f5a", textDecoration: "underline" } : copyable && value !== "—" ? { textDecoration: "underline dotted" } : undefined}>
-                  {value} {copyable && value !== "—" ? (
-                    <svg style={{ display: "inline", verticalAlign: "middle", marginLeft: 3 }} width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                      <path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z"/>
-                    </svg>
-                  ) : ""}
+                <dd>
+                  {link ? (
+                    <a className={styles.profileDetailAction} href={link} target="_blank" rel="noreferrer">{value}</a>
+                  ) : copyable && value !== "—" ? (
+                    <button type="button" className={styles.profileDetailAction} aria-label={`Скопировать: ${label}`}
+                      onClick={() => {
+                        navigator.clipboard.writeText(value).then(() => toast(`${label} скопирован`, "info")).catch(() => toast("Не удалось скопировать", "error"));
+                      }}>
+                      {value}
+                    </button>
+                  ) : value}
                 </dd>
               </div>
             ))}
           </dl>
         </div>
-      </div>
-    </div>
+    </Dialog>
   );
 }
 
@@ -4246,6 +4405,14 @@ function PeopleView({
   const [segment, setSegment] = useState<PeopleSegment>("roster");
   const [search, setSearch] = useState("");
   const [selectedUser, setSelectedUser] = useState<UserRecord | null>(null);
+  const peopleLocation = useLocation();
+  const linkedUserId = recordId(peopleLocation.search, "user");
+  const openedUserLink = useRef("");
+  useEffect(() => {
+    const user = allUsers.find((item) => item.id === linkedUserId);
+    const key = `${peopleLocation.key}:${linkedUserId}`;
+    if (user && openedUserLink.current !== key) { openedUserLink.current = key; setSelectedUser(user); }
+  }, [linkedUserId, allUsers, peopleLocation.key]);
 
   const squadMap = new Map(squads.map((s) => [s.id, s]));
 
@@ -4358,28 +4525,30 @@ function RosterTable({
   });
   if (sorted.length === 0) return <Empty text={emptyText} />;
   return (
-    <div className={styles.rosterTableWrap}>
-      <table className={styles.rosterTable} data-compact={compact}>
-        <thead>
-          <tr>
-            <th>ФИО</th>
-            <th>Telegram</th>
-            <th>Отделение</th>
-            <th>Роль</th>
-            {!compact && <th>Статус</th>}
-            {!compact && <th>Телефон</th>}
-            {!compact && <th>Дата рождения</th>}
+    <div className={styles.rosterTableWrap} role="region" aria-label="Состав участников" tabIndex={0}>
+      <table className={styles.rosterTable} data-compact={compact} role="table" aria-label="Состав участников">
+        <thead role="rowgroup">
+          <tr role="row">
+            <th scope="col" role="columnheader">ФИО</th>
+            <th scope="col" role="columnheader">Telegram</th>
+            <th scope="col" role="columnheader">Отделение</th>
+            <th scope="col" role="columnheader">Роль</th>
+            {!compact && <th scope="col" role="columnheader">Статус</th>}
+            {!compact && <th scope="col" role="columnheader">Телефон</th>}
+            {!compact && <th scope="col" role="columnheader">Дата рождения</th>}
           </tr>
         </thead>
-        <tbody>
+        <tbody role="rowgroup">
           {sorted.map((user) => (
-            <tr
+            <tr role="row"
               key={user.id ?? user.telegram_id}
               style={onRowClick ? { cursor: "pointer" } : undefined}
               onClick={onRowClick ? () => onRowClick(user) : undefined}
             >
-              <td>{user.full_name}</td>
-              <td>
+              <td role="cell" data-label="ФИО">
+                {onRowClick ? <button type="button" className={styles.rosterNameButton} onClick={(event) => { event.stopPropagation(); onRowClick(user); }}>{user.full_name}</button> : user.full_name}
+              </td>
+              <td role="cell" data-label="Telegram">
                 {user.username ? (
                   <a
                     href={`https://t.me/${user.username}`}
@@ -4391,7 +4560,7 @@ function RosterTable({
                     @{user.username}
                   </a>
                 ) : (
-                  <span
+                  <button type="button" disabled={!user.telegram_id}
                     className={styles.telegramFallback}
                     title={user.telegram_id ? "Username не указан. Нажмите, чтобы скопировать Telegram ID" : "Telegram не привязан"}
                     onClick={(e) => {
@@ -4402,14 +4571,14 @@ function RosterTable({
                     }}
                   >
                     {user.telegram_id ? `ID ${user.telegram_id}` : "нет Telegram"}
-                  </span>
+                  </button>
                 )}
               </td>
-              <td>{squadName(user.squad_id)}</td>
-              <td>{roleLabels[user.role_code as RoleCode] ?? user.role_code}</td>
-              {!compact && <td>{codeLabel(user.status_code)}</td>}
-              {!compact && <td>{formatPhoneDisplay(user.phone)}</td>}
-              {!compact && <td>{user.birth_date ? formatDateFull(user.birth_date) : "—"}</td>}
+              <td role="cell" data-label="Отделение">{squadName(user.squad_id)}</td>
+              <td role="cell" data-label="Роль">{roleLabels[user.role_code as RoleCode] ?? user.role_code}</td>
+              {!compact && <td role="cell" data-label="Статус">{codeLabel(user.status_code)}</td>}
+              {!compact && <td role="cell" data-label="Телефон">{formatPhoneDisplay(user.phone)}</td>}
+              {!compact && <td role="cell" data-label="Дата рождения">{user.birth_date ? formatDateFull(user.birth_date) : "—"}</td>}
             </tr>
           ))}
         </tbody>
@@ -4483,50 +4652,35 @@ function ProfileView({
   onLogout?: () => void;
 }) {
   const [editing, setEditing] = useState(false);
-  const [editForm, setEditForm] = useState({ full_name: "", phone: "", city: "", education_place: "", birth_date: "" });
   const [editPhone, setEditPhone] = useState("+7");
-  const [editBaseVersion, setEditBaseVersion] = useState<string | null>(null);
   const [profileConflict, setProfileConflict] = useState<UserProfile | null>(null);
   const [localAvatarPreview, setLocalAvatarPreview] = useState<string | null>(null);
   const [avatarFailed, setAvatarFailed] = useState(false);
   const [section, setSection] = useState<"data" | "security" | "integrations" | "notifications">("data");
   const updateMe = useUpdateMe();
   const profileDraftKey = profile.id ? `draft:profile:${profile.id}` : null;
+  const profileDraft = usePersistentDraft(profileDraftKey, {
+    form: { full_name: profile.full_name ?? "", phone: profile.phone ?? "", city: profile.city ?? "", education_place: profile.education_place ?? "", birth_date: profile.birth_date ?? "" },
+    version: profile.version ?? null,
+  }, editing);
+  const editForm = profileDraft.value.form;
+  const editBaseVersion = profileDraft.value.version;
+  const setEditForm = (form: typeof editForm) => profileDraft.setValue((previous) => ({ ...previous, form }));
+  const setEditBaseVersion = (version: string | null) => profileDraft.setValue((previous) => ({ ...previous, version }));
+  useEffect(() => { if (profileDraft.ready) setEditPhone(editForm.phone ? formatPhoneDisplay(editForm.phone) : "+7"); }, [profileDraft.ready, editForm.phone]);
 
-  const startEdit = () => {
-    setEditForm({
-      full_name: profile.full_name ?? "",
-      phone: profile.phone ?? "",
-      city: profile.city ?? "",
-      education_place: profile.education_place ?? "",
-      birth_date: profile.birth_date ?? "",
-    });
-    setEditPhone(profile.phone ? formatPhoneDisplay(profile.phone) : "+7");
-    setEditBaseVersion(profile.version ?? null);
-    setProfileConflict(null);
-    setEditing(true);
-    if (profileDraftKey) {
-      void loadOfflineValue<{ form: typeof editForm; version: string | null }>(profileDraftKey).then((saved) => {
-        if (saved) {
-          setEditForm(saved.form);
-          setEditBaseVersion(saved.version);
-          setEditPhone(saved.form.phone ? formatPhoneDisplay(saved.form.phone) : "+7");
-          toast("Локальный черновик профиля восстановлен", "info");
-        }
-      });
-    }
-  };
+  const startEdit = () => { setProfileConflict(null); setEditing(true); };
 
   const saveEdit = () => {
     updateMe.mutate(
       { ...editForm, phone: editForm.phone || undefined, if_unmodified_since: editBaseVersion },
       {
         onSuccess: (updated) => {
+          void profileDraft.clear();
           setEditing(false);
           setProfileConflict(null);
           onProfileUpdate(updated);
           toast("Профиль сохранён", "success");
-          if (profileDraftKey) void deleteOfflineValue(profileDraftKey);
         },
         onError: (error) => {
           const detail = (error as { response?: { data?: { detail?: { code?: string; server?: UserProfile } } } }).response?.data?.detail;
@@ -4558,15 +4712,6 @@ function ProfileView({
   useEffect(() => () => {
     if (localAvatarPreview) URL.revokeObjectURL(localAvatarPreview);
   }, [localAvatarPreview]);
-
-  useEffect(() => {
-    if (!editing || !profileDraftKey) return;
-    const timeout = window.setTimeout(
-      () => void saveOfflineValue(profileDraftKey, { form: editForm, version: editBaseVersion }),
-      400,
-    );
-    return () => window.clearTimeout(timeout);
-  }, [editBaseVersion, editForm, editing, profileDraftKey]);
 
   const handleAvatarFile = async (file: File) => {
     const previewUrl = URL.createObjectURL(file);
@@ -4610,7 +4755,7 @@ function ProfileView({
         <>
       <div className={styles.panelHeader}>
         <h2>Профиль</h2>
-        <button type="button" className={styles.editProfileBtn} onClick={editing ? () => setEditing(false) : startEdit}>
+        <button type="button" className={styles.editProfileBtn} disabled={updateMe.isPending} onClick={editing ? () => setEditing(false) : startEdit}>
           {editing ? "Отмена" : "Редактировать"}
         </button>
       </div>
@@ -4640,6 +4785,7 @@ function ProfileView({
 
         {editing ? (
           <div className={styles.formBlock}>
+            <DraftStatus {...profileDraft} />
             {profileConflict && (
               <div className={styles.conflictCard} role="alert">
                 <strong>Профиль изменён на сервере</strong>
@@ -4668,6 +4814,7 @@ function ProfileView({
               <input
                 placeholder="Иванов Иван Иванович"
                 value={editForm.full_name}
+                disabled={!profileDraft.ready || updateMe.isPending}
                 onChange={(e) => setEditForm({ ...editForm, full_name: e.target.value })}
               />
             </label>
@@ -4678,6 +4825,7 @@ function ProfileView({
                 inputMode="numeric"
                 placeholder="+7 999 000 11 22"
                 value={editPhone}
+                disabled={!profileDraft.ready || updateMe.isPending}
                 onChange={(e) => {
                   const masked = applyPhoneMask(e.target.value);
                   setEditPhone(masked);
@@ -4690,6 +4838,7 @@ function ProfileView({
               <input
                 placeholder="Новосибирск"
                 value={editForm.city}
+                disabled={!profileDraft.ready || updateMe.isPending}
                 onChange={(e) => setEditForm({ ...editForm, city: e.target.value })}
               />
             </label>
@@ -4698,6 +4847,7 @@ function ProfileView({
               <input
                 placeholder="Например, 1ИСП-21"
                 value={editForm.education_place}
+                disabled={!profileDraft.ready || updateMe.isPending}
                 onChange={(e) => setEditForm({ ...editForm, education_place: e.target.value })}
               />
             </label>
@@ -4706,12 +4856,14 @@ function ProfileView({
               <input
                 type="date"
                 value={editForm.birth_date}
+                disabled={!profileDraft.ready || updateMe.isPending}
                 onChange={(e) => setEditForm({ ...editForm, birth_date: e.target.value })}
               />
             </label>
-            <button type="button" disabled={!editForm.full_name.trim() || updateMe.isPending} onClick={saveEdit}>
+            <button type="button" disabled={!profileDraft.ready || !editForm.full_name.trim() || updateMe.isPending} onClick={saveEdit}>
               {updateMe.isPending ? "Сохранение..." : "Сохранить"}
             </button>
+            {profileDraft.restored && <button type="button" disabled={updateMe.isPending} onClick={() => void profileDraft.clear()}>Очистить черновик</button>}
           </div>
         ) : (
           <dl>
@@ -4844,7 +4996,8 @@ function AdminView({
   isBusy: boolean;
 }) {
   type AdminTab = "users" | "applications" | "appeals" | "squads" | "schedule" | "events" | "normatives" | "learning" | "promo" | "menu" | "imports" | "logs" | "settings";
-  const [tab, setTab] = useState<AdminTab>("users");
+  const adminLocation = useLocation();
+  const [tab, setTab] = useState<AdminTab>(() => adminLocation.pathname.endsWith("/applications") && level >= 6 ? "applications" : "users");
   const [scheduleAdminTab, setScheduleAdminTab] = useState<"active" | "closed">("active");
   const [candidateEventsTab, setCandidateEventsTab] = useState<"active" | "archive">("active");
   const [editingPromo, setEditingPromo] = useState<PromoBlock | null | "new">(null);
@@ -4883,6 +5036,8 @@ function AdminView({
   const [normVideoDrafts, setNormVideoDrafts] = useState<Record<number, string>>({});
   const [newMaterial, setNewMaterial] = useState({
     title: "",
+    description: "",
+    course_id: "",
     type_code: "TEXT",
     external_url: "",
     audience_code: "PARTICIPANTS",
@@ -5034,6 +5189,8 @@ function AdminView({
   });
   const resetNewMaterial = () => setNewMaterial({
     title: "",
+    description: "",
+    course_id: "",
     type_code: "TEXT",
     external_url: "",
     audience_code: currentLearningAudience,
@@ -6207,6 +6364,11 @@ function AdminView({
               <div className={styles.formBlock}>
                 <strong style={{ display: "block", marginBottom: 6 }}>Новый материал</strong>
                 <input placeholder="Название материала *" value={newMaterial.title} onChange={(e) => setNewMaterial({ ...newMaterial, title: e.target.value })} />
+                <textarea aria-label="Текст или описание материала" placeholder="Текст или описание материала" rows={4} value={newMaterial.description} onChange={(event) => setNewMaterial({ ...newMaterial, description: event.target.value })} />
+                <select aria-label="Курс нового материала" value={newMaterial.course_id} onChange={(event) => setNewMaterial({ ...newMaterial, course_id: event.target.value })}>
+                  <option value="">Без курса</option>
+                  {(adminCourses.data ?? []).map((course) => <option key={course.id} value={course.id}>{course.title}{course.is_active ? "" : " · скрыт"}</option>)}
+                </select>
                 <input placeholder="URL (видео/ссылка)" value={newMaterial.external_url} onChange={(e) => setNewMaterial({ ...newMaterial, external_url: e.target.value })} />
                 {newMaterial.file_id && (
                   <div className={styles.fileAttached}>
@@ -6240,6 +6402,8 @@ function AdminView({
                   onClick={() => createMaterial.mutate(
                     {
                       title: newMaterial.title.trim(),
+                      description: newMaterial.description.trim() || undefined,
+                      course_id: newMaterial.course_id ? Number(newMaterial.course_id) : null,
                       type_code: newMaterial.type_code,
                       file_id: newMaterial.file_id,
                       external_url: newMaterial.external_url || undefined,
@@ -6283,6 +6447,13 @@ function AdminView({
                     {mat.file_id && <span style={{ color: "#1a2f5a" }}>Файл или видео прикреплены</span>}
                   </div>
                   <div className={styles.memberControls}>
+                    <select aria-label={`Курс материала: ${mat.title}`} value={mat.course_id ?? ""} disabled={updateMaterial.isPending} onChange={(event) => updateMaterial.mutate({ id: mat.id, course_id: event.target.value ? Number(event.target.value) : null }, {
+                      onSuccess: () => toast("Курс материала обновлён", "success"),
+                      onError: () => toast("Не удалось перенести материал. Попробуйте ещё раз.", "error"),
+                    })}>
+                      <option value="">Без курса</option>
+                      {(adminCourses.data ?? []).map((course) => <option key={course.id} value={course.id}>{course.title}{course.is_active ? "" : " · скрыт"}</option>)}
+                    </select>
                     {mat.file_id && (
                       <button
                         type="button"

@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import get_settings
 from ..database import get_db_session
 from ..dependencies.auth import CurrentUser, require_role
 from ..models import Notification, NotificationPreference as NotificationPreferenceModel
 from ..roles import RoleLevel
 from ..schemas.core import MessageResponse, NotificationRead
 from ..schemas.product import NotificationPreference, NotificationPreferencesUpdate
+from ..services.notification_inbox import inbox_counts, inbox_page, mark_inbox_read, mark_notification_read
+from ..services.realtime import publish_realtime_event
 from ..utils.audit import record_audit, utcnow
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
@@ -35,20 +38,29 @@ def require_profile(current_user: CurrentUser) -> int:
 @router.get("", response_model=list[NotificationRead])
 async def notifications(
     unread_only: bool = False,
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    category: str | None = Query(default=None, max_length=50),
+    q: str | None = Query(default=None, max_length=100),
     current_user: CurrentUser = Depends(require_role(RoleLevel.PARTICIPANT)),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[Notification]:
     user_id = require_profile(current_user)
-    statement = select(Notification).where(Notification.user_id == user_id).order_by(
-        Notification.is_pinned.desc(),
-        Notification.created_at.desc(),
+    return await inbox_page(session, user_id, unread_only=unread_only, category=category, query=q, limit=limit, offset=offset)
+
+
+@router.get("/summary", response_model=dict[str, int])
+async def notification_summary(
+    current_user: CurrentUser = Depends(require_role(RoleLevel.PARTICIPANT)),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, int]:
+    return await inbox_counts(session, require_profile(current_user))
+
+
+async def publish_inbox_update(user_id: int) -> None:
+    await publish_realtime_event(
+        get_settings(), event_type="notifications.read", user_id=user_id, query_keys=["notifications", "dashboard"],
     )
-    if unread_only:
-        statement = statement.where(Notification.is_read.is_(False))
-    statement = statement.limit(min(limit, 200)).offset(offset)
-    return list((await session.scalars(statement)).all())
 
 
 @router.post("/{notification_id}/read", response_model=NotificationRead)
@@ -59,13 +71,12 @@ async def read_notification(
     session: AsyncSession = Depends(get_db_session),
 ) -> Notification:
     user_id = require_profile(current_user)
-    notification = await session.get(Notification, notification_id)
-    if notification is None or notification.user_id != user_id:
+    notification = await mark_notification_read(session, user_id, notification_id)
+    if notification is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found.")
-    notification.is_read = True
-    notification.read_at = utcnow()
     await session.commit()
     await session.refresh(notification)
+    await publish_inbox_update(user_id)
     return notification
 
 
@@ -75,26 +86,17 @@ async def read_all_notifications(
     session: AsyncSession = Depends(get_db_session),
 ) -> MessageResponse:
     user_id = require_profile(current_user)
-    unread = list(
-        (
-            await session.scalars(
-                select(Notification).where(Notification.user_id == user_id, Notification.is_read.is_(False))
-            )
-        ).all()
-    )
-    now = utcnow()
-    for notification in unread:
-        notification.is_read = True
-        notification.read_at = now
+    count = await mark_inbox_read(session, user_id)
     await record_audit(
         session,
         user_id=user_id,
         action_code="notifications.read_all",
         entity_name="notifications",
-        new_value={"count": len(unread)},
+        new_value={"count": count},
     )
     await session.commit()
-    return MessageResponse(detail=f"Marked {len(unread)} notifications as read.")
+    await publish_inbox_update(user_id)
+    return MessageResponse(detail=f"Marked {count} notifications as read.")
 
 
 @router.get("/preferences/me", response_model=list[NotificationPreference], include_in_schema=False)

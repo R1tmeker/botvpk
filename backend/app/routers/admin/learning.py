@@ -2,6 +2,7 @@ from __future__ import annotations
 
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...database import get_db_session
@@ -21,12 +22,42 @@ from ...utils.audit import model_snapshot, record_audit, utcnow
 router = APIRouter(prefix="/admin/learning", tags=["admin:learning"])
 
 
+@router.get("/materials", response_model=list[LearningMaterialRead])
+async def list_admin_materials(
+    active_only: bool = False,
+    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_PLATOON_COMMANDER)),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[LearningMaterial]:
+    statement = select(LearningMaterial).order_by(LearningMaterial.sort_order, LearningMaterial.id.desc())
+    if active_only:
+        statement = statement.where(LearningMaterial.is_active.is_(True))
+    return list((await session.scalars(statement)).all())
+
+
+@router.get("/courses", response_model=list[LearningCourseRead])
+async def list_admin_courses(
+    active_only: bool = False,
+    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_PLATOON_COMMANDER)),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[LearningCourse]:
+    statement = select(LearningCourse).order_by(LearningCourse.sort_order, LearningCourse.id.desc())
+    if active_only:
+        statement = statement.where(LearningCourse.is_active.is_(True))
+    return list((await session.scalars(statement)).all())
+
+
+async def validate_course(session: AsyncSession, course_id: int | None) -> None:
+    if course_id is not None and await session.get(LearningCourse, course_id) is None:
+        raise HTTPException(status_code=422, detail="Выбранный курс не существует. Обновите список курсов.")
+
+
 @router.post("/materials", response_model=LearningMaterialRead, status_code=status.HTTP_201_CREATED)
 async def create_learning_material(
     payload: LearningMaterialCreate,
     current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_PLATOON_COMMANDER)),
     session: AsyncSession = Depends(get_db_session),
 ) -> LearningMaterial:
+    await validate_course(session, payload.course_id)
     material = LearningMaterial(**payload.model_dump())
     session.add(material)
     await session.flush()
@@ -54,6 +85,8 @@ async def update_learning_material(
     if material is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Material not found.")
     updates = payload.model_dump(exclude_unset=True)
+    if "course_id" in updates:
+        await validate_course(session, updates["course_id"])
     old = model_snapshot(material, list(updates))
     for key, value in updates.items():
         setattr(material, key, value)

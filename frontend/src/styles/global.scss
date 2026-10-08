@@ -1,5 +1,6 @@
 html {
   overflow-x: hidden;
+  scroll-padding-block: 24px 110px;
 }
 
 :root {
@@ -32,6 +33,13 @@ html {
   --radius-md: 12px;
   --radius-lg: 16px;
   --touch-target: 44px;
+  --app-max-width: 1360px;
+  --app-gutter: clamp(12px, 2.5vw, 28px);
+  --nav-clearance: 92px;
+  --app-safe-top: max(env(safe-area-inset-top, 0px), var(--tg-safe-top, 0px));
+  --app-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--tg-safe-bottom, 0px));
+  --app-safe-left: max(env(safe-area-inset-left, 0px), var(--tg-safe-left, 0px));
+  --app-safe-right: max(env(safe-area-inset-right, 0px), var(--tg-safe-right, 0px));
   --shadow: 0 18px 50px rgba(26, 47, 90, 0.16);
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -75,6 +83,7 @@ html {
 
 body {
   min-height: 100vh;
+  min-height: 100dvh;
   margin: 0;
   overflow-x: hidden;
   color: var(--text);
@@ -149,4 +158,33 @@ select {
   font: inherit;
   min-width: 0;
   max-width: 100%;
+}
+
+img,
+video {
+  max-width: 100%;
+}
+
+textarea {
+  resize: vertical;
+}
+
+input,
+select,
+textarea {
+  scroll-margin-block: 100px;
+}
+
+@media (min-width: 1024px) {
+  :root { --nav-clearance: 28px; }
+  html { scroll-padding-block-end: 28px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

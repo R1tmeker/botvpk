@@ -122,8 +122,9 @@ async def dashboard_action_items(
     upcoming_query = select(ScheduleEvent).where(
         ScheduleEvent.requires_response.is_(True),
         ScheduleEvent.status_code != "CANCELLED",
-        ScheduleEvent.start_datetime >= now,
+        ScheduleEvent.start_datetime > now,
         ScheduleEvent.start_datetime <= now + timedelta(days=14),
+        (ScheduleEvent.response_deadline_at.is_(None)) | (ScheduleEvent.response_deadline_at >= now),
     )
     if scoped_squad_id is not None:
         upcoming_query = upcoming_query.where(
@@ -142,11 +143,18 @@ async def dashboard_action_items(
         elif scoped_squad_id is not None:
             users_query = users_query.where(User.squad_id == scoped_squad_id)
         expected = int(await session.scalar(users_query) or 0)
-        answered = int(
-            await session.scalar(select(func.count(EventResponse.id)).where(EventResponse.event_id == event.id)) or 0
+        answered_query = select(func.count(EventResponse.id)).join(User, User.id == EventResponse.user_id).where(
+            EventResponse.event_id == event.id, EventResponse.response_code.in_(("COMING", "NOT_COMING")),
+            User.status_code == "ACTIVE", User.role_code.in_(CONFIRMED_ROLES),
         )
-        missing_responses += max(0, expected - answered)
-        if event.response_deadline_at and (next_response_due is None or event.response_deadline_at < next_response_due):
+        if event.squad_id is not None:
+            answered_query = answered_query.where(User.squad_id == event.squad_id)
+        elif scoped_squad_id is not None:
+            answered_query = answered_query.where(User.squad_id == scoped_squad_id)
+        answered = int(await session.scalar(answered_query) or 0)
+        missing = max(0, expected - answered)
+        missing_responses += missing
+        if missing and event.response_deadline_at and (next_response_due is None or event.response_deadline_at < next_response_due):
             next_response_due = event.response_deadline_at
     if missing_responses:
         items.append(
@@ -188,7 +196,7 @@ async def dashboard_action_items(
     )
     if scoped_squad_id is not None:
         appeals_query = appeals_query.where(User.squad_id == scoped_squad_id)
-    new_appeals = int(await session.scalar(appeals_query) or 0)
+    new_appeals = int(await session.scalar(appeals_query) or 0) if current_user.role_level >= RoleLevel.DEPUTY_PLATOON_COMMANDER else 0
     if new_appeals:
         items.append(
             ActionItem(

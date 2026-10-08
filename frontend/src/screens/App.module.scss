@@ -1,3 +1,5 @@
+@use "./App.responsive" as responsive;
+
 .shell {
   min-height: 100vh;
   width: min(100%, 430px);
@@ -1674,6 +1676,8 @@
     margin: 0;
     font-size: 13px;
     line-height: 1.4;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
 
   small {
@@ -1688,7 +1692,9 @@
   gap: 8px;
   margin-top: 10px;
 
-  input {
+  input, textarea {
+    min-width: 0;
+    resize: vertical;
     border: 1px solid #d9deea;
     border-radius: 10px;
     padding: 10px 12px;
@@ -4659,3 +4665,5 @@ button[data-active="true"] .navIcon {
     border-color: var(--border) !important;
   }
 }
+
+@include responsive.layout;

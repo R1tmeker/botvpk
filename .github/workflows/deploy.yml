@@ -105,10 +105,13 @@ jobs:
         run: npm run test
       - name: Install Playwright browser
         working-directory: frontend
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium webkit
       - name: Frontend e2e smoke
         working-directory: frontend
         run: npm run test:e2e
+      - name: Responsive browser checks
+        working-directory: frontend
+        run: npm run test:responsive
       - name: Build frontend
         working-directory: frontend
         run: npm run build

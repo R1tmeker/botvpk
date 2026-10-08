@@ -282,3 +282,37 @@ h2 {
     grid-template-columns: 1fr;
   }
 }
+
+/* Responsive layout for the legacy Mini App. */
+html { overflow-x: hidden; }
+body { min-height: 100dvh; }
+button { font: inherit; min-height: 44px; cursor: pointer; touch-action: manipulation; }
+button:focus-visible { outline: 3px solid #63b3ff; outline-offset: 3px; }
+.app-shell {
+  width: min(100%, 1200px);
+  min-height: 100dvh;
+  padding: max(16px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) max(28px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+}
+.topbar { flex-wrap: wrap; }
+.brand > div, .tile > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.role-button { max-width: 100%; white-space: normal; }
+.today-panel { grid-template-columns: minmax(0, 1fr) 84px; }
+.feed-header { gap: 12px; flex-wrap: wrap; }
+.feed, .today-panel, .tile { overflow-wrap: anywhere; }
+@media (max-width: 359px) {
+  .today-panel, .grid { grid-template-columns: minmax(0, 1fr); }
+  .topbar .role-button { margin-left: 60px; }
+}
+@media (min-width: 600px) {
+  .app-shell { padding-inline: 24px; }
+  .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+  .tile { min-height: 100px; }
+  .today-panel { padding: 24px; }
+}
+@media (min-width: 1024px) {
+  .grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .feed { padding: 24px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+}

@@ -179,10 +179,10 @@ def event_keyboard(event_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def mini_app_keyboard() -> InlineKeyboardMarkup | None:
+def mini_app_keyboard(parent: str = "home") -> InlineKeyboardMarkup | None:
     settings = get_settings()
     rows = [[InlineKeyboardButton(text="Открыть приложение", web_app=WebAppInfo(url=settings.mini_app_url))]] if settings.mini_app_url else []
-    return InlineKeyboardMarkup(inline_keyboard=[*rows, home_button()])
+    return InlineKeyboardMarkup(inline_keyboard=[*rows, home_button(parent)])
 
 
 def absence_reasons_keyboard(event_id: int, reasons: list[AbsenceReason]) -> InlineKeyboardMarkup:
@@ -777,6 +777,7 @@ async def help_command(message: Message) -> None:
         "/profile — ваш профиль.\n"
         "/cancel — отменить текущий диалог.\n\n"
         "Командирам доступны заявки, экспорт состава, проверка нормативов и отметка явки через кнопки в уведомлениях.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[home_button()]),
         parse_mode=None,
     )
 
@@ -932,8 +933,9 @@ async def menu_callback(callback: CallbackQuery, state: FSMContext) -> None:
     if action == "profile" and user is not None and role >= RoleLevel.PARTICIPANT:
         await send_profile(message, user)
     elif action in {"applications", "journal", "admin"}:
-        if role < RoleLevel.DEPUTY_SQUAD_COMMANDER:
-            await callback.answer("Доступ только командирам.", show_alert=True)
+        required = RoleLevel.DEPUTY_SQUAD_COMMANDER if action == "journal" else RoleLevel.DEPUTY_PLATOON_COMMANDER
+        if role < required:
+            await callback.answer("Этот раздел недоступен для вашей должности.", show_alert=True)
             return
         if action == "applications":
             await send_applications(message)
@@ -1626,8 +1628,8 @@ async def create_appeal_from_state(message: Message, state: FSMContext, urgency:
 @router.message(F.text.casefold().in_({"заявки"}))
 async def cmd_applications(message: Message) -> None:
     user = await find_user(message.from_user.id)
-    if user_role(user) < RoleLevel.DEPUTY_SQUAD_COMMANDER:
-        await message.answer("Доступ только командирам.")
+    if user_role(user) < RoleLevel.DEPUTY_PLATOON_COMMANDER:
+        await message.answer("Заявки доступны командованию взвода.", reply_markup=mini_app_keyboard())
         return
     await send_applications(message)
 
@@ -1642,7 +1644,7 @@ async def send_applications(message: Message) -> None:
             .limit(10)
         )).all())
     if not apps:
-        await message.answer("Активных заявок нет.", reply_markup=mini_app_keyboard())
+        await message.answer("Активных заявок нет.", reply_markup=mini_app_keyboard("command"))
         return
     STATUS_LABELS = {
         "NEW": "Новая", "INVITED_NORMATIVES": "На нормативах",
@@ -1653,7 +1655,7 @@ async def send_applications(message: Message) -> None:
         status = STATUS_LABELS.get(app.status_code, app.status_code)
         lines.append(f"• {app.full_name} — {status}")
     lines.append("\nДля работы с заявками откройте приложение:")
-    await message.answer("\n".join(lines), reply_markup=mini_app_keyboard(), parse_mode=None)
+    await message.answer("\n".join(lines), reply_markup=mini_app_keyboard("command"), parse_mode=None)
 
 
 @router.callback_query(F.data.startswith("norm_review:"))

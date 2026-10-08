@@ -1048,8 +1048,9 @@ async def _handle_menu(message, user: User, section: str, site_url: str | None) 
     elif section == "vk":
         await message.answer("Этот VK уже подключён к вашему профилю.", keyboard=inline_keyboard([[_menu_back("account")]]))
     elif section in {"applications", "journal", "admin", "site"}:
-        if section != "site" and role < RoleLevel.DEPUTY_SQUAD_COMMANDER:
-            await message.answer("Доступ только командирам.")
+        required = RoleLevel.DEPUTY_PLATOON_COMMANDER if section in {"applications", "admin"} else RoleLevel.DEPUTY_SQUAD_COMMANDER
+        if section != "site" and role < required:
+            await message.answer("Этот раздел недоступен для вашей должности.", keyboard=inline_keyboard([[_menu_back()]]))
             return
         paths = {"applications": "/admin/applications", "journal": "/attendance", "admin": "/admin", "site": "/"}
         rows = [[_link_button("Открыть раздел", site_url.rstrip("/") + paths[section])]] if site_url else []

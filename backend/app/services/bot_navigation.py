@@ -22,7 +22,8 @@ def menu_rows(role: RoleLevel, section: str = "home") -> list[list[tuple[str, st
                      [("Поиск", "search"), ("Аккаунт", "account")]],
         "contact": [[("Написать командиру", "appeal")], [("Мои обращения", "myappeals")]],
         "account": [[("Мой ID", "my_id"), ("Привязать VK", "vk")], [("Сменить пароль", "password")]],
-        "command": [[("Заявки", "applications")], [("Журнал явки", "journal"), ("Управление", "admin")]],
+        "command": ([[('Заявки', 'applications')], [('Журнал явки', 'journal'), ('Управление', 'admin')]]
+                    if role >= RoleLevel.DEPUTY_PLATOON_COMMANDER else [[('Журнал явки', 'journal')]]),
     }
     rows = list(sections.get(section, [])) if section != "command" or role >= RoleLevel.DEPUTY_SQUAD_COMMANDER else []
     parent = "personal" if section == "account" else "home"

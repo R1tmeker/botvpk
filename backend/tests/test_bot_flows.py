@@ -62,10 +62,27 @@ def test_navigation_never_truncates_three_competing_labels(role):
         assert all(1 <= len(row) <= 2 for row in rows)
         assert all(len(label) <= 18 for row in rows for label, _ in row)
         actions = {action for row in rows for _, action in row}
+        if role < RoleLevel.DEPUTY_PLATOON_COMMANDER:
+            assert not actions.intersection({"applications", "admin"})
         if role < RoleLevel.PARTICIPANT:
             assert not actions.intersection({"schedule", "checkin", "normatives", "notifications"})
         if role < RoleLevel.DEPUTY_SQUAD_COMMANDER:
             assert not actions.intersection({"command", "applications", "admin", "journal"})
+
+
+@pytest.mark.parametrize("role", ["PARTICIPANT", "DEPUTY_SQUAD_COMMANDER", "SQUAD_COMMANDER"])
+@pytest.mark.parametrize("action", ["applications", "admin"])
+async def test_bot_management_access_matches_application_roles(member, session, vk_message, monkeypatch, role, action):
+    member.role_code = role
+    monkeypatch.setattr(bot, "find_user", AsyncMock(return_value=member))
+    applications = AsyncMock()
+    monkeypatch.setattr(bot, "send_applications", applications)
+    callback = SimpleNamespace(from_user=SimpleNamespace(id=member.telegram_id), data=f"menu:{action}", message=SimpleNamespace(answer=AsyncMock()), answer=AsyncMock())
+    await bot.menu_callback(callback, AsyncMock())
+    assert callback.answer.await_args.kwargs["show_alert"] is True
+    applications.assert_not_awaited()
+    await vk_bot._handle_menu(vk_message, member, action, "https://example.com")
+    session.scalars.assert_not_awaited()
 
 
 @pytest.mark.parametrize("value", [True, False, -1, 1.5, "-1", "1e2", "١", [], {}, 10001, "999999999999999"])

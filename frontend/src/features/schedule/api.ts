@@ -10,7 +10,7 @@ export function useBulkEventResponse() {
     mutationFn: async (eventIds: number[]) => (await api.post<BulkResult>("/schedule/events/respond-bulk", { event_ids: eventIds, response_code: "COMING" })).data,
     onSuccess: (result) => {
       const ids = new Set(result.event_ids);
-      client.setQueryData<ScheduleEvent[]>(["schedule"], (items) => items?.map((event) => ids.has(event.id) ? { ...event, my_response_code: result.response_code } : event));
+      client.setQueriesData<ScheduleEvent[]>({ queryKey: ["schedule", "list"] }, (items) => items?.map((event) => ids.has(event.id) ? { ...event, my_response_code: result.response_code } : event));
       void client.invalidateQueries({ queryKey: ["schedule"] });
       void client.invalidateQueries({ queryKey: ["dashboard"] });
     },

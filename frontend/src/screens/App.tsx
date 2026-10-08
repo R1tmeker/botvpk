@@ -4,7 +4,7 @@ import { NotificationInbox } from "../features/notifications/NotificationInbox";
 import { useNotificationSummary } from "../features/notifications/api";
 import { safeAppLink } from "../features/notifications/model";
 import { useBulkEventResponse, useScheduleEvent } from "../features/schedule/api";
-import { checkInIsOpen, eventIsArchived, needsFinalResponse, recordId, responseIsOpen, sameDayInTimezone } from "../features/schedule/model";
+import { checkInIsOpen, eventInPeriod, eventIsArchived, needsFinalResponse, recordId, responseIsOpen, schedulePeriod } from "../features/schedule/model";
 import { useRecordFocus } from "../shared/ui/useRecordFocus";
 import { usePersistentDraft } from "../offline/usePersistentDraft";
 import { filterMaterials, learningProgress, type LearningFilter } from "../features/learning/model";
@@ -170,6 +170,7 @@ import {
 } from "./profile/ProfileIntegrations";
 import {
   applyPhoneMask,
+  dateTimeLocalToUtc,
   formatDate,
   formatDateFull,
   formatPhoneDisplay,
@@ -1458,6 +1459,9 @@ export function App({ webApp }: Props) {
             <ScheduleView
               userId={profile.id}
               events={visibleSchedule}
+              isLoading={schedule.isPending}
+              isError={schedule.isError}
+              onRetry={() => void schedule.refetch()}
               weekType={scheduleWeekType.data}
               level={level}
               squads={squadsList.data ?? adminSquads.data ?? []}
@@ -1482,6 +1486,9 @@ export function App({ webApp }: Props) {
             stats={attendanceStats.data}
             schedule={schedule.data ?? []}
             users={allUsers.data ?? []}
+            isLoading={attendance.isPending || schedule.isPending || allUsers.isPending}
+            isError={attendance.isError || schedule.isError || allUsers.isError}
+            onRetry={() => { void attendance.refetch(); void schedule.refetch(); void allUsers.refetch(); }}
           />
         )}
 
@@ -2465,7 +2472,7 @@ function CandidateEventDetail({
           <strong>{event.place || "место уточняется"}</strong>
         </div>
         <div>
-          <span>Окончание</span>
+          <span>Окончание · {getAppTimezone()}</span>
           <strong>{event.end_datetime ? formatDate(event.end_datetime) : "по ситуации"}</strong>
         </div>
         {event.capacity !== null && (
@@ -2509,8 +2516,9 @@ function EventVoterList({ eventId, squads, canView }: { eventId: number; squads:
     <div style={{ gridColumn: "1/-1", marginTop: 4 }}>
       <button
         type="button"
-        className={styles.btnMaybeOutline}
-        style={{ width: "100%", minHeight: 32, fontSize: 11 }}
+        className={`${styles.compactBtn} ${styles.btnMaybeOutline}`}
+        style={{ width: "100%" }}
+        aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
         {open ? "Скрыть ответы" : "Посмотреть ответы"}
@@ -2528,14 +2536,14 @@ function EventVoterList({ eventId, squads, canView }: { eventId: number; squads:
               return acc;
             }, {});
             return (
-              <div key={code} style={{ border: "1px solid #e0e5ef", borderRadius: 10, background: "#fff", padding: "8px 10px" }}>
-                <strong style={{ fontSize: 12, color: "#1a2f5a", display: "block", marginBottom: 4 }}>{label} ({group.length})</strong>
+              <div key={code} style={{ border: "1px solid var(--border)", borderRadius: 10, background: "var(--surface)", padding: "8px 10px" }}>
+                <strong style={{ fontSize: 12, color: "var(--text)", display: "block", marginBottom: 4 }}>{label} ({group.length})</strong>
                 {Object.entries(bySquad).sort(([a], [b]) => a.localeCompare(b, "ru")).map(([squad, members]) => (
                   <div key={squad} style={{ marginBottom: 4 }}>
-                    <span style={{ fontSize: 10, fontWeight: 900, color: "#8a96b0", textTransform: "uppercase" }}>{squad}</span>
+                    <span style={{ fontSize: 10, fontWeight: 900, color: "var(--text-faint)", textTransform: "uppercase" }}>{squad}</span>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 2 }}>
                       {members.map((m) => (
-                        <span key={m.user_id} style={{ fontSize: 11, background: "#f0f2f8", borderRadius: 6, padding: "2px 7px", color: "#1a2f5a" }}>
+                        <span key={m.user_id} style={{ fontSize: 11, background: "var(--surface-strong)", borderRadius: 6, padding: "2px 7px", color: "var(--text)" }}>
                           {m.full_name}
                         </span>
                       ))}
@@ -2561,6 +2569,9 @@ function ScheduleView({
   squads,
   onRespond,
   isResponding = false,
+  isLoading,
+  isError,
+  onRetry,
 }: {
   userId: number | null;
   events: ScheduleEvent[];
@@ -2569,11 +2580,15 @@ function ScheduleView({
   squads: Squad[];
   onRespond: RespondFn;
   isResponding?: boolean;
+  isLoading: boolean;
+  isError: boolean;
+  onRetry: () => void;
 }) {
   const selfCheckIn = useSelfCheckIn();
   const checkInKey = (eventId: number) => `queue:self-checkin:${userId}:${eventId}`;
   const [queuedCheckins, setQueuedCheckins] = useState<Set<number>>(new Set());
   const [tab, setTab] = useState<"today" | "week" | "month" | "archive">("week");
+  const [periodOffset, setPeriodOffset] = useState(0);
   const [filter, setFilter] = useState<"all" | "unanswered" | "coming" | "not_coming">("all");
   const location = useLocation();
   const requestedId = recordId(location.search, "event");
@@ -2597,6 +2612,11 @@ function ScheduleView({
     if (!event || openedEventLink.current === key) return;
     openedEventLink.current = key;
     setTab(eventIsArchived(event, Date.now()) ? "archive" : "month");
+    const localMonth = (value: number) => {
+      const parts = new Intl.DateTimeFormat("en-CA", { timeZone: getAppTimezone(), year: "numeric", month: "2-digit" }).formatToParts(value);
+      return Number(parts.find((part) => part.type === "year")!.value) * 12 + Number(parts.find((part) => part.type === "month")!.value);
+    };
+    setPeriodOffset(localMonth(Date.parse(event.start_datetime)) - localMonth(Date.now()));
     setFilter("all");
   }, [requestedId, requested.data, loadedEvents, location.key]);
   useEffect(() => {
@@ -2604,7 +2624,7 @@ function ScheduleView({
     const restore = async () => {
       if (!userId) return;
       const queued = new Set<number>();
-      for (const event of events) {
+      for (const event of events.filter((item) => item.self_checkin_enabled && !eventIsArchived(item, Date.now()))) {
         const item = await loadOfflineValue<{ eventId: number; closesAt: number }>(checkInKey(event.id));
         if (item && item.closesAt >= Date.now()) queued.add(event.id);
         else if (item) await deleteOfflineValue(checkInKey(event.id));
@@ -2676,19 +2696,15 @@ function ScheduleView({
   };
   const isArchivedEvent = (event: ScheduleEvent) => eventIsArchived(event, now);
 
+  const range = schedulePeriod(tab === "archive" ? "week" : tab, now, getAppTimezone(), periodOffset);
   const byDate = events.filter((event) => {
-    const t = new Date(event.start_datetime).getTime();
     if (tab === "archive") return isArchivedEvent(event);
-    if (isArchivedEvent(event)) return false;
-    if (event.id === requestedId) return true;
-    if (tab === "today") return sameDayInTimezone(event.start_datetime, now, getAppTimezone());
-    if (tab === "week") return t <= now + 7 * 86400000;
-    return t <= now + 31 * 86400000;
-  });
+    return eventInPeriod(event, range, getAppTimezone());
+  }).sort((a, b) => (tab === "archive" ? -1 : 1) * (Date.parse(a.start_datetime) - Date.parse(b.start_datetime)));
 
   const filtered = byDate.filter((event) => {
     if (tab === "archive" || filter === "all") return true;
-    if (filter === "unanswered") return event.requires_response && needsFinalResponse(event);
+    if (filter === "unanswered") return responseIsOpen(event, level, now) && needsFinalResponse(event);
     if (filter === "coming") return event.my_response_code === "COMING";
     if (filter === "not_coming") return event.my_response_code === "NOT_COMING";
     return true;
@@ -2706,19 +2722,25 @@ function ScheduleView({
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
         <h2>Расписание</h2>
-        <span>{filtered.length} событий</span>
+        <span>{isLoading ? "Загрузка…" : `${filtered.length} событий`}</span>
       </div>
       {weekType?.parity && (
         <div className={styles.weekBadge}>
           <span>Текущая неделя</span>
-          <b>{weekType.parity === "A" ? "1" : "2"}</b>
+          <b>Тип {weekType.parity === "A" ? "1" : "2"}</b>
         </div>
       )}
       <Tabs
         tabs={[["today", "Сегодня"], ["week", "Неделя"], ["month", "Месяц"], ["archive", "Архив"]]}
         active={tab}
-        onChange={(value) => { setTab(value as typeof tab); setFilter("all"); }}
+        onChange={(value) => { setTab(value as typeof tab); setPeriodOffset(0); setFilter("all"); setSelected(new Set()); }}
       />
+      {tab !== "archive" && <div className={styles.periodNavigation}>
+        {tab !== "today" && <button type="button" aria-label={tab === "week" ? "Предыдущая неделя" : "Предыдущий месяц"} onClick={() => { setPeriodOffset((value) => value - 1); setSelected(new Set()); }}>‹</button>}
+        <span aria-live="polite">{range.label}</span>
+        {tab !== "today" && <button type="button" aria-label={tab === "week" ? "Следующая неделя" : "Следующий месяц"} onClick={() => { setPeriodOffset((value) => value + 1); setSelected(new Set()); }}>›</button>}
+        {periodOffset !== 0 && tab !== "today" && <button type="button" className={styles.periodReset} onClick={() => { setPeriodOffset(0); setSelected(new Set()); }}>К текущему периоду</button>}
+      </div>}
       {tab !== "archive" && (
         <div className={styles.filterChips}>
           <button type="button" className={styles.chip} data-active={filter === "all"} onClick={() => setFilter("all")}>Все</button>
@@ -2736,7 +2758,9 @@ function ScheduleView({
         </>}
       </div>}
       <div className={styles.list}>
-        {filtered.length === 0 && <Empty text="В этой вкладке пока пусто" />}
+        {isLoading && <p role="status">Загружаем расписание…</p>}
+        {isError && <div className={styles.commandStrip} role="alert"><span>Не удалось обновить расписание.</span><button type="button" onClick={onRetry}>Повторить</button></div>}
+        {!isLoading && !isError && filtered.length === 0 && <Empty text={tab === "archive" ? "Завершённых и отменённых занятий пока нет" : filter !== "all" ? "Нет занятий с выбранным ответом. Попробуйте фильтр «Все»." : tab === "today" ? "На сегодня занятий не запланировано" : "В этом периоде занятий нет. Можно перейти к соседнему периоду."} />}
         {filtered.map((event) => (
           <article className={styles.row} key={event.id} id={`event-${event.id}`} tabIndex={-1} data-linked={focusId === event.id}>
             {tab !== "archive" && responseIsOpen(event, level, now) && needsFinalResponse(event) && <label className={styles.checkboxLine}>
@@ -2750,7 +2774,7 @@ function ScheduleView({
               <strong>
                 {event.title}
                 {event.is_overridden && <span className={styles.inlineBadge}>изм.</span>}
-                {event.status_code === "CANCELLED" && <span className={styles.inlineBadge} data-tone="warning">закрыт</span>}
+                {event.status_code === "CANCELLED" ? <span className={styles.inlineBadge} data-tone="warning">отменено</span> : isArchivedEvent(event) && <span className={styles.inlineBadge}>завершено</span>}
               </strong>
               <span>{formatDate(event.start_datetime)} · {event.place ?? "место уточняется"}</span>
               {event.description && <p>{event.description}</p>}
@@ -2796,6 +2820,9 @@ function AttendanceView({
   stats,
   schedule,
   users,
+  isLoading,
+  isError,
+  onRetry,
 }: {
   records: AttendanceRecord[];
   canManage: boolean;
@@ -2805,6 +2832,9 @@ function AttendanceView({
   stats?: ReportSummary;
   schedule: ScheduleEvent[];
   users: UserRecord[];
+  isLoading: boolean;
+  isError: boolean;
+  onRetry: () => void;
 }) {
   const [tab, setTab] = useState<"chart" | "calendar" | "history" | "journal">("chart");
   const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
@@ -2814,7 +2844,8 @@ function AttendanceView({
   const exportAttendanceCSV = useExportAttendanceCSVviaBot();
   const exportAttendanceXLSX = useExportAttendanceXLSXviaBot();
   const exportAttendanceMatrix = useExportAttendanceMatrix();
-  const manageableEvents = schedule.filter((event) => event.status_code !== "CANCELLED");
+  const manageableEvents = schedule.filter((event) => event.status_code !== "CANCELLED")
+    .sort((a, b) => Date.parse(b.start_datetime) - Date.parse(a.start_datetime));
   const selectedEvent = manageableEvents.find((event) => event.id === selectedEventId) ?? null;
   const hasSelectedEvent = selectedEvent !== null;
   const eventAttendance = useAttendanceEvent(selectedEventId, canManage && hasSelectedEvent);
@@ -2839,7 +2870,13 @@ function AttendanceView({
     const value = draftAttendance[user.id as number] ?? existingAttendance.get(user.id as number) ?? "NOT_MARKED";
     return journalStatus === "ALL" || value === journalStatus;
   });
-  const eventTitle = (eventId: number) => eventMap.get(eventId) ?? "Событие вне текущего расписания";
+  const changedEntries = targetUsers.flatMap((user) => {
+    const userId = user.id as number;
+    const value = draftAttendance[userId];
+    return value !== undefined && value !== (existingAttendance.get(userId) ?? "NOT_MARKED")
+      ? [{ user_id: userId, status_code: value }] : [];
+  });
+  const journalBusy = eventAttendance.isPending || eventAttendance.isFetching || eventAttendance.isError || markAttendance.isPending || isLoading || isError;
 
   const statusLabels: Record<string, string> = {
     PRESENT: "Присутствовал", ABSENT: "Отсутствовал", LATE: "Опоздал",
@@ -2881,8 +2918,8 @@ function AttendanceView({
     document.querySelector<HTMLSelectElement>(`select[data-attendance-user="${ids[next]}"]`)?.focus();
   };
   const statusColors: Record<string, string> = {
-    PRESENT: "#27ae60", ABSENT: "#e74c3c", LATE: "#f39c12",
-    EXCUSED: "#3498db", SICK: "#9b59b6", RELEASED: "#95a5a6", NOT_MARKED: "#bdc3c7",
+    PRESENT: "var(--status-success)", ABSENT: "var(--status-danger)", LATE: "var(--status-warning)",
+    EXCUSED: "var(--status-info)", SICK: "var(--text-soft)", RELEASED: "var(--text-soft)", NOT_MARKED: "var(--text-faint)",
   };
 
   const statsByCode = new Map<string, number>();
@@ -2893,14 +2930,14 @@ function AttendanceView({
   const late = statsByCode.get("LATE") ?? 0;
   const canExportAttendance = canManage && managerLevel >= 6;
 
-  // Build heatmap data: use marked_at or event start_datetime as fallback
-  // Convert to local app timezone so calendar cells match displayed dates
+  // A late correction belongs to the day of the class, not the day it was marked.
   const eventDateMap = new Map(schedule.map((e) => [e.id, e.start_datetime]));
+  const attendanceDate = (record: AttendanceRecord) => record.event_start_datetime ?? eventDateMap.get(record.event_id) ?? record.marked_at;
   const toLocalDate = (iso: string) =>
     new Intl.DateTimeFormat("sv-SE", { timeZone: getAppTimezone() }).format(new Date(iso));
   const heatData = records
     .map((r) => {
-      const dateStr = r.marked_at ?? eventDateMap.get(r.event_id) ?? null;
+      const dateStr = attendanceDate(r);
       if (!dateStr) return null;
       return { date: toLocalDate(dateStr), status: r.status_code };
     })
@@ -2909,11 +2946,14 @@ function AttendanceView({
   // Monthly bar chart data
   const monthCounts: Record<string, number> = {};
   for (const r of records) {
-    if (!r.marked_at) continue;
-    const month = new Intl.DateTimeFormat("ru-RU", { month: "short", timeZone: getAppTimezone() }).format(new Date(r.marked_at));
+    const date = attendanceDate(r);
+    if (!date) continue;
+    const month = toLocalDate(date).slice(0, 7);
     if (r.status_code === "PRESENT") monthCounts[month] = (monthCounts[month] ?? 0) + 1;
   }
-  const barData = Object.entries(monthCounts).slice(-6).map(([label, value]) => ({ label, value, color: "#27ae60" }));
+  const barData = Object.entries(monthCounts).sort(([a], [b]) => a.localeCompare(b)).slice(-6).map(([month, value]) => ({
+    label: new Intl.DateTimeFormat("ru-RU", { month: "short", year: "2-digit", timeZone: "UTC" }).format(new Date(`${month}-01T00:00:00Z`)), value, color: "var(--status-success)",
+  }));
 
   return (
     <div className={styles.panel}>
@@ -2931,6 +2971,8 @@ function AttendanceView({
         active={tab}
         onChange={(v) => setTab(v as typeof tab)}
       />
+      {isLoading && <p role="status">Загружаем посещаемость…</p>}
+      {isError && <div className={styles.commandStrip} role="alert"><span>Не удалось обновить посещаемость.</span><button type="button" onClick={onRetry}>Повторить</button></div>}
       {canExportAttendance && (
         <div className={styles.commandStrip}>
           <button
@@ -2979,7 +3021,7 @@ function AttendanceView({
             <div className={styles.chartSectionTitle}>Распределение по статусам</div>
             {total > 0
               ? <AttendanceDonut present={present} absent={absent} late={late} total={total} />
-              : <Empty text="Отметок пока нет" />
+              : !isLoading && !isError ? <Empty text="Отметок пока нет" /> : null
             }
           </div>
           {barData.length > 0 && (
@@ -2999,14 +3041,14 @@ function AttendanceView({
 
       {tab === "history" && (
         <div className={styles.list}>
-          {records.length === 0 && <Empty text="Отметок пока нет" />}
+          {records.length === 0 && !isLoading && !isError && <Empty text="Отметок пока нет" />}
           {records.map((record) => (
             <article className={styles.row} key={record.id}>
               <AppIcon code="attendance" />
               <div>
-                <strong>{eventTitle(record.event_id)}</strong>
+                <strong>{record.event_title ?? eventMap.get(record.event_id) ?? `Занятие №${record.event_id}`}</strong>
                 <span style={{ color: statusColors[record.status_code] ?? "#65708a" }}>
-                  {statusLabels[record.status_code] ?? record.status_code} · {formatDate(record.marked_at)}
+                  {statusLabels[record.status_code] ?? record.status_code} · {formatDate(attendanceDate(record), true)}
                 </span>
               </div>
             </article>
@@ -3018,8 +3060,13 @@ function AttendanceView({
         <div className={styles.dashboardStack}>
           <div className={styles.formBlock}>
             <select
+              aria-label="Событие для отметки посещаемости"
+              disabled={manageableEvents.length === 0 || isLoading || markAttendance.isPending}
               value={selectedEventId ?? ""}
-              onChange={(event) => setSelectedEventId(event.target.value ? Number(event.target.value) : null)}
+              onChange={(event) => {
+                if (changedEntries.length > 0 && !window.confirm("Несохранённые отметки будут потеряны. Сменить событие?")) return;
+                setSelectedEventId(event.target.value ? Number(event.target.value) : null);
+              }}
             >
               <option value="">{manageableEvents.length === 0 ? "Нет доступных событий" : "Выберите событие"}</option>
               {manageableEvents.map((event) => (
@@ -3033,6 +3080,7 @@ function AttendanceView({
             <div className={styles.commandStrip}>
               <button
                 type="button"
+                disabled={journalBusy}
                 style={{ background: "#27ae60" }}
                 onClick={() => {
                   const preset: Record<number, string> = {};
@@ -3044,6 +3092,7 @@ function AttendanceView({
               </button>
               <button
                 type="button"
+                disabled={journalBusy}
                 style={{ background: "#e74c3c" }}
                 onClick={() => {
                   const preset: Record<number, string> = {};
@@ -3056,7 +3105,9 @@ function AttendanceView({
             </div>
           )}
           <div className={styles.list}>
-            {!hasSelectedEvent && <Empty text="Выберите событие для отметки" />}
+            {!hasSelectedEvent && !isLoading && !isError && <Empty text={manageableEvents.length === 0 ? "Занятий для отметки пока нет. Добавьте занятие в расписание." : "Выберите событие для отметки"} />}
+            {hasSelectedEvent && eventAttendance.isPending && <p role="status">Загружаем отметки…</p>}
+            {hasSelectedEvent && eventAttendance.isError && <div className={styles.commandStrip} role="alert"><span>Не удалось загрузить отметки. Изменения заблокированы до загрузки.</span><button type="button" onClick={() => void eventAttendance.refetch()}>Повторить</button></div>}
             {hasSelectedEvent && targetUsers.length === 0 && <Empty text="Нет участников для отметки" />}
             {hasSelectedEvent && targetUsers.length > 0 && (
               <div className={styles.attendanceFilters}>
@@ -3082,12 +3133,13 @@ function AttendanceView({
                 <div className={styles.memberRow} key={userId}>
                   <div>
                     <strong>{user.full_name}</strong>
-                    <span style={{ color: value === "PRESENT" ? "#27ae60" : value === "ABSENT" ? "#e74c3c" : value === "LATE" ? "#f39c12" : "#8a96b0" }}>
+                    <span style={{ color: statusColors[value] ?? "var(--text-faint)" }}>
                       {statusLabels[value] ?? value}
                     </span>
                   </div>
                   <select
                     data-attendance-user={userId}
+                    disabled={journalBusy}
                     aria-label={`Статус явки: ${user.full_name}`}
                     value={value}
                     onChange={(event) => setDraftAttendance((prev) => ({ ...prev, [userId]: event.target.value }))}
@@ -3105,24 +3157,21 @@ function AttendanceView({
             <div className={styles.commandStrip}>
               <button
                 type="button"
-                disabled={markAttendance.isPending}
+                disabled={journalBusy || changedEntries.length === 0}
                 onClick={() => {
                   markAttendance.mutate(
                     {
                       eventId: selectedEvent!.id,
-                      entries: targetUsers.map((user) => ({
-                        user_id: user.id as number,
-                        status_code: draftAttendance[user.id as number] ?? existingAttendance.get(user.id as number) ?? "NOT_MARKED",
-                      })),
+                      entries: changedEntries,
                     },
                     {
-                      onSuccess: () => toast("Журнал явки сохранён", "success"),
+                      onSuccess: () => { setDraftAttendance({}); toast("Журнал явки сохранён", "success"); },
                       onError: () => toast("Не удалось сохранить журнал", "error"),
                     },
                   );
                 }}
               >
-                {markAttendance.isPending ? "Сохраняем..." : "Сохранить отметки"}
+                {markAttendance.isPending ? "Сохраняем..." : changedEntries.length > 0 ? `Сохранить отметки (${changedEntries.length})` : "Сохранить отметки"}
               </button>
             </div>
           )}
@@ -4547,7 +4596,7 @@ function RosterTable({
               onClick={onRowClick ? () => onRowClick(user) : undefined}
             >
               <td role="cell" data-label="ФИО">
-                {onRowClick ? <button type="button" className={styles.rosterNameButton} onClick={(event) => { event.stopPropagation(); onRowClick(user); }}>{user.full_name}</button> : user.full_name}
+                {onRowClick ? <button type="button" className={styles.rosterNameButton} onClick={(event) => { event.stopPropagation(); event.currentTarget.focus({ preventScroll: true }); onRowClick(user); }}>{user.full_name}</button> : user.full_name}
               </td>
               <td role="cell" data-label="Telegram">
                 {user.username ? (
@@ -4555,7 +4604,7 @@ function RosterTable({
                     href={`https://t.me/${user.username}`}
                     target="_blank"
                     rel="noreferrer"
-                    style={{ color: "#1a2f5a", textDecoration: "underline" }}
+                    style={{ color: "var(--link)", textDecoration: "underline" }}
                     onClick={(e) => e.stopPropagation()}
                   >
                     @{user.username}
@@ -5690,7 +5739,7 @@ function AdminView({
                 <input placeholder="Название события *" value={newEvent.title} onChange={(e) => setNewEvent({ ...newEvent, title: e.target.value })} />
                 <div className={styles.twoCol}>
                   <label className={styles.fieldLabel}>
-                    <span>Начало *</span>
+                    <span>Начало * · {getAppTimezone()}</span>
                     <input type="datetime-local" value={newEvent.start_datetime} onChange={(e) => setNewEvent({ ...newEvent, start_datetime: e.target.value })} />
                   </label>
                   <label className={styles.fieldLabel}>
@@ -5719,12 +5768,12 @@ function AdminView({
                 )}
                 <button
                   type="button"
-                  disabled={!newEvent.title.trim() || !newEvent.start_datetime || createEvent.isPending}
+                  disabled={!newEvent.title.trim() || !dateTimeLocalToUtc(newEvent.start_datetime) || (!!newEvent.end_datetime && (!dateTimeLocalToUtc(newEvent.end_datetime) || newEvent.end_datetime <= newEvent.start_datetime)) || createEvent.isPending}
                   onClick={() => createEvent.mutate(
                     {
                       title: newEvent.title.trim(),
-                      start_datetime: new Date(newEvent.start_datetime).toISOString(),
-                      end_datetime: newEvent.end_datetime ? new Date(newEvent.end_datetime).toISOString() : undefined,
+                      start_datetime: dateTimeLocalToUtc(newEvent.start_datetime),
+                      end_datetime: newEvent.end_datetime ? dateTimeLocalToUtc(newEvent.end_datetime) : undefined,
                       place: newEvent.place || undefined,
                       squad_id: newEvent.squad_id ? Number(newEvent.squad_id) : null,
                       requires_response: newEvent.requires_response,
@@ -5739,6 +5788,7 @@ function AdminView({
                 >
                   {createEvent.isPending ? "Создаём..." : "Создать событие"}
                 </button>
+                {newEvent.end_datetime && newEvent.end_datetime <= newEvent.start_datetime && <p role="alert">Окончание должно быть позже начала занятия.</p>}
               </div>
               <Tabs
                 tabs={[
@@ -5782,7 +5832,7 @@ function AdminView({
                       <div className={styles.commandStrip}>
                         <button
                           type="button"
-                          disabled={updateEvent.isPending || !eventEdits[ev.id]?.title?.trim() || !eventEdits[ev.id]?.start_datetime}
+                          disabled={updateEvent.isPending || !eventEdits[ev.id]?.title?.trim() || !dateTimeLocalToUtc(eventEdits[ev.id]?.start_datetime ?? "") || (!!eventEdits[ev.id]?.end_datetime && (!dateTimeLocalToUtc(eventEdits[ev.id].end_datetime) || eventEdits[ev.id].end_datetime <= eventEdits[ev.id].start_datetime))}
                           onClick={() => {
                             const edit = eventEdits[ev.id];
                             updateEvent.mutate(
@@ -5790,8 +5840,8 @@ function AdminView({
                                 id: ev.id,
                                 title: edit.title.trim(),
                                 description: edit.description || null,
-                                start_datetime: new Date(edit.start_datetime).toISOString(),
-                                end_datetime: edit.end_datetime ? new Date(edit.end_datetime).toISOString() : null,
+                                start_datetime: dateTimeLocalToUtc(edit.start_datetime),
+                                end_datetime: edit.end_datetime ? dateTimeLocalToUtc(edit.end_datetime) : null,
                                 place: edit.place || null,
                               },
                               { onSuccess: () => { setEditingEventId(null); toast("Событие изменено", "success"); } },
@@ -5906,10 +5956,11 @@ function AdminView({
                       type="button"
                       className={styles.pipelineStageTab}
                       data-active={pipelineStage === s.key}
+                      aria-pressed={pipelineStage === s.key}
                       style={pipelineStage === s.key ? { borderColor: s.color, color: s.color } : undefined}
                       onClick={() => setPipelineStage(s.key)}
                     >
-                      <span className={styles.pipelineStageCount} style={pipelineStage === s.key ? { background: s.color } : undefined}>{s.count}</span>
+                      <span className={styles.pipelineStageCount}>{s.count}</span>
                       {s.label}
                     </button>
                   ))}
@@ -6146,24 +6197,24 @@ function AdminView({
                 return (
                   <>
               <div className={styles.formBlock}>
-                <input placeholder="Название события *" value={newCandEvent.title} onChange={(e) => setNewCandEvent({ ...newCandEvent, title: e.target.value })} />
+                <label className={styles.fieldLabel}><span>Название события *</span><input required aria-label="Название события для кандидатов" placeholder="Название события *" value={newCandEvent.title} onChange={(e) => setNewCandEvent({ ...newCandEvent, title: e.target.value })} /></label>
                 <label className={styles.fieldLabel}>
-                  <span>Начало *</span>
+                  <span>Начало * · {getAppTimezone()}</span>
                   <input type="datetime-local" value={newCandEvent.start_datetime} onChange={(e) => setNewCandEvent({ ...newCandEvent, start_datetime: e.target.value })} />
                 </label>
                 <input placeholder="Место проведения" value={newCandEvent.place} onChange={(e) => setNewCandEvent({ ...newCandEvent, place: e.target.value })} />
                 <input placeholder="Описание" value={newCandEvent.description} onChange={(e) => setNewCandEvent({ ...newCandEvent, description: e.target.value })} />
                 <button
                   type="button"
-                  disabled={!newCandEvent.title.trim() || !newCandEvent.start_datetime || createCandEvent.isPending}
+                  disabled={!newCandEvent.title.trim() || !dateTimeLocalToUtc(newCandEvent.start_datetime) || createCandEvent.isPending}
                   onClick={() => createCandEvent.mutate(
                     {
                       title: newCandEvent.title.trim(),
-                      start_datetime: new Date(newCandEvent.start_datetime).toISOString(),
+                      start_datetime: dateTimeLocalToUtc(newCandEvent.start_datetime),
                       place: newCandEvent.place || undefined,
                       description: newCandEvent.description || undefined,
                     },
-                    { onSuccess: () => { setNewCandEvent({ title: "", start_datetime: "", place: "", description: "" }); toast("Событие создано", "success"); } },
+                    { onSuccess: () => { setNewCandEvent({ title: "", start_datetime: "", place: "", description: "" }); toast("Событие создано", "success"); }, onError: (error) => toast(apiErrorDetail(error) ?? "Не удалось создать событие", "error") },
                   )}
                 >
                   {createCandEvent.isPending ? "Создаём..." : "Создать событие для кандидатов"}
@@ -6591,14 +6642,16 @@ function AdminView({
           {/* ── Audit Logs ── */}
           {tab === "logs" && (
             <>
-              <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+              <div className={styles.auditFilters}>
                 <input
+                  aria-label="Фильтр журнала по коду действия"
                   placeholder="Код действия (фильтр)"
                   value={logFilter.action_code}
                   onChange={(e) => setLogFilter((f) => ({ ...f, action_code: e.target.value }))}
                   style={{ flex: 1 }}
                 />
                 <input
+                  aria-label="Фильтр журнала по сущности"
                   placeholder="Сущность (users, files...)"
                   value={logFilter.entity_name}
                   onChange={(e) => setLogFilter((f) => ({ ...f, entity_name: e.target.value }))}
@@ -6615,7 +6668,7 @@ function AdminView({
                       {item.entity_name ?? "—"} #{item.entity_id ?? "—"} · user {item.user_id ?? "—"} · {formatDate(item.created_at)}
                     </span>
                     {item.new_value != null && (
-                      <span style={{ fontSize: "0.72rem", color: "#65708a", wordBreak: "break-all" }}>
+                      <span style={{ fontSize: "0.72rem", color: "var(--text-soft)", overflowWrap: "anywhere" }}>
                         {String(JSON.stringify(item.new_value)).slice(0, 120)}
                       </span>
                     )}
@@ -6646,7 +6699,7 @@ function AdminView({
               {adminSettings.data && (() => {
                 const byKey = Object.fromEntries(adminSettings.data.map((s) => [s.key, s.value ?? ""]));
                 const draft = { ...byKey, ...settingsDraft };
-                const field = (key: string, label: string, placeholder = "", type: "text" | "textarea" | "date" = "text") => (
+                const field = (key: string, label: string, placeholder = "", type: "text" | "textarea" | "date" | "time" = "text") => (
                   <label key={key} className={styles.fieldLabel} style={{ flexDirection: "column", alignItems: "flex-start", gap: 4 }}>
                     <span style={{ fontWeight: 600, fontSize: "0.85rem" }}>{label}</span>
                     {type === "textarea" ? (
@@ -6696,7 +6749,7 @@ function AdminView({
                       />
                       <span>Включить поздравления</span>
                     </label>
-                    {field("birthday_time", "Время отправки (HH:MM)", "09:00")}
+                    {field("birthday_time", "Время отправки (HH:MM)", "09:00", "time")}
                     <label className={`${styles.fieldLabel} ${styles.birthdayTemplate}`}>
                       <span>Текст поздравления</span>
                       <textarea

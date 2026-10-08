@@ -189,15 +189,10 @@ export function useJoinEvents(enabled: boolean) {
 
 export function useSchedule(enabled: boolean, userId?: number | null) {
   return useQuery({
-    queryKey: ["schedule"],
+    queryKey: ["schedule", "list", userId ?? null],
     queryFn: async () => {
-      const fromDt = new Date();
-      fromDt.setDate(fromDt.getDate() - 90);
-      fromDt.setHours(0, 0, 0, 0);
       try {
-        const { data } = await api.get<ScheduleEvent[]>("/schedule", {
-          params: { from_dt: fromDt.toISOString() },
-        });
+        const { data } = await api.get<ScheduleEvent[]>("/schedule");
         if (userId) void saveOfflineValue(`cache:schedule:${userId}`, data);
         return data;
       } catch (error) {
@@ -522,7 +517,7 @@ export function useRespondEvent() {
       return data;
     },
     onSuccess: (_data, variables) => {
-      queryClient.setQueryData<ScheduleEvent[]>(["schedule"], (items) =>
+      queryClient.setQueriesData<ScheduleEvent[]>({ queryKey: ["schedule", "list"] }, (items) =>
         items?.map((event) => event.id === variables.eventId ? { ...event, my_response_code: variables.responseCode } : event) ?? items,
       );
       queryClient.invalidateQueries({ queryKey: ["schedule", "event", variables.eventId, "responses"] });
@@ -1243,7 +1238,7 @@ export function useCreateScheduleEvent() {
         const list = items ?? [];
         return [...list.filter((item) => item.id !== event.id), event].sort((a, b) => a.start_datetime.localeCompare(b.start_datetime));
       });
-      queryClient.setQueryData<ScheduleEvent[]>(["schedule"], (items) => {
+      queryClient.setQueriesData<ScheduleEvent[]>({ queryKey: ["schedule", "list"] }, (items) => {
         const list = items ?? [];
         return [...list.filter((item) => item.id !== event.id), event].sort((a, b) => a.start_datetime.localeCompare(b.start_datetime));
       });
@@ -1263,7 +1258,7 @@ export function useUpdateScheduleEvent() {
     onSuccess: (event) => {
       const update = (items: ScheduleEvent[] | undefined) => items?.map((item) => item.id === event.id ? event : item) ?? items;
       queryClient.setQueryData<ScheduleEvent[]>(["admin", "schedule"], update);
-      queryClient.setQueryData<ScheduleEvent[]>(["schedule"], update);
+      queryClient.setQueriesData<ScheduleEvent[]>({ queryKey: ["schedule", "list"] }, update);
       queryClient.invalidateQueries({ queryKey: ["admin", "schedule"] });
       queryClient.invalidateQueries({ queryKey: ["schedule"] });
     },
@@ -1298,7 +1293,7 @@ export function useDeleteScheduleTemplate() {
       queryClient.setQueryData<ScheduleEvent[]>(["admin", "schedule"], (items) =>
         items?.map((event) => event.template_id === id ? { ...event, status_code: "CANCELLED" } : event) ?? items,
       );
-      queryClient.setQueryData<ScheduleEvent[]>(["schedule"], (items) =>
+      queryClient.setQueriesData<ScheduleEvent[]>({ queryKey: ["schedule", "list"] }, (items) =>
         items?.map((event) => event.template_id === id ? { ...event, status_code: "CANCELLED" } : event) ?? items,
       );
       queryClient.invalidateQueries({ queryKey: ["admin", "schedule", "templates"] });
@@ -1322,7 +1317,7 @@ export function useGenerateScheduleTemplate() {
         return Array.from(byId.values()).sort((a, b) => a.start_datetime.localeCompare(b.start_datetime));
       };
       queryClient.setQueryData<ScheduleEvent[]>(["admin", "schedule"], mergeEvents);
-      queryClient.setQueryData<ScheduleEvent[]>(["schedule"], mergeEvents);
+      queryClient.setQueriesData<ScheduleEvent[]>({ queryKey: ["schedule", "list"] }, mergeEvents);
       queryClient.invalidateQueries({ queryKey: ["admin", "schedule"] });
       queryClient.invalidateQueries({ queryKey: ["schedule"] });
     },
@@ -1340,7 +1335,7 @@ export function useDeleteScheduleEvent() {
       const markCancelled = (items: ScheduleEvent[] | undefined) =>
         items?.map((item) => item.id === id ? { ...item, status_code: "CANCELLED" } : item) ?? items;
       queryClient.setQueryData<ScheduleEvent[]>(["admin", "schedule"], markCancelled);
-      queryClient.setQueryData<ScheduleEvent[]>(["schedule"], markCancelled);
+      queryClient.setQueriesData<ScheduleEvent[]>({ queryKey: ["schedule", "list"] }, markCancelled);
       queryClient.invalidateQueries({ queryKey: ["admin", "schedule"] });
       queryClient.invalidateQueries({ queryKey: ["schedule"] });
     },

@@ -38,11 +38,12 @@ export function applyPhoneMask(value: string): string {
   return result;
 }
 
-export function formatDate(value: string | null) {
+export function formatDate(value: string | null, includeYear = false) {
   if (!value) return "без даты";
   return new Intl.DateTimeFormat("ru-RU", {
     day: "2-digit",
     month: "2-digit",
+    ...(includeYear ? { year: "numeric" as const } : {}),
     hour: "2-digit",
     minute: "2-digit",
     timeZone: appTimezone,
@@ -62,6 +63,27 @@ export function toDateTimeLocal(value: string | null) {
   }).formatToParts(new Date(value));
   const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "00";
   return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
+}
+
+// datetime-local contains club wall time, not the browser's timezone. An empty
+// result also covers impossible dates and nonexistent DST times.
+export function dateTimeLocalToUtc(value: string, timezone = appTimezone): string {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return "";
+  const wall = Date.parse(`${value}:00Z`);
+  if (!Number.isFinite(wall) || new Date(wall).toISOString().slice(0, 16) !== value) return "";
+  const formatter = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+  });
+  let instant = wall;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const parts = formatter.formatToParts(instant);
+    const get = (type: string) => parts.find((part) => part.type === type)!.value;
+    const local = `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
+    if (local === value) return new Date(instant).toISOString();
+    instant += wall - Date.parse(`${local}:${get("second")}Z`);
+  }
+  return "";
 }
 
 export function formatDateFull(value: string | null) {

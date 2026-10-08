@@ -11,10 +11,20 @@ type AttendanceEntry = {
   custom_reason?: string | null;
 };
 
+async function readAttendancePages(path: string, limit: number, offset: number, signal: AbortSignal) {
+  const items: AttendanceRecord[] = [];
+  const pageSize = Math.min(500, Math.max(1, limit));
+  for (let cursor = offset; ; cursor += pageSize) {
+    const { data } = await api.get<AttendanceRecord[]>(path, { params: { limit: pageSize, offset: cursor }, signal });
+    items.push(...data);
+    if (data.length < pageSize) return items;
+  }
+}
+
 export function useMyAttendance(enabled: boolean, limit = 100, offset = 0) {
   return useQuery({
     queryKey: queryKeys.attendance.mine(limit, offset),
-    queryFn: async () => (await api.get<AttendanceRecord[]>("/attendance/my", { params: { limit, offset } })).data,
+    queryFn: ({ signal }) => readAttendancePages("/attendance/my", limit, offset, signal),
     enabled,
   });
 }
@@ -30,9 +40,7 @@ export function useMyAttendanceStats(enabled: boolean) {
 export function useAttendanceEvent(eventId: number | null, enabled: boolean, limit = 200, offset = 0) {
   return useQuery({
     queryKey: queryKeys.attendance.event(eventId, limit, offset),
-    queryFn: async () => (
-      await api.get<AttendanceRecord[]>(`/attendance/events/${eventId}`, { params: { limit, offset } })
-    ).data,
+    queryFn: ({ signal }) => readAttendancePages(`/attendance/events/${eventId}`, limit, offset, signal),
     enabled: enabled && eventId !== null,
   });
 }
@@ -49,9 +57,9 @@ export function useMarkAttendance() {
       const previous = queryClient.getQueryData<AttendanceRecord[]>(queryKey);
       const byUser = new Map((previous ?? []).map((item) => [item.user_id, item]));
       const now = new Date().toISOString();
-      queryClient.setQueryData<AttendanceRecord[]>(queryKey, variables.entries.map((entry, index) => {
+      variables.entries.forEach((entry, index) => {
         const old = byUser.get(entry.user_id);
-        return {
+        byUser.set(entry.user_id, {
           id: old?.id ?? -(index + 1),
           event_id: variables.eventId,
           user_id: entry.user_id,
@@ -63,15 +71,20 @@ export function useMarkAttendance() {
           source_code: "COMMANDER",
           is_draft: false,
           updated_at: now,
-        };
-      }));
+        });
+      });
+      queryClient.setQueryData<AttendanceRecord[]>(queryKey, [...byUser.values()]);
       return { previous, queryKey };
     },
     onError: (_error, _variables, context) => {
       if (context) queryClient.setQueryData(context.queryKey, context.previous);
     },
     onSuccess: (data, variables) => {
-      queryClient.setQueryData(queryKeys.attendance.event(variables.eventId, 200, 0), data);
+      queryClient.setQueryData<AttendanceRecord[]>(queryKeys.attendance.event(variables.eventId, 200, 0), (items) => {
+        const byUser = new Map((items ?? []).map((item) => [item.user_id, item]));
+        for (const item of data) byUser.set(item.user_id, item);
+        return [...byUser.values()];
+      });
       queryClient.invalidateQueries({ queryKey: ["attendance", "event", variables.eventId] });
       queryClient.invalidateQueries({ queryKey: queryKeys.attendance.root });
       queryClient.invalidateQueries({ queryKey: ["reports", "attendance"] });

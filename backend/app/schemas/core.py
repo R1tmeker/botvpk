@@ -370,6 +370,8 @@ class AttendanceRead(ORMModel):
     source_code: str = "COMMANDER"
     is_draft: bool
     updated_at: datetime | None = None
+    event_title: str | None = None
+    event_start_datetime: datetime | None = None
 
 
 class AttendanceMarkItem(BaseModel):

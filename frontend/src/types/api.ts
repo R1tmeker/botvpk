@@ -148,6 +148,8 @@ export type AttendanceRecord = {
   source_code: "SELF" | "COMMANDER" | "BOT" | string;
   is_draft: boolean;
   updated_at: string | null;
+  event_title?: string | null;
+  event_start_datetime?: string | null;
 };
 
 export type AttendanceGrade = {

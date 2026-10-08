@@ -90,16 +90,22 @@ async def my_attendance(
     offset: int = 0,
     current_user: CurrentUser = Depends(require_role(RoleLevel.PARTICIPANT)),
     session: AsyncSession = Depends(get_db_session),
-) -> list[Attendance]:
+) -> list[AttendanceRead]:
     user_id = require_profile(current_user)
     statement = (
-        select(Attendance)
+        select(Attendance, ScheduleEvent.title, ScheduleEvent.start_datetime)
+        .outerjoin(ScheduleEvent, ScheduleEvent.id == Attendance.event_id)
         .where(Attendance.user_id == user_id)
-        .order_by(Attendance.updated_at.desc().nullslast())
+        .order_by(ScheduleEvent.start_datetime.desc().nullslast(), Attendance.id.desc())
         .offset(max(0, offset))
         .limit(min(max(1, limit), 500))
     )
-    return list((await session.scalars(statement)).all())
+    return [
+        AttendanceRead.model_validate(row).model_copy(update={
+            "event_title": title, "event_start_datetime": start,
+        })
+        for row, title, start in (await session.execute(statement)).all()
+    ]
 
 
 @router.get("/stats/my", response_model=ReportSummary)

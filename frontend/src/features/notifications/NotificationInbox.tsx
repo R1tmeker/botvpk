@@ -47,7 +47,10 @@ export function NotificationInbox({ onOpen }: { onOpen: (path: string) => void }
       <div aria-live="polite">
         {inbox.isPending && <p role="status">Загружаем уведомления…</p>}
         {inbox.isError && <div className={styles.commandStrip}><span>Не удалось загрузить уведомления.</span><button type="button" onClick={() => void inbox.refetch()}>Повторить</button></div>}
-        {!inbox.isPending && !inbox.isError && items.length === 0 && <p>{query ? "По этому запросу ничего не найдено." : unreadOnly ? "Непрочитанных уведомлений нет." : "В этой категории уведомлений пока нет."}</p>}
+        {!inbox.isPending && !inbox.isError && items.length === 0 && <div className={styles.empty} role="status">
+          <p>{query ? "По этому запросу ничего не найдено." : unreadOnly ? "Непрочитанных уведомлений нет." : "В этой категории уведомлений пока нет."}</p>
+          {(value || category) && <button type="button" className={styles.compactBtn} onClick={() => { setValue(""); setQuery(""); setCategory(""); }}>Сбросить поиск и категорию</button>}
+        </div>}
       </div>
       <div className={styles.list}>
         {items.map((item) => {

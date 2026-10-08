@@ -14,7 +14,7 @@ function loadModel(name) {
   return exports;
 }
 
-const { recordId, responseIsOpen, needsFinalResponse, checkInIsOpen, eventIsArchived, sameDayInTimezone } = loadModel("schedule");
+const { recordId, responseIsOpen, needsFinalResponse, checkInIsOpen, eventIsArchived, sameDayInTimezone, schedulePeriod, eventInPeriod } = loadModel("schedule");
 const { safeAppLink, notificationDestination } = loadModel("notifications");
 const { filterAppeals, messageDraftKey, validMessageBody } = loadModel("appeals");
 const { filterMaterials, learningProgress } = loadModel("learning");
@@ -114,4 +114,23 @@ test("learning progress suggests the first unstudied item and handles an empty c
   assert.deepEqual(learningProgress([{ id: 1, is_viewed: true }, { id: 2, is_viewed: false }]), { total: 2, completed: 1, percent: 50, nextId: 2 });
   assert.deepEqual(learningProgress([]), { total: 0, completed: 0, percent: 0, nextId: null });
   assert.deepEqual(learningProgress([{ id: 1, is_viewed: true }]), { total: 1, completed: 1, percent: 100, nextId: null });
+});
+
+
+test("calendar week starts on Monday in the club timezone", () => {
+  const range = schedulePeriod("week", Date.parse("2026-10-11T18:00:00Z"), "Asia/Novosibirsk");
+  assert.equal(range.from, "2026-10-12");
+  assert.equal(range.to, "2026-10-19");
+  assert.equal(eventInPeriod({ start_datetime: "2026-10-11T17:00:00Z" }, range, "Asia/Novosibirsk"), true);
+  assert.equal(eventInPeriod({ start_datetime: "2026-10-18T17:00:00Z" }, range, "Asia/Novosibirsk"), false);
+});
+test("calendar month navigation crosses the year without rolling 31-day windows", () => {
+  const range = schedulePeriod("month", Date.parse("2026-12-31T12:00:00Z"), "Asia/Novosibirsk", 1);
+  assert.equal(range.from, "2027-01-01");
+  assert.equal(range.to, "2027-02-01");
+});
+test("DST week still has seven calendar days", () => {
+  const range = schedulePeriod("week", Date.parse("2026-03-29T12:00:00Z"), "Europe/Berlin");
+  assert.equal(range.from, "2026-03-23");
+  assert.equal(range.to, "2026-03-30");
 });

@@ -1181,11 +1181,12 @@ export function App({ webApp }: Props) {
   };
 
   useEffect(() => {
+    if (!hasToken) return;
     if (!canAccessView(activeView, level)) {
       navigate("/", { replace: true });
       webApp.BackButton?.hide();
     }
-  }, [activeView, level, navigate]);
+  }, [activeView, hasToken, level, navigate]);
 
   // Trigger milestone confetti when streak hits milestone
   useEffect(() => {

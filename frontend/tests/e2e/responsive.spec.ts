@@ -21,7 +21,7 @@ const events = [1, 2, 3].map((id) => ({
 async function mockApp(page: Page, role: string, theme: string) {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.addInitScript((value) => localStorage.setItem("vpk_theme", value), theme);
-  await page.route("**/api/**", async (route) => {
+  await page.route("http://127.0.0.1:5173/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname.replace(/^\/api/, "");
     let json: unknown = [];
     if (path === "/auth/session") json = { authenticated: true, app_timezone: "Asia/Barnaul", profile: { ...user, role_code: role } };

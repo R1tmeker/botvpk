@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db_session
@@ -10,6 +11,8 @@ from ..dependencies.auth import CurrentUser, require_role
 from ..models import Announcement, Notification, User
 from ..roles import RoleLevel
 from ..schemas.core import AnnouncementCreate, AnnouncementRead, AnnouncementUpdate, MessageResponse
+from ..models.file import File as StoredFile
+from .files import _check_file_access
 from ..utils.audit import model_snapshot, record_audit, utcnow
 
 router = APIRouter(prefix="/announcements", tags=["announcements"])
@@ -111,12 +114,29 @@ async def create_announcement(
 ) -> Announcement:
     author_id = require_profile(current_user)
     assert_can_target(payload, current_user)
-    values = payload.model_dump()
+    values = payload.model_dump(exclude={"client_request_id"})
+    if not payload.send_to_app and not payload.send_to_tg:
+        raise HTTPException(status_code=422, detail="Выберите хотя бы один канал отправки.")
     if current_user.role_level < RoleLevel.DEPUTY_PLATOON_COMMANDER and values.get("target_squad_id") is None:
         values["target_squad_id"] = current_user.squad_id
-    item = Announcement(created_by_id=author_id, **values)
-    session.add(item)
-    await session.flush()
+    if payload.file_id:
+        stored = await session.get(StoredFile, payload.file_id)
+        if stored is None:
+            raise HTTPException(status_code=404, detail="Вложение не найдено.")
+        await _check_file_access(stored, current_user, session)
+    if payload.client_request_id:
+        request_id = str(payload.client_request_id)
+        item = await session.scalar(insert(Announcement).values(created_by_id=author_id, client_request_id=request_id, **values)
+            .on_conflict_do_nothing(constraint="uq_announcement_request").returning(Announcement))
+        if item is None:
+            item = await session.scalar(select(Announcement).where(Announcement.created_by_id == author_id, Announcement.client_request_id == request_id))
+            if item is None or any(getattr(item, key) != value for key, value in values.items() if key != "status_code"):
+                raise HTTPException(status_code=409, detail="Этот запрос уже использован для другого объявления.")
+            return item
+    else:
+        item = Announcement(created_by_id=author_id, **values)
+        session.add(item)
+        await session.flush()
     await record_audit(
         session,
         user_id=author_id,
@@ -138,12 +158,14 @@ async def update_announcement(
     session: AsyncSession = Depends(get_db_session),
 ) -> Announcement:
     user_id = require_profile(current_user)
-    item = await session.get(Announcement, announcement_id)
+    item = await session.scalar(select(Announcement).where(Announcement.id == announcement_id).with_for_update())
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Announcement not found.")
     assert_can_target(payload, current_user)
     if current_user.role_level < RoleLevel.DEPUTY_PLATOON_COMMANDER and item.target_squad_id != current_user.squad_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot edit another squad announcement.")
+    if item.status_code in {"SENT", "PUBLISHED"}:
+        raise HTTPException(status_code=409, detail="Отправленное объявление нельзя изменить. Создайте новое.")
     updates = payload.model_dump(exclude_unset=True)
     old = model_snapshot(item, list(updates))
     for key, value in updates.items():
@@ -170,14 +192,23 @@ async def send_announcement(
     session: AsyncSession = Depends(get_db_session),
 ) -> MessageResponse:
     user_id = require_profile(current_user)
-    item = await session.get(Announcement, announcement_id)
+    item = await session.scalar(select(Announcement).where(Announcement.id == announcement_id).with_for_update())
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Announcement not found.")
     users = await users_for_announcement(session, item, current_user)
+    if item.status_code == "SENT":
+        return MessageResponse(detail="Объявление уже отправлено.")
+    if not item.send_to_app and not item.send_to_tg:
+        raise HTTPException(status_code=422, detail="Выберите хотя бы один канал отправки.")
+    if item.file_id:
+        stored = await session.get(StoredFile, item.file_id)
+        if stored is None:
+            raise HTTPException(status_code=404, detail="Вложение не найдено.")
+        await _check_file_access(stored, current_user, session)
     now = utcnow()
     item.status_code = "SENT"
     item.sent_at = now
-    if item.send_to_app:
+    if item.send_to_app or item.send_to_tg:
         for user in users:
             session.add(
                 Notification(
@@ -188,6 +219,7 @@ async def send_announcement(
                     entity_name="announcements",
                     entity_id=item.id,
                     send_to_tg=item.send_to_tg,
+                    send_to_app=item.send_to_app,
                 )
             )
     await record_audit(
@@ -199,4 +231,4 @@ async def send_announcement(
         new_value={"recipients": len(users)},
     )
     await session.commit()
-    return MessageResponse(detail=f"Announcement sent to {len(users)} users.")
+    return MessageResponse(detail=f"Объявление поставлено в очередь для {len(users)} получателей.")

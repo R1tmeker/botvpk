@@ -31,11 +31,12 @@ from .models import (
     WebPushSubscription,
 )
 from .models.file import File as StoredFile
-from .services.delivery import call_telegram_with_rate_limit, vk_rate_limit_pause
+from .services.delivery import vk_rate_limit_pause
+from .services.notification_delivery import announcement_attachment, deliver_telegram_notification, deliver_vk_notification
 from .services.notifications import quiet_hours_delivery_time
 from .services.web_push import send_web_push_notification, web_push_available
 from .utils.audit import utcnow
-from .utils.vk import send_vk_message
+from .utils.vk import notification_keyboard as vk_notification_keyboard
 
 logger = logging.getLogger(__name__)
 _TG_FILE_ID_RE = re.compile(r"\[TG file_id:\s*([^\]]+)\]")
@@ -154,9 +155,9 @@ def _build_notification_keyboard(notification: Notification, settings: Settings)
         return InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="Отметить явку", callback_data=f"attendance:{notification.entity_id}:0"),
         ]])
-    if notification.type_code == "APPEAL" and deep_link_url:
+    if notification.type_code == "APPEAL" and notification.entity_name == "appeals" and notification.entity_id:
         return InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="Открыть обращение", web_app=WebAppInfo(url=deep_link_url)),
+            InlineKeyboardButton(text="Переписка", callback_data=f"appealthread:{notification.entity_id}:0"),
         ]])
     if notification.type_code == "NORMATIVE" and deep_link_url:
         return InlineKeyboardMarkup(inline_keyboard=[[
@@ -255,13 +256,8 @@ async def send_pending_tg_notifications(settings: Settings) -> None:
             try:
                 text = notification.title if not notification.body else f"{notification.title}\n\n{notification.body}"
                 keyboard = _build_notification_keyboard(notification, settings)
-                await call_telegram_with_rate_limit(
-                    lambda telegram_id=telegram_id, text=text, keyboard=keyboard: bot.send_message(
-                        telegram_id,
-                        text,
-                        reply_markup=keyboard,
-                    )
-                )
+                stored = await announcement_attachment(session, notification)
+                await deliver_telegram_notification(bot, telegram_id, text, keyboard, stored)
                 # Send normative submission files immediately to commanders and with review results to participants.
                 if (
                     notification.type_code == "NORMATIVE"
@@ -327,7 +323,9 @@ async def send_pending_vk_notifications(settings: Settings) -> None:
                 continue
             try:
                 text = notification.title if not notification.body else f"{notification.title}\n\n{notification.body}"
-                await send_vk_message(settings.vk_group_token, vk_id, text)
+                stored = await announcement_attachment(session, notification)
+                await deliver_vk_notification(settings.vk_group_token, vk_id, notification, text,
+                    vk_notification_keyboard(notification, settings.site_url or settings.mini_app_url), stored)
                 await vk_rate_limit_pause()
                 notification.vk_sent_at = utcnow()
                 notification.delivery_error = None
@@ -359,6 +357,7 @@ async def send_pending_web_push_notifications(settings: Settings) -> None:
                 )
                 .where(
                     Notification.web_push_sent_at.is_(None),
+                    Notification.send_to_app.is_(True),
                     or_(Notification.deliver_after.is_(None), Notification.deliver_after <= now),
                     WebPushSubscription.is_active.is_(True),
                     User.status_code == "ACTIVE",

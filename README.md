@@ -28,6 +28,8 @@ docker compose up --build
 
 Доработки адаптации, размеры экранов и команды браузерных проверок описаны в [docs/responsive-interface.md](docs/responsive-interface.md).
 
+Редактор расписания, навигация ботов и отправка объявлений описаны в [docs/daily-workflows.md](docs/daily-workflows.md).
+
 ```powershell
 .\.venv\Scripts\python.exe -m compileall -q backend main.py bot
 cd frontend

@@ -8,6 +8,7 @@ import re
 from datetime import date, datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -39,6 +40,8 @@ from .services.auth_security import PasswordPolicyError, bump_token_version, val
 from .services.appeal_policy import APPEAL_STATUS_LABELS, can_access_appeal, validate_appeal_text
 from .services.appeals import add_appeal_reply, notify_appeal_commanders, publish_appeal_update
 from .services.bot_callbacks import callback_ids
+from .services.bot_navigation import MENU_TEXT, entity_id, menu_rows, page_number
+from .services.bot_content import attendance_text, checkin_statement, local_time, normative_choices, normatives_text, schedule_card
 from .services.attendance import SelfCheckInError, self_check_in, sync_automatic_grade
 from .services.delivery import call_telegram_with_rate_limit
 from .services.events import respond_to_event
@@ -47,7 +50,6 @@ from .services.event_response_policy import EventResponseError, validate_event_a
 from .services.notification_inbox import inbox_counts, inbox_page, mark_inbox_read, mark_notification_read
 from .services.search import search_accessible
 from .services.realtime import publish_realtime_event
-from zoneinfo import ZoneInfo
 from .services.heartbeat import heartbeat_loop
 from .services.observability import configure_json_logging, init_sentry
 from .services.normatives import submit_normative as submit_normative_service
@@ -73,6 +75,10 @@ def _detect_tunnel_url() -> str | None:
         return matches[-1] if matches else None
     except OSError:
         return None
+
+
+class SearchStates(StatesGroup):
+    query = State()
 
 
 class AbsenceReasonStates(StatesGroup):
@@ -137,57 +143,27 @@ def user_role(user: User | None) -> RoleLevel:
 
 
 def main_keyboard(role: RoleLevel) -> ReplyKeyboardMarkup:
-    settings = get_settings()
-    rows: list[list[KeyboardButton]] = [[KeyboardButton(text="Меню"), KeyboardButton(text="Расписание"), KeyboardButton(text="Уведомления")]]
-    rows.append([KeyboardButton(text="Мой ID")])
-    if role >= RoleLevel.DEPUTY_SQUAD_COMMANDER:
-        rows.append([KeyboardButton(text="Заявки")])
+    rows = [[KeyboardButton(text="Меню")]]
     if role >= RoleLevel.PARTICIPANT:
-        rows.append([KeyboardButton(text="Отметиться"), KeyboardButton(text="Поиск")])
-    if settings.mini_app_url:
-        rows.append([KeyboardButton(text="Открыть приложение", web_app=WebAppInfo(url=settings.mini_app_url))])
-    if role >= RoleLevel.SUPER_ADMIN:
-        rows.append([KeyboardButton(text="Ссылка туннеля")])
+        rows[0].append(KeyboardButton(text="Отметиться"))
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=False)
 
 
 def cancel_keyboard() -> ReplyKeyboardMarkup:
-    settings = get_settings()
-    rows: list[list[KeyboardButton]] = [[KeyboardButton(text="Отмена")]]
-    if settings.mini_app_url:
-        rows.append([KeyboardButton(text="Открыть приложение", web_app=WebAppInfo(url=settings.mini_app_url))])
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=False)
+    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Назад"), KeyboardButton(text="Отмена")], [KeyboardButton(text="Меню")]], resize_keyboard=True)
 
 
-def main_menu_inline(role: RoleLevel) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = [
-        [
-            InlineKeyboardButton(text="Расписание", callback_data="menu:schedule"),
-            InlineKeyboardButton(text="Уведомления", callback_data="menu:notifications"),
-        ],
-    ]
-    if role >= RoleLevel.PARTICIPANT:
-        rows.append(
-            [
-                InlineKeyboardButton(text="Нормативы", callback_data="menu:normatives"),
-                InlineKeyboardButton(text="Моя явка", callback_data="menu:attendance"),
-            ]
-        )
-        rows.append([InlineKeyboardButton(text="Отметиться", callback_data="menu:checkin"), InlineKeyboardButton(text="Поиск", callback_data="menu:search")])
-        rows.append(
-            [
-                InlineKeyboardButton(text="Создать обращение", callback_data="menu:appeal"),
-                InlineKeyboardButton(text="Мои обращения", callback_data="menu:myappeals"),
-                InlineKeyboardButton(text="Привязать VK", callback_data="menu:vk"),
-            ]
-        )
-    else:
-        rows.append([InlineKeyboardButton(text="Заявка на вступление", callback_data="menu:join")])
-    rows.append([InlineKeyboardButton(text="Мой ID", callback_data="menu:my_id")])
+def main_menu_inline(role: RoleLevel, section: str = "home") -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(text=label, callback_data=f"menu:{action}") for label, action in row]
+            for row in menu_rows(role, section)]
     settings = get_settings()
-    if settings.mini_app_url:
+    if settings.mini_app_url and section == "home":
         rows.append([InlineKeyboardButton(text="Открыть приложение", web_app=WebAppInfo(url=settings.mini_app_url))])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def home_button(parent: str = "home") -> list[InlineKeyboardButton]:
+    return [InlineKeyboardButton(text="← Назад", callback_data=f"menu:{parent}")] + ([InlineKeyboardButton(text="Главное меню", callback_data="menu:home")] if parent != "home" else [])
 
 
 def event_keyboard(event_id: int) -> InlineKeyboardMarkup:
@@ -196,21 +172,17 @@ def event_keyboard(event_id: int) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="Приду", callback_data=f"event:{event_id}:COMING"),
                 InlineKeyboardButton(text="Не приду", callback_data=f"event:{event_id}:NOT_COMING"),
-                InlineKeyboardButton(text="Пока не знаю", callback_data=f"event:{event_id}:MAYBE"),
-            ]
+            ],
+            [InlineKeyboardButton(text="Уточню", callback_data=f"event:{event_id}:MAYBE")],
+            [InlineKeyboardButton(text="← К расписанию", callback_data="menu:schedule")],
         ]
     )
 
 
 def mini_app_keyboard() -> InlineKeyboardMarkup | None:
     settings = get_settings()
-    if not settings.mini_app_url:
-        return None
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="Открыть приложение", web_app=WebAppInfo(url=settings.mini_app_url))]
-        ]
-    )
+    rows = [[InlineKeyboardButton(text="Открыть приложение", web_app=WebAppInfo(url=settings.mini_app_url))]] if settings.mini_app_url else []
+    return InlineKeyboardMarkup(inline_keyboard=[*rows, home_button()])
 
 
 def absence_reasons_keyboard(event_id: int, reasons: list[AbsenceReason]) -> InlineKeyboardMarkup:
@@ -218,6 +190,7 @@ def absence_reasons_keyboard(event_id: int, reasons: list[AbsenceReason]) -> Inl
         [InlineKeyboardButton(text=reason.label, callback_data=f"reason:{event_id}:{reason.id}")]
         for reason in reasons
     ]
+    rows.append([InlineKeyboardButton(text="← К расписанию", callback_data="menu:schedule")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -271,11 +244,12 @@ async def ensure_dialog_not_expired(message: Message, state: FSMContext) -> bool
 async def show_main_menu(message: Message, user: User | None = None) -> None:
     user = user or await find_user(message.from_user.id)
     role = user_role(user)
-    await message.answer("Выберите раздел:", reply_markup=main_menu_inline(role), parse_mode=None)
+    await message.answer(MENU_TEXT["home"] if role >= RoleLevel.PARTICIPANT else "Добро пожаловать! Вступление и помощь:", reply_markup=main_menu_inline(role), parse_mode=None)
 
 
 @router.message(Command("start", "menu"))
-async def start(message: Message, bot: Bot) -> None:
+async def start(message: Message, bot: Bot, state: FSMContext) -> None:
+    await state.clear()
     user = await find_user(message.from_user.id)
     role = user_role(user)
 
@@ -314,22 +288,16 @@ async def start(message: Message, bot: Bot) -> None:
                 return
 
     name = user.full_name if user else message.from_user.full_name
-    role_label = ROLE_LABELS.get(user.role_code if user else "PUBLIC_USER", "Пользователь")
-    lines = [
-        "ВПК «Звезда»",
-        "",
-        f"Пользователь: {name}",
-        f"Должность: {role_label}",
-    ]
-    if user is None:
-        lines += ["", "Если вы в составе — попросите командира привязать ваш Telegram ID."]
-        lines += ["Для вступления: /join"]
+    lines = ["ВПК «Звезда»", name]
+    if role < RoleLevel.PARTICIPANT:
+        lines.append("Если вы уже в составе — передайте командиру ваш Telegram ID из меню.")
     await message.answer("\n".join(lines), reply_markup=main_keyboard(role), parse_mode=None)
     await show_main_menu(message, user)
 
 
 @router.message(F.text.casefold().in_({"меню"}))
-async def menu_text(message: Message) -> None:
+async def menu_text(message: Message, state: FSMContext) -> None:
+    await state.clear()
     await show_main_menu(message)
 
 
@@ -339,13 +307,17 @@ async def profile(message: Message) -> None:
     if user is None:
         await message.answer("Профиль пока не найден. Откройте Mini App и подайте заявку или попросите командира привязать вас.")
         return
+    await send_profile(message, user)
+
+
+async def send_profile(message: Message, user: User) -> None:
     lines = [
         user.full_name,
         f"Должность: {ROLE_LABELS.get(user.role_code, user.role_code)}",
         f"Отделение: {user.squad_id or 'не назначено'}",
         f"Статус: {user.status_code}",
     ]
-    await message.answer("\n".join(lines), parse_mode=None)
+    await message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=[home_button("personal")]), parse_mode=None)
 
 
 @router.message(Command("id"))
@@ -358,7 +330,7 @@ async def send_telegram_id(message: Message, telegram_id: int) -> None:
     await message.answer(
         f"Ваш Telegram ID: <code>{telegram_id}</code>",
         parse_mode="HTML",
-        reply_markup=main_keyboard(user_role(await find_user(telegram_id))),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[home_button("account" if user_role(await find_user(telegram_id)) >= RoleLevel.PARTICIPANT else "home")]),
     )
 
 
@@ -400,9 +372,73 @@ async def cancel_dialog(message: Message, state: FSMContext) -> None:
     reply_markup = main_keyboard(user_role(user))
     if current_state:
         await message.answer("Действие отменено.", reply_markup=reply_markup, parse_mode=None)
+        await show_main_menu(message, user)
     else:
         await message.answer("Активного диалога нет. Открыл меню.", reply_markup=reply_markup, parse_mode=None)
         await show_main_menu(message, user)
+
+
+
+@router.message(Command("back"))
+@router.message(F.text.casefold().in_({"назад", "← назад"}))
+async def dialog_back(message: Message, state: FSMContext) -> None:
+    await go_back(message, state, message.from_user.id)
+
+
+@router.callback_query(F.data == "dialog:back")
+async def dialog_back_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    if callback.message:
+        await go_back(callback.message, state, callback.from_user.id)
+
+
+async def go_back(message: Message, state: FSMContext, telegram_id: int) -> None:
+    current = await state.get_state()
+    data = await state.get_data()
+    if current and await ensure_dialog_not_expired(message, state):
+        return
+    if current in [item.state for item in JOIN_STEPS] and current != JoinApplicationStates.full_name.state:
+        await join_back(message, state, telegram_id)
+        return
+    if current == AppealStates.description.state:
+        await state.set_state(AppealStates.subject)
+        await message.answer(f"Тема обращения. Ранее: {data.get('subject', '')}\nНапишите новое значение или повторите прежнее.", reply_markup=cancel_keyboard(), parse_mode=None)
+        return
+    if current == AppealStates.urgency.state:
+        await state.set_state(AppealStates.description)
+        await message.answer(f"Описание обращения. Ранее: {str(data.get('description', ''))[:2500]}\nНапишите новое значение или повторите прежнее.", reply_markup=cancel_keyboard(), parse_mode=None)
+        return
+    if current == PasswordResetStates.confirm_password.state:
+        await state.update_data(new_password=None)
+        await state.set_state(PasswordResetStates.new_password)
+        await message.answer("Введите новый пароль заново.", reply_markup=cancel_keyboard(), parse_mode=None)
+        return
+    user = await find_user(telegram_id)
+    if user is None or user_role(user) < RoleLevel.PARTICIPANT:
+        await state.clear()
+        await show_main_menu(message, user)
+        return
+    if current == AppealReplyStates.body.state:
+        await state.clear()
+        await send_appeal_thread(message, user, data.get("appeal_id", 0))
+        return
+    if current == AbsenceReasonStates.awaiting_custom.state:
+        async with AsyncSessionLocal() as session:
+            event = await session.get(ScheduleEvent, data.get("event_id"))
+            reasons = list((await session.scalars(select(AbsenceReason).where(AbsenceReason.is_active.is_(True)).order_by(AbsenceReason.sort_order))).all())
+        await state.clear()
+        if event:
+            await message.answer(f"Причина отсутствия на «{event.title}»:", reply_markup=absence_reasons_keyboard(event.id, reasons), parse_mode=None)
+        else:
+            await _send_schedule_with_batch(message, user)
+        return
+    if current == NormativeFileStates.awaiting_normative_choice.state:
+        await send_normatives_text(message, user)
+        await message.answer("Ранее присланный файл сохранён. Можно вернуться к выбору или прислать другой.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Выбрать для файла", callback_data="normchoicepage:0")], home_button()]), parse_mode=None)
+        return
+    parent = "contact" if current == AppealStates.subject.state else "account" if current == PasswordResetStates.new_password.state else "personal" if current == SearchStates.query.state else "home"
+    await state.clear()
+    await message.answer(MENU_TEXT[parent], reply_markup=main_menu_inline(user_role(user), parent), parse_mode=None)
 
 
 def app_deep_link(path: str | None) -> str | None:
@@ -416,19 +452,29 @@ def app_deep_link(path: str | None) -> str | None:
 
 @router.message(Command("search"))
 @router.message(F.text.casefold().in_({"поиск"}))
-async def search_command(message: Message) -> None:
+async def search_command(message: Message, state: FSMContext) -> None:
     user = await find_user(message.from_user.id)
     if user is None or user_role(user) < RoleLevel.PARTICIPANT:
         await message.answer("Поиск доступен после подтверждения участия.")
         return
     query = (message.text or "").partition(" ")[2].strip()
+    if not query:
+        await state.clear()
+        await state.set_state(SearchStates.query)
+        await state.update_data(started_at=datetime.now(timezone.utc).isoformat())
+        await message.answer("Что найти? Напишите от 2 до 100 символов: название занятия, норматива, материала или имя участника.", reply_markup=cancel_keyboard(), parse_mode=None)
+        return
+    await send_search_results(message, user, query)
+
+
+async def send_search_results(message: Message, user: User, query: str) -> None:
     if not 2 <= len(query) <= 100:
-        await message.answer("Отправьте /search и от 2 до 100 символов. Например: /search тренировка", parse_mode=None)
+        await message.answer("Напишите от 2 до 100 символов.", parse_mode=None)
         return
     async with AsyncSessionLocal() as session:
         results = await search_accessible(session, query, role=user_role(user), role_code=user.role_code, squad_id=user.squad_id, user_id=user.id, limit=10)
     if not results:
-        await message.answer("По вашему запросу ничего доступного не найдено.")
+        await message.answer("По вашему запросу ничего доступного не найдено.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[home_button("personal")]))
         return
     labels = {"event": "Занятие", "normative": "Норматив", "material": "Материал", "appeal": "Обращение", "person": "Участник"}
     lines = [f"Найдено по запросу «{query}»:"]
@@ -440,7 +486,24 @@ async def search_command(message: Message) -> None:
         url = app_deep_link(item.deep_link)
         if url:
             buttons.append([InlineKeyboardButton(text=f"{number}. {item.title[:45]}", web_app=WebAppInfo(url=url))])
-    await message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None, parse_mode=None)
+    await message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=[*buttons, home_button("personal")]), parse_mode=None)
+
+@router.message(SearchStates.query)
+async def search_query(message: Message, state: FSMContext) -> None:
+    if await ensure_dialog_not_expired(message, state):
+        return
+    query = (message.text or "").strip()
+    if query.startswith("/") or not 2 <= len(query) <= 100:
+        await message.answer("Напишите поисковый запрос от 2 до 100 символов или нажмите «Отмена».")
+        return
+    user = await find_user(message.from_user.id)
+    if user is None or user_role(user) < RoleLevel.PARTICIPANT:
+        await state.clear()
+        await message.answer("Поиск доступен участникам состава.")
+        return
+    await state.clear()
+    await send_search_results(message, user, query)
+
 
 
 JOIN_STEPS = [JoinApplicationStates.full_name, JoinApplicationStates.birth_date, JoinApplicationStates.phone,
@@ -482,9 +545,7 @@ async def prompt_join_step(message: Message, state: FSMContext) -> None:
                          reply_markup=join_keyboard(phone=current == JoinApplicationStates.phone.state, private=message.chat.type == "private"), parse_mode=None)
 
 
-@router.message(Command("back"))
-@router.message(F.text.casefold() == "назад")
-async def join_back(message: Message, state: FSMContext) -> None:
+async def join_back(message: Message, state: FSMContext, telegram_id: int | None = None) -> None:
     current = await state.get_state()
     states = [item.state for item in JOIN_STEPS]
     if current not in states:
@@ -492,13 +553,21 @@ async def join_back(message: Message, state: FSMContext) -> None:
         return
     if await ensure_dialog_not_expired(message, state):
         return
+    if current == states[0]:
+        await state.clear()
+        await show_main_menu(message, await find_user(telegram_id or message.from_user.id))
+        return
     await state.set_state(JOIN_STEPS[max(0, states.index(current) - 1)])
     await prompt_join_step(message, state)
 
 
 @router.message(Command("join"))
 async def join(message: Message, state: FSMContext) -> None:
-    user = await find_user(message.from_user.id)
+    await start_join_dialog(message, state, message.from_user.id)
+
+
+async def start_join_dialog(message: Message, state: FSMContext, telegram_id: int) -> None:
+    user = await find_user(telegram_id)
     if user_role(user) >= RoleLevel.PARTICIPANT:
         await message.answer("Вы уже в составе. Откройте личный кабинет через Mini App.", reply_markup=mini_app_keyboard())
         return
@@ -512,7 +581,7 @@ async def join(message: Message, state: FSMContext) -> None:
         return
     async with AsyncSessionLocal() as session:
         application = await session.scalar(select(JoinApplication).where(
-            JoinApplication.telegram_id == message.from_user.id,
+            JoinApplication.telegram_id == telegram_id,
             JoinApplication.status_code.not_in(["REJECTED", "ARCHIVED"]),
         ).order_by(JoinApplication.id.desc()))
     if application:
@@ -746,12 +815,16 @@ async def send_vk_link_code(message: Message, telegram_id: int) -> None:
     ]
     if settings.vk_bot_url:
         lines.append(f"\nVK-бот: {settings.vk_bot_url}")
-    await message.answer("\n".join(lines), parse_mode=None)
+    await message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=[home_button("account")]), parse_mode=None)
 
 
 @router.message(Command("resetpassword"))
 async def reset_password_start(message: Message, state: FSMContext) -> None:
-    user = await find_user(message.from_user.id)
+    await start_password_dialog(message, state, message.from_user.id)
+
+
+async def start_password_dialog(message: Message, state: FSMContext, telegram_id: int) -> None:
+    user = await find_user(telegram_id)
     if user is None or user_role(user) < RoleLevel.PARTICIPANT:
         await message.answer("Сброс пароля доступен подтверждённым участникам состава.", parse_mode=None)
         return
@@ -846,7 +919,34 @@ async def menu_callback(callback: CallbackQuery, state: FSMContext) -> None:
         return
     user = await find_user(callback.from_user.id)
     role = user_role(user)
-    if action == "schedule":
+    await state.clear()
+    if action in MENU_TEXT:
+        text = MENU_TEXT[action] if role >= RoleLevel.PARTICIPANT else "Добро пожаловать! Вступление и помощь:"
+        try:
+            await message.edit_text(text, reply_markup=main_menu_inline(role, action), parse_mode=None)
+        except TelegramBadRequest as exc:
+            if "message is not modified" not in str(exc).lower():
+                await message.answer(text, reply_markup=main_menu_inline(role, action), parse_mode=None)
+        await callback.answer()
+        return
+    if action == "profile" and user is not None and role >= RoleLevel.PARTICIPANT:
+        await send_profile(message, user)
+    elif action in {"applications", "journal", "admin"}:
+        if role < RoleLevel.DEPUTY_SQUAD_COMMANDER:
+            await callback.answer("Доступ только командирам.", show_alert=True)
+            return
+        if action == "applications":
+            await send_applications(message)
+        else:
+            path = "/attendance" if action == "journal" else "/admin"
+            url = app_deep_link(path)
+            buttons = [[InlineKeyboardButton(text="Открыть раздел", web_app=WebAppInfo(url=url))]] if url else []
+            await message.answer("Журнал явки также доступен через кнопки в напоминаниях о занятии." if action == "journal" else "Управление составом и настройками:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[*buttons, home_button("command")]), parse_mode=None)
+    elif action == "password":
+        await start_password_dialog(message, state, callback.from_user.id)
+    elif action == "help":
+        await message.answer("Расписание — ваши планы, самоотметка — присутствие. Пришлите фото, видео или документ для сдачи норматива. Связь — обращения и ответы командира. Меню возвращает сюда и отменяет текущий ввод.", reply_markup=main_menu_inline(role), parse_mode=None)
+    elif action == "schedule":
         if user is None or role < RoleLevel.PARTICIPANT:
             await message.answer("Расписание доступно после подтверждения участия.")
         else:
@@ -857,7 +957,12 @@ async def menu_callback(callback: CallbackQuery, state: FSMContext) -> None:
         else:
             await send_notifications_text(message, user)
     elif action == "search":
-        await message.answer("Для поиска отправьте /search и текст. Например: /search тренировка", parse_mode=None)
+        if role < RoleLevel.PARTICIPANT:
+            await callback.answer("Поиск доступен участникам.", show_alert=True)
+            return
+        await state.set_state(SearchStates.query)
+        await state.update_data(started_at=datetime.now(timezone.utc).isoformat())
+        await message.answer("Что найти? Напишите от 2 до 100 символов.", reply_markup=cancel_keyboard(), parse_mode=None)
     elif action == "normatives":
         if user is None or role < RoleLevel.PARTICIPANT:
             await message.answer("Нормативы доступны после подтверждения участия.")
@@ -883,7 +988,7 @@ async def menu_callback(callback: CallbackQuery, state: FSMContext) -> None:
     elif action == "vk":
         await send_vk_link_code(message, callback.from_user.id)
     elif action == "join":
-        await message.answer("Чтобы подать заявку, отправьте команду /join.", parse_mode=None)
+        await start_join_dialog(message, state, callback.from_user.id)
     elif action == "my_id":
         await send_telegram_id(message, callback.from_user.id)
     else:
@@ -946,24 +1051,14 @@ async def schedule(message: Message) -> None:
     await _send_schedule_with_batch(message, user)
 
 
-async def send_self_checkin_result(message: Message, user: User) -> None:
+async def send_self_checkin_result(message: Message, user: User, event_id: int | None = None) -> None:
     now = datetime.now(timezone.utc)
     async with AsyncSessionLocal() as session:
-        events = list(
-            (
-                await session.scalars(
-                    select(ScheduleEvent)
-                    .where(
-                        ScheduleEvent.self_checkin_enabled.is_(True),
-                        ScheduleEvent.status_code != "CANCELLED",
-                        (ScheduleEvent.squad_id.is_(None)) | (ScheduleEvent.squad_id == user.squad_id),
-                        ScheduleEvent.start_datetime >= now - timedelta(hours=2),
-                        ScheduleEvent.start_datetime <= now + timedelta(hours=2),
-                    )
-                    .order_by(ScheduleEvent.start_datetime)
-                )
-            ).all()
-        )
+        events = list((await session.scalars(checkin_statement(user, now, event_id))).all())
+        if len(events) > 1:
+            rows = [[InlineKeyboardButton(text=f"{local_time(event.start_datetime)} · {event.title[:30]}", callback_data=f"selfcheckin:{event.id}")] for event in events]
+            await message.answer("На каком занятии вы присутствуете?", reply_markup=InlineKeyboardMarkup(inline_keyboard=[*rows, home_button()]), parse_mode=None)
+            return
         last_error: SelfCheckInError | None = None
         for event in events:
             try:
@@ -1000,6 +1095,17 @@ async def send_self_checkin_result(message: Message, user: User) -> None:
     await message.answer(detail, reply_markup=main_keyboard(user_role(user)))
 
 
+@router.callback_query(F.data.startswith("selfcheckin:"))
+async def self_checkin_callback(callback: CallbackQuery) -> None:
+    ids = callback_ids(callback.data, "selfcheckin", 1)
+    user = await find_user(callback.from_user.id)
+    if ids is None or user is None or user_role(user) < RoleLevel.PARTICIPANT or callback.message is None:
+        await callback.answer("Самоотметка недоступна.", show_alert=True)
+        return
+    await callback.answer()
+    await send_self_checkin_result(callback.message, user, ids[0])
+
+
 @router.message(Command("checkin"))
 @router.message(F.text.casefold().in_({"отметиться", "самоотметка"}))
 async def self_checkin_command(message: Message) -> None:
@@ -1011,7 +1117,7 @@ async def self_checkin_command(message: Message) -> None:
 
 
 def bot_event_time(value: datetime) -> str:
-    return value.astimezone(ZoneInfo(get_settings().timezone)).strftime("%d.%m %H:%M")
+    return local_time(value)
 
 
 @router.callback_query(F.data.startswith("event:"))
@@ -1137,32 +1243,9 @@ async def attendance(message: Message) -> None:
 
 
 async def send_attendance_text(message: Message, user: User) -> None:
-    STATUS_LABELS_ATT = {
-        "PRESENT": "Присутствовал",
-        "ABSENT": "Отсутствовал",
-        "LATE": "Опоздал",
-        "EXCUSED": "Уважительная",
-        "SICK": "Больничный",
-        "RELEASED": "Освобождён",
-    }
     async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Attendance, ScheduleEvent.title)
-            .join(ScheduleEvent, ScheduleEvent.id == Attendance.event_id, isouter=True)
-            .where(Attendance.user_id == user.id)
-            .order_by(Attendance.updated_at.desc())
-            .limit(10)
-        )
-        rows = result.all()
-    if not rows:
-        await message.answer("Отметок посещаемости пока нет.")
-        return
-    lines = ["Моя посещаемость:"]
-    for att, title in rows:
-        date_str = att.updated_at.strftime("%d.%m") if att.updated_at else ""
-        status_label = STATUS_LABELS_ATT.get(att.status_code, att.status_code)
-        lines.append(f"• {title or 'Занятие'} {date_str}: {status_label}")
-    await message.answer("\n".join(lines), parse_mode=None)
+        text = await attendance_text(session, user)
+    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[home_button("personal")]), parse_mode=None)
 
 
 @router.message(Command("normatives"))
@@ -1174,38 +1257,26 @@ async def normatives(message: Message) -> None:
     await send_normatives_text(message, user)
 
 
-async def send_normatives_text(message: Message, user: User) -> None:
+async def send_normatives_text(message: Message, user: User, page: int = 0) -> None:
     async with AsyncSessionLocal() as session:
-        rows = list((await session.scalars(
-            select(Normative).where(Normative.is_active.is_(True))
-            .where((Normative.squad_id.is_(None)) | (Normative.squad_id == user.squad_id))
-            .order_by(Normative.deadline_at.nullslast(), Normative.created_at.desc()).limit(10)
-        )).all())
-        submissions = list((await session.scalars(
-            select(NormativeSubmission).where(NormativeSubmission.user_id == user.id, NormativeSubmission.normative_id.in_([item.id for item in rows]))
-            .order_by(NormativeSubmission.submitted_at.desc())
-        )).all()) if rows else []
-    if not rows:
-        await message.answer("Активных нормативов пока нет.")
+        text, has_next = await normatives_text(session, user, page)
+    navigation = []
+    if page:
+        navigation.append(InlineKeyboardButton(text="← Назад", callback_data=f"normpage:{page - 1}"))
+    if has_next:
+        navigation.append(InlineKeyboardButton(text="Далее →", callback_data=f"normpage:{page + 1}"))
+    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=([navigation] if navigation else []) + [home_button()]), parse_mode=None)
+
+
+@router.callback_query(F.data.startswith("normpage:"))
+async def normative_page(callback: CallbackQuery) -> None:
+    page = page_number((callback.data or "").partition(":")[2])
+    user = await find_user(callback.from_user.id)
+    if page is None or callback.message is None or user is None or user_role(user) < RoleLevel.PARTICIPANT:
+        await callback.answer("Раздел недоступен.", show_alert=True)
         return
-    latest = {}
-    for submission in submissions:
-        latest.setdefault(submission.normative_id, submission)
-    labels = {"PENDING": "На проверке", "SUBMITTED": "На проверке", "PENDING_REVIEW": "На проверке", "ACCEPTED": "Принят", "REJECTED": "Отклонён", "NEEDS_REDO": "Нужна доработка"}
-    lines = ["Активные нормативы и ваши последние сдачи:"]
-    buttons = []
-    for item in rows:
-        deadline = bot_event_time(item.deadline_at) if item.deadline_at else "без срока"
-        submission = latest.get(item.id)
-        label = labels.get(submission.status_code, submission.status_code) if submission else "Ещё не сдавали"
-        lines.append(f"• {item.title[:160]} · {deadline}\n  {label}")
-        if submission and submission.reviewer_comment:
-            lines.append(f"  Комментарий проверяющего: {submission.reviewer_comment[:120]}")
-        url = app_deep_link(f"/normatives?id={item.id}")
-        if url:
-            buttons.append([InlineKeyboardButton(text=item.title[:45], web_app=WebAppInfo(url=url))])
-    lines.append("\nДля сдачи пришлите в бот фото, видео или документ и выберите норматив.")
-    await message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None, parse_mode=None)
+    await callback.answer()
+    await send_normatives_text(callback.message, user, page)
 
 
 @router.message(Command("myappeals"))
@@ -1235,7 +1306,7 @@ async def send_my_appeals(message: Message, user: User, page: int = 0) -> None:
     if navigation:
         buttons.append(navigation)
     lines.append("\nНовое обращение: /appeal" if rows else "Обращений пока нет. Создать: /appeal")
-    await message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None, parse_mode=None)
+    await message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=[*buttons, [InlineKeyboardButton(text="Новое обращение", callback_data="menu:appeal")], home_button("contact")]), parse_mode=None)
 
 
 async def send_appeal_thread(message: Message, user: User, appeal_id: int, page: int = 0) -> bool:
@@ -1270,7 +1341,7 @@ async def send_appeal_thread(message: Message, user: User, appeal_id: int, page:
     url = app_deep_link(f"/appeals?id={appeal.id}")
     if url:
         buttons.append([InlineKeyboardButton(text="Открыть в приложении", web_app=WebAppInfo(url=url))])
-    buttons.append([InlineKeyboardButton(text="Мои обращения", callback_data="appeallist:0")])
+    buttons.append([InlineKeyboardButton(text="← Назад", callback_data="appeallist:0")])
     await message.answer("Можно ответить здесь или открыть приложение.", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=None)
     return True
 
@@ -1392,7 +1463,7 @@ async def send_notifications_text(message: Message, user: User, page: int = 0, u
     keyboard_rows.append([InlineKeyboardButton(text="Все уведомления" if unread_only else "Только непрочитанные", callback_data=f"inbox:page:0:{1 - mode}")])
     if counts["unread"]:
         keyboard_rows.append([InlineKeyboardButton(text="Прочитать все", callback_data="inbox:readall")])
-    await message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_rows), parse_mode=None)
+    await message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=[*keyboard_rows, home_button()]), parse_mode=None)
 
 
 @router.callback_query(F.data.startswith("inbox:"))
@@ -1422,7 +1493,7 @@ async def inbox_callback(callback: CallbackQuery) -> None:
                 return
             await session.commit()
             text = f"{item.title[:255]}\n{bot_event_time(item.created_at)}\n\n{(item.body or 'Без дополнительного текста.')[:3000]}"
-            buttons = [[InlineKeyboardButton(text="К уведомлениям", callback_data=f"inbox:page:{parts[3]}:{parts[4]}")]]
+            buttons = [[InlineKeyboardButton(text="← Назад", callback_data=f"inbox:page:{parts[3]}:{parts[4]}")]]
             url = app_deep_link(item.deep_link)
             if url:
                 buttons.insert(0, [InlineKeyboardButton(text="Открыть в приложении", web_app=WebAppInfo(url=url))])
@@ -1480,6 +1551,7 @@ async def appeal_description(message: Message, state: FSMContext) -> None:
                 InlineKeyboardButton(text="Срочная", callback_data="appeal_urgency:HIGH"),
             ],
             [InlineKeyboardButton(text="Очень срочно", callback_data="appeal_urgency:URGENT")],
+            [InlineKeyboardButton(text="← Назад", callback_data="dialog:back")],
         ]
     )
     await message.answer("Выберите срочность:", reply_markup=keyboard, parse_mode=None)
@@ -1557,6 +1629,10 @@ async def cmd_applications(message: Message) -> None:
     if user_role(user) < RoleLevel.DEPUTY_SQUAD_COMMANDER:
         await message.answer("Доступ только командирам.")
         return
+    await send_applications(message)
+
+
+async def send_applications(message: Message) -> None:
     async with AsyncSessionLocal() as session:
         from .models import JoinApplication
         apps = list((await session.scalars(
@@ -1749,6 +1825,7 @@ def attendance_mark_keyboard(
         nav.append(InlineKeyboardButton(text="Дальше", callback_data=f"attpage:{event_id}:{page + 1}"))
     if nav:
         rows.append(nav)
+    rows.append(home_button("command"))
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -1911,46 +1988,30 @@ async def attendance_mark_callback(callback: CallbackQuery) -> None:
 # ──────────────────────── /schedule — enriched with batch ───────────────────
 
 
-async def _send_schedule_with_batch(message: Message, user: User) -> None:
-    now = datetime.now(timezone.utc)
+async def _send_schedule_with_batch(message: Message, user: User, page: int = 0) -> None:
     async with AsyncSessionLocal() as session:
-        events = list(
-            (
-                await session.scalars(
-                    select(ScheduleEvent)
-                    .where(
-                        ScheduleEvent.start_datetime >= now,
-                        ScheduleEvent.status_code != "CANCELLED",
-                        (ScheduleEvent.squad_id.is_(None)) | (ScheduleEvent.squad_id == user.squad_id),
-                    )
-                    .order_by(ScheduleEvent.start_datetime)
-                    .limit(7)
-                )
-            ).all()
-        )
-        if not events:
-            await message.answer("Ближайших событий пока нет.")
-            return
-        response_rows = (await session.execute(select(EventResponse.event_id, EventResponse.response_code).where(
-            EventResponse.user_id == user.id, EventResponse.event_id.in_([event.id for event in events]),
-        ))).all()
-        responses = dict(response_rows)
-        unanswered = await _upcoming_unanswered_events(session, user)
-    for event in events:
-        try:
-            validate_event_available(event, role=user_role(user), squad_id=user.squad_id, now=now)
-            actionable = True
-        except EventResponseError:
-            actionable = False
-        label = {"COMING": "Приду", "NOT_COMING": "Не приду", "MAYBE": "Уточню позже"}.get(responses.get(event.id), "Нет ответа" if event.requires_response else "Ответ не требуется")
-        place = f"\nМесто: {event.place}" if event.place else ""
-        await message.answer(
-            f"{event.title}\n{bot_event_time(event.start_datetime)}{place}\nОтвет: {label}" + ("\nПриём ответов закрыт" if event.requires_response and not actionable else ""),
-            reply_markup=event_keyboard(event.id) if actionable else None, parse_mode=None,
-        )
-    if len(unanswered) >= 2:
-        titles = "\n".join(f"• {event.title[:120]} {bot_event_time(event.start_datetime)}" for event in unanswered)
-        await message.answer(f"Нужен окончательный ответ на {len(unanswered)} занятий:\n{titles}", reply_markup=batch_events_keyboard(unanswered), parse_mode=None)
+        event, text, actionable, has_next = await schedule_card(session, user, page)
+    rows = event_keyboard(event.id).inline_keyboard[:-1] if event and actionable else []
+    navigation = []
+    if page:
+        navigation.append(InlineKeyboardButton(text="← Раньше", callback_data=f"schedulepage:{page - 1}"))
+    if has_next:
+        navigation.append(InlineKeyboardButton(text="Дальше →", callback_data=f"schedulepage:{page + 1}"))
+    if navigation:
+        rows.append(navigation)
+    rows.append(home_button())
+    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode=None)
+
+
+@router.callback_query(F.data.startswith("schedulepage:"))
+async def schedule_page_callback(callback: CallbackQuery) -> None:
+    page = page_number((callback.data or "").partition(":")[2])
+    user = await find_user(callback.from_user.id)
+    if page is None or user is None or user_role(user) < RoleLevel.PARTICIPANT or callback.message is None:
+        await callback.answer("Расписание недоступно.", show_alert=True)
+        return
+    await callback.answer()
+    await _send_schedule_with_batch(callback.message, user, page)
 
 
 # ──────────────────────── video/photo/doc → normative ───────────────────────
@@ -1960,12 +2021,19 @@ class NormativeFileStates(StatesGroup):
     awaiting_normative_choice = State()
 
 
-def normative_choice_keyboard(normatives: list[Normative]) -> InlineKeyboardMarkup:
+def normative_choice_keyboard(normatives: list[Normative], page: int = 0) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text=n.title[:40], callback_data=f"norm_submit:{n.id}")]
-        for n in normatives[:8]
+        for n in normatives[:5]
     ]
-    rows.append([InlineKeyboardButton(text="Это не для норматива", callback_data="norm_submit:cancel")])
+    nav = []
+    if page:
+        nav.append(InlineKeyboardButton(text="← Назад", callback_data=f"normchoicepage:{page - 1}"))
+    if len(normatives) > 5:
+        nav.append(InlineKeyboardButton(text="Далее →", callback_data=f"normchoicepage:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text="← Назад", callback_data="dialog:back"), InlineKeyboardButton(text="Отмена", callback_data="norm_submit:cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -1975,19 +2043,7 @@ async def handle_file_message(message: Message, state: FSMContext) -> None:
     if user is None or user_role(user) < RoleLevel.PARTICIPANT:
         return  # silently ignore from non-participants
     async with AsyncSessionLocal() as session:
-        normatives = list(
-            (
-                await session.scalars(
-                    select(Normative)
-                    .where(
-                        Normative.is_active.is_(True),
-                        (Normative.squad_id.is_(None)) | (Normative.squad_id == user.squad_id),
-                    )
-                    .order_by(Normative.deadline_at.nullslast())
-                    .limit(8)
-                )
-            ).all()
-        )
+        normatives = await normative_choices(session, user)
     if not normatives:
         return  # no active normatives, don't bother
 
@@ -2004,7 +2060,7 @@ async def handle_file_message(message: Message, state: FSMContext) -> None:
         return
 
     await state.set_state(NormativeFileStates.awaiting_normative_choice)
-    await state.update_data(file_id=file_id, user_id=user.id)
+    await state.update_data(file_id=file_id, user_id=user.id, started_at=datetime.now(timezone.utc).isoformat())
     await message.answer(
         "Это файл для сдачи норматива?\nВыберите норматив или отмените:",
         reply_markup=normative_choice_keyboard(normatives),
@@ -2012,29 +2068,49 @@ async def handle_file_message(message: Message, state: FSMContext) -> None:
     )
 
 
+@router.callback_query(F.data.startswith("normchoicepage:"))
+async def normative_choice_page(callback: CallbackQuery, state: FSMContext) -> None:
+    page = page_number((callback.data or "").partition(":")[2])
+    data = await state.get_data()
+    user = await find_user(callback.from_user.id)
+    if page is None or user is None or user_role(user) < RoleLevel.PARTICIPANT or data.get("user_id") != user.id or not data.get("file_id") or await state.get_state() != NormativeFileStates.awaiting_normative_choice.state or callback.message is None:
+        await callback.answer("Пришлите файл заново.", show_alert=True)
+        return
+    async with AsyncSessionLocal() as session:
+        rows = await normative_choices(session, user, page)
+    await callback.answer()
+    await callback.message.edit_reply_markup(reply_markup=normative_choice_keyboard(rows, page))
+
+
 @router.callback_query(F.data.startswith("norm_submit:"))
 async def normative_file_submit(callback: CallbackQuery, state: FSMContext) -> None:
     norm_id_str = (callback.data or "").split(":")[1]
     if norm_id_str == "cancel":
         await state.clear()
-        await callback.message.edit_text("Понял, файл не для норматива.")
+        await callback.message.edit_text("Понял, файл не для норматива.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[home_button()]))
         await callback.answer()
         return
-    norm_id = int(norm_id_str)
+    norm_id = entity_id(norm_id_str)
+    if norm_id is None:
+        await callback.answer("Кнопка устарела.", show_alert=True)
+        return
+    if callback.message is None or await ensure_dialog_not_expired(callback.message, state):
+        await callback.answer("Пришлите файл заново.", show_alert=True)
+        return
     data = await state.get_data()
     file_id: str = data.get("file_id", "")
     stored_user_id: int = data.get("user_id", 0)
 
     user = await find_user(callback.from_user.id)
-    if user is None or user.id != stored_user_id:
+    if user is None or user_role(user) < RoleLevel.PARTICIPANT or user.id != stored_user_id or not file_id or await state.get_state() != NormativeFileStates.awaiting_normative_choice.state:
         await callback.answer("Ошибка сессии.", show_alert=True)
         await state.clear()
         return
 
     async with AsyncSessionLocal() as session:
         normative = await session.get(Normative, norm_id)
-        if not normative:
-            await callback.answer("Норматив не найден.", show_alert=True)
+        if not normative or not normative.is_active or (normative.squad_id is not None and normative.squad_id != user.squad_id):
+            await callback.answer("Норматив недоступен.", show_alert=True)
             return
         submission = await submit_normative_service(
             session,
@@ -2055,6 +2131,7 @@ async def normative_file_submit(callback: CallbackQuery, state: FSMContext) -> N
     if callback.message:
         await callback.message.edit_text(
             f"Файл принят на проверку по нормативу «{normative_title}».\nКомандир получил уведомление.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="← К нормативам", callback_data="menu:normatives")]]),
             parse_mode=None,
         )
     await callback.answer("Сдача отправлена!")
@@ -2267,24 +2344,11 @@ async def main() -> None:
         )
     await bot.set_my_commands([
         BotCommand(command="start", description="Главное меню"),
-        BotCommand(command="schedule", description="Расписание занятий"),
-        BotCommand(command="notifications", description="Мои уведомления"),
-        BotCommand(command="search", description="Поиск: /search текст"),
-        BotCommand(command="normatives", description="Нормативы"),
-        BotCommand(command="attendance", description="Моя посещаемость"),
-        BotCommand(command="checkin", description="Отметиться на занятии"),
-        BotCommand(command="appeal", description="Обращение командиру"),
-        BotCommand(command="myappeals", description="Статусы моих обращений"),
-        BotCommand(command="appealview", description="Переписка: /appealview номер"),
-        BotCommand(command="vk", description="Привязать VK"),
-        BotCommand(command="resetpassword", description="Сбросить пароль сайта"),
-        BotCommand(command="cancel", description="Отменить диалог"),
-        BotCommand(command="back", description="Предыдущий шаг анкеты"),
-        BotCommand(command="id", description="Показать мой Telegram ID"),
-        BotCommand(command="join", description="Заявка на вступление"),
-        BotCommand(command="profile", description="Мой профиль"),
-        BotCommand(command="export", description="Выгрузка состава (CSV/Excel)"),
-        BotCommand(command="help", description="Помощь"),
+        BotCommand(command="schedule", description="Ближайшее занятие и ответ"),
+        BotCommand(command="checkin", description="Отметить присутствие"),
+        BotCommand(command="notifications", description="Уведомления"),
+        BotCommand(command="cancel", description="Отменить ввод и вернуться"),
+        BotCommand(command="help", description="Все возможности и команды"),
     ])
     storage = build_storage(settings)
     isolation = storage.create_isolation() if isinstance(storage, RedisStorage) else SimpleEventIsolation()

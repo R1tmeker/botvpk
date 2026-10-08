@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, time
 from typing import Any, Literal
+from uuid import UUID
 
 from ..services.join_input import normalize_join_phone, validate_join_birth_date
 
@@ -305,6 +306,7 @@ class BulkEventResponseRead(BaseModel):
 
 
 class ScheduleTemplateRead(ORMModel):
+    sync_summary: dict[str, int] | None = None
     id: int
     title: str
     description: str | None = None
@@ -527,6 +529,7 @@ class AnnouncementRead(ORMModel):
 
 
 class AnnouncementCreate(BaseModel):
+    client_request_id: UUID | None = None
     title: str = Field(min_length=1, max_length=255)
     body: str = Field(min_length=1)
     importance_code: str = "NORMAL"
@@ -537,7 +540,7 @@ class AnnouncementCreate(BaseModel):
     send_to_tg: bool = True
     send_to_app: bool = True
     require_read_confirm: bool = False
-    status_code: str = "DRAFT"
+    status_code: Literal["DRAFT"] = "DRAFT"
     scheduled_at: datetime | None = None
 
 

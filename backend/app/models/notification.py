@@ -25,6 +25,7 @@ class Notification(Base):
     is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     is_pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     send_to_tg: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    send_to_app: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     tg_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     vk_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     web_push_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -58,6 +59,8 @@ def assign_notification_category(_mapper, _connection, target: Notification) -> 
         target.deep_link = f"/normatives?id={target.entity_id}"
     elif target.entity_name == "appeals":
         target.deep_link = f"/appeals?id={target.entity_id}"
+    elif target.entity_name == "announcements":
+        target.deep_link = f"/announcements?id={target.entity_id}"
     elif target.entity_name == "attendance":
         target.deep_link = f"/attendance?id={target.entity_id}"
     elif target.entity_name == "join_applications":

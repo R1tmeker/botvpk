@@ -2,7 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 import base from "./playwright.config";
 
 export default defineConfig(base, {
-  testMatch: ["responsive.spec.ts", "visual-regressions.spec.ts"],
+  testMatch: ["responsive.spec.ts", "visual-regressions.spec.ts", "workflows.spec.ts"],
   retries: process.env.CI ? 1 : 0,
   workers: process.env.CI ? 3 : undefined,
   reporter: [["list"], ["html", { open: "never" }]],

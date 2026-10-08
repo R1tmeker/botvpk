@@ -46,7 +46,7 @@ async def notifications(
     session: AsyncSession = Depends(get_db_session),
 ) -> list[Notification]:
     user_id = require_profile(current_user)
-    return await inbox_page(session, user_id, unread_only=unread_only, category=category, query=q, limit=limit, offset=offset)
+    return await inbox_page(session, user_id, unread_only=unread_only, category=category, query=q, limit=limit, offset=offset, app_only=True)
 
 
 @router.get("/summary", response_model=dict[str, int])
@@ -54,7 +54,7 @@ async def notification_summary(
     current_user: CurrentUser = Depends(require_role(RoleLevel.PARTICIPANT)),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, int]:
-    return await inbox_counts(session, require_profile(current_user))
+    return await inbox_counts(session, require_profile(current_user), app_only=True)
 
 
 async def publish_inbox_update(user_id: int) -> None:

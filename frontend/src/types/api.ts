@@ -79,6 +79,7 @@ export type ScheduleEvent = {
 };
 
 export type ScheduleTemplate = {
+  sync_summary?: { created: number; updated: number; cancelled: number; preserved: number } | null;
   id: number;
   title: string;
   description: string | null;

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,10 +28,11 @@ from ..schemas.core import (
 )
 from ..services.attendance import SelfCheckInError, self_check_in, sync_automatic_grade
 from ..services.event_response_policy import EventResponseError, validate_event_available
+from ..services.schedule_templates import generate_events, notify_schedule_changes, occurrence_dates, validate_template
 from ..services.events import respond_to_event
 from ..services.realtime import publish_realtime_event
 from ..utils.audit import model_snapshot, record_audit, utcnow
-from ..utils.timezones import current_local_date, local_datetime_to_utc, local_day_utc_bounds, utc_to_local_date
+from ..utils.timezones import current_local_date, local_day_utc_bounds
 
 router = APIRouter(prefix="/schedule", tags=["schedule"])
 
@@ -407,25 +408,49 @@ async def list_templates(
     return list((await session.scalars(statement)).all())
 
 
+@router.post("/templates/preview")
+async def preview_template(
+    payload: ScheduleTemplateCreate,
+    days: int = Query(default=60, ge=1, le=365),
+    current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_PLATOON_COMMANDER)),
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    try:
+        values = validate_template(payload.model_dump())
+        template = ScheduleTemplate(**values)
+        dates = occurrence_dates(template, settings.timezone, days, await get_week_a_start(session) if template.week_parity else None)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"dates": [day.isoformat() for day in dates], "timezone": settings.timezone, "days": days}
+
+
 @router.post("/templates", response_model=ScheduleTemplateRead, status_code=status.HTTP_201_CREATED)
 async def create_template(
     payload: ScheduleTemplateCreate,
+    generate_days: int | None = Query(default=None, ge=1, le=365),
     current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_PLATOON_COMMANDER)),
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> ScheduleTemplate:
-    template = ScheduleTemplate(created_by_user_id=current_user.user_id, **payload.model_dump())
+    try:
+        values = validate_template(payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    template = ScheduleTemplate(created_by_user_id=current_user.user_id, **values)
     session.add(template)
     await session.flush()
-    await record_audit(
-        session,
-        user_id=current_user.user_id,
-        action_code="schedule_template.create",
-        entity_name="schedule_templates",
-        entity_id=template.id,
-        new_value=payload.model_dump(mode="json"),
-    )
+    if generate_days:
+        try:
+            _, template.sync_summary = await generate_events(session, template, days=generate_days, timezone_name=settings.timezone,
+                week_a_start=await get_week_a_start(session) if template.week_parity else None, actor_id=current_user.user_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await record_audit(session, user_id=current_user.user_id, action_code="schedule_template.create", entity_name="schedule_templates",
+        entity_id=template.id, new_value={**payload.model_dump(mode="json"), "generate_days": generate_days})
     await session.commit()
     await session.refresh(template)
+    await publish_realtime_event(settings, event_type="schedule.updated", query_keys=["schedule", "admin"])
     return template
 
 
@@ -433,29 +458,40 @@ async def create_template(
 async def update_template(
     template_id: int,
     payload: ScheduleTemplateUpdate,
+    apply_to_future: bool = False,
+    days: int = Query(default=60, ge=1, le=365),
     current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_PLATOON_COMMANDER)),
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> ScheduleTemplate:
-    template = await session.get(ScheduleTemplate, template_id)
+    template = await session.scalar(select(ScheduleTemplate).where(ScheduleTemplate.id == template_id).with_for_update())
     if not template:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found.")
     if not can_manage_squad(current_user, template.squad_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot manage this template.")
     updates = payload.model_dump(exclude_unset=True)
+    try:
+        merged = {key: getattr(template, key) for key in ScheduleTemplateCreate.model_fields}
+        values = validate_template(ScheduleTemplateCreate.model_validate({**merged, **updates}).model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    updates["week_days"] = values["week_days"]
+    if "title" in updates:
+        updates["title"] = values["title"]
     old = model_snapshot(template, list(updates))
     for key, value in updates.items():
         setattr(template, key, value)
-    await record_audit(
-        session,
-        user_id=current_user.user_id,
-        action_code="schedule_template.update",
-        entity_name="schedule_templates",
-        entity_id=template.id,
-        old_value=old,
-        new_value=updates,
-    )
+    if apply_to_future:
+        try:
+            _, template.sync_summary = await generate_events(session, template, days=days, timezone_name=settings.timezone,
+                week_a_start=await get_week_a_start(session) if template.week_parity else None, actor_id=current_user.user_id, sync=True)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await record_audit(session, user_id=current_user.user_id, action_code="schedule_template.update", entity_name="schedule_templates",
+        entity_id=template.id, old_value=old, new_value={**payload.model_dump(exclude_unset=True, mode="json"), "apply_to_future": apply_to_future, "days": days})
     await session.commit()
     await session.refresh(template)
+    await publish_realtime_event(settings, event_type="schedule.updated", query_keys=["schedule", "admin"])
     return template
 
 
@@ -465,7 +501,7 @@ async def delete_template(
     current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_PLATOON_COMMANDER)),
     session: AsyncSession = Depends(get_db_session),
 ) -> MessageResponse:
-    template = await session.get(ScheduleTemplate, template_id)
+    template = await session.scalar(select(ScheduleTemplate).where(ScheduleTemplate.id == template_id).with_for_update())
     if not template:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found.")
     if not can_manage_squad(current_user, template.squad_id):
@@ -482,13 +518,15 @@ async def delete_template(
                     ScheduleEvent.template_id == template.id,
                     ScheduleEvent.status_code != "CANCELLED",
                     ScheduleEvent.start_datetime >= now,
-                )
+                ).order_by(ScheduleEvent.id).with_for_update()
             )
         ).all()
     )
     for event in future_events:
         event.status_code = "CANCELLED"
         event.updated_at = now
+
+    await notify_schedule_changes(session, [], future_events)
 
     await record_audit(
         session,
@@ -500,107 +538,36 @@ async def delete_template(
         new_value={"is_active": False, "cancelled_future_events": len(future_events)},
     )
     await session.commit()
+    await publish_realtime_event(get_settings(), event_type="schedule.updated", query_keys=["schedule", "admin"])
     return MessageResponse(detail=f"Template archived. Cancelled future events: {len(future_events)}.")
 
 
 @router.post("/templates/{template_id}/generate", response_model=list[ScheduleEventRead])
 async def generate_template_events(
     template_id: int,
-    days: int = 30,
+    days: int = Query(default=60, ge=1, le=365),
     current_user: CurrentUser = Depends(require_role(RoleLevel.DEPUTY_PLATOON_COMMANDER)),
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> list[ScheduleEvent]:
-    template = await session.get(ScheduleTemplate, template_id)
+    # Serialise generation for one template, including repeated clicks from different clients.
+    template = await session.scalar(select(ScheduleTemplate).where(ScheduleTemplate.id == template_id).with_for_update())
     if not template:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found.")
+        raise HTTPException(status_code=404, detail="Template not found.")
     if not template.is_active:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Template is archived.")
+        raise HTTPException(status_code=409, detail="Template is archived.")
     if not can_manage_squad(current_user, template.squad_id):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot manage this template.")
-    week_a_start = None
-    if template.week_parity is not None:
-        week_a_start = await get_week_a_start(session)
-        if week_a_start is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="schedule_week_a_start is required for templates with week parity 1/2.",
-            )
+        raise HTTPException(status_code=403, detail="Cannot manage this template.")
     try:
-        weekdays = {int(item.strip()) for item in template.week_days.split(",") if item.strip()}
+        validate_template({key: getattr(template, key) for key in ScheduleTemplateCreate.model_fields})
+        created, summary = await generate_events(session, template, days=days, timezone_name=settings.timezone,
+            week_a_start=await get_week_a_start(session) if template.week_parity else None, actor_id=current_user.user_id)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Week days must be numbers from 1 to 7 separated by commas.",
-        ) from exc
-    if not weekdays or any(day < 1 or day > 7 for day in weekdays):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Week days must be numbers from 1 to 7 separated by commas.",
-        )
-    start_day = template.valid_from or current_local_date(settings.timezone)
-    end_day = min(template.valid_to or start_day + timedelta(days=days), start_day + timedelta(days=days))
-    range_start, _ = local_day_utc_bounds(start_day, settings.timezone)
-    _, range_end = local_day_utc_bounds(end_day, settings.timezone)
-    existing_events = list(
-        (
-            await session.scalars(
-                select(ScheduleEvent).where(
-                    ScheduleEvent.template_id == template.id,
-                    ScheduleEvent.status_code != "CANCELLED",
-                    ScheduleEvent.start_datetime >= range_start,
-                    ScheduleEvent.start_datetime < range_end,
-                )
-            )
-        ).all()
-    )
-    existing_dates = {utc_to_local_date(event.start_datetime, settings.timezone) for event in existing_events}
-    created: list[ScheduleEvent] = []
-    current = start_day
-    while current <= end_day:
-        if current.isoweekday() in weekdays:
-            if current in existing_dates:
-                current += timedelta(days=1)
-                continue
-            if template.week_parity is not None and week_a_start is not None:
-                if week_parity_for_date(current, week_a_start) != template.week_parity:
-                    current += timedelta(days=1)
-                    continue
-            start_dt = local_datetime_to_utc(current, template.start_time, settings.timezone)
-            end_dt = local_datetime_to_utc(current, template.end_time, settings.timezone) if template.end_time else None
-            deadline = (
-                start_dt - timedelta(minutes=template.response_deadline_minutes)
-                if template.response_deadline_minutes
-                else None
-            )
-            event = ScheduleEvent(
-                template_id=template.id,
-                event_type_code="CLASS",
-                title=template.title,
-                description=template.description,
-                start_datetime=start_dt,
-                end_datetime=end_dt,
-                place=template.place,
-                squad_id=template.squad_id,
-                requires_response=template.requires_response,
-                response_deadline_at=deadline,
-                created_by_user_id=current_user.user_id,
-            )
-            session.add(event)
-            created.append(event)
-        current += timedelta(days=1)
-    await session.flush()
-    await record_audit(
-        session,
-        user_id=current_user.user_id,
-        action_code="schedule_template.generate",
-        entity_name="schedule_templates",
-        entity_id=template.id,
-        new_value={"days": days, "created": len(created)},
-    )
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await record_audit(session, user_id=current_user.user_id, action_code="schedule_template.generate", entity_name="schedule_templates",
+        entity_id=template.id, new_value={"days": days, **summary})
     await session.commit()
-    for event in created:
-        await session.refresh(event)
+    await publish_realtime_event(settings, event_type="schedule.updated", query_keys=["schedule", "admin"])
     return created
 
 

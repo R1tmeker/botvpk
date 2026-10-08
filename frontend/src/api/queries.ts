@@ -596,6 +596,7 @@ export function useCreateAppeal() {
 export function useCreateAnnouncement() {
   return useMutation({
     mutationFn: async (payload: {
+      client_request_id?: string;
       title: string;
       body: string;
       target_type: string;
@@ -613,10 +614,15 @@ export function useCreateAnnouncement() {
 }
 
 export function useSendAnnouncement() {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (announcementId: number) => {
       const { data } = await api.post(`/announcements/${announcementId}/send`);
       return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["announcements"] });
+      queryClient.invalidateQueries({ queryKey: ["notifications"] });
     },
   });
 }
@@ -1210,9 +1216,9 @@ type ScheduleEventPayload = {
   status_code?: string;
 };
 
-type ScheduleTemplatePayload = {
+export type ScheduleTemplatePayload = {
   title: string;
-  description?: string;
+  description?: string | null;
   week_days: string;
   week_parity?: "A" | "B" | null;
   start_time: string;
@@ -1268,13 +1274,38 @@ export function useUpdateScheduleEvent() {
 export function useCreateScheduleTemplate() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (payload: ScheduleTemplatePayload) => {
-      const { data } = await api.post<ScheduleTemplate>("/schedule/templates", payload);
+    mutationFn: async ({ generate_days, ...payload }: ScheduleTemplatePayload & { generate_days?: number }) => {
+      const { data } = await api.post<ScheduleTemplate>("/schedule/templates", payload, { params: { generate_days } });
       return data;
     },
     onSuccess: (template) => {
       queryClient.setQueryData<ScheduleTemplate[]>(["admin", "schedule", "templates"], (items) => [template, ...(items ?? [])]);
       queryClient.invalidateQueries({ queryKey: ["admin", "schedule", "templates"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "schedule"] });
+      queryClient.invalidateQueries({ queryKey: ["schedule"] });
+    },
+  });
+}
+
+export function useUpdateScheduleTemplate() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, days, apply_to_future, ...payload }: ScheduleTemplatePayload & { id: number; days: number; apply_to_future: boolean }) => {
+      const { data } = await api.patch<ScheduleTemplate>(`/schedule/templates/${id}`, payload, { params: { days, apply_to_future } });
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "schedule"] });
+      queryClient.invalidateQueries({ queryKey: ["schedule"] });
+    },
+  });
+}
+
+export function usePreviewScheduleTemplate() {
+  return useMutation({
+    mutationFn: async ({ days, ...payload }: ScheduleTemplatePayload & { days: number }) => {
+      const { data } = await api.post<{ dates: string[]; timezone: string; days: number }>("/schedule/templates/preview", payload, { params: { days } });
+      return data;
     },
   });
 }

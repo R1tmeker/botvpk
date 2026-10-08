@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..database import Base
@@ -10,8 +10,10 @@ from ..database import Base
 
 class Announcement(Base):
     __tablename__ = "announcements"
+    __table_args__ = (UniqueConstraint("created_by_id", "client_request_id", name="uq_announcement_request"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    client_request_id: Mapped[str | None] = mapped_column(String(36))
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     importance_code: Mapped[str] = mapped_column(String(50), nullable=False, server_default="NORMAL")

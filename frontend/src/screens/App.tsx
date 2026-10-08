@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { NotificationInbox } from "../features/notifications/NotificationInbox";
 import { useNotificationSummary } from "../features/notifications/api";
 import { safeAppLink } from "../features/notifications/model";
+import { TemplateEditor } from "../features/schedule/TemplateEditor";
 import { useBulkEventResponse, useScheduleEvent } from "../features/schedule/api";
 import { checkInIsOpen, eventInPeriod, eventIsArchived, needsFinalResponse, recordId, responseIsOpen, schedulePeriod } from "../features/schedule/model";
 import { useRecordFocus } from "../shared/ui/useRecordFocus";
@@ -103,15 +104,11 @@ import {
   useCreatePromoBlock,
   useUpdatePromoBlock,
   useDeletePromoBlock,
-  useDeleteScheduleTemplate,
   useAttendanceEvent,
   useUpdateMenuCard,
   useAdminSchedule,
   useCreateScheduleEvent,
-  useCreateScheduleTemplate,
   useDeleteScheduleEvent,
-  useGenerateScheduleTemplate,
-  useScheduleTemplates,
   useScheduleWeekType,
   useUpdateScheduleEvent,
   useUpdateSquad,
@@ -202,7 +199,6 @@ import type {
   ReportSummary,
   RoleCode,
   ScheduleEvent,
-  ScheduleTemplate,
   SearchResult,
   Squad,
   UserProfile,
@@ -477,17 +473,6 @@ function apiErrorDetail(error: unknown): string | null {
   return null;
 }
 
-function scheduleTemplateErrorMessage(error: unknown): string {
-  const detail = apiErrorDetail(error);
-  if (!detail) return "Не удалось сгенерировать шаблон";
-  if (detail.includes("schedule_week_a_start")) {
-    return "Для недель 1/2 укажите «Дата начала недели 1» в настройках.";
-  }
-  if (detail.includes("Week days")) {
-    return "Дни недели укажите числами 1-7 через запятую.";
-  }
-  return detail;
-}
 
 type Props = {
   webApp: {
@@ -626,6 +611,7 @@ type AppealPayload = {
 };
 
 type AnnouncementPayload = {
+  client_request_id?: string;
   title: string;
   body: string;
   target_type: string;
@@ -771,8 +757,8 @@ function roleMenu(profile: UserProfile): MenuCard[] {
     menuCard("notifications", "Уведомления", "личные сообщения", "notifications"),
     menuCard("appeals", "Обращение", "вопрос или сообщение", "appeals"),
   ];
-  if (level >= 4) {
-    cards.push(menuCard("announcements", "Объявления", "отправка в отделение", "announcements"));
+  if (level >= 3) {
+    cards.push(menuCard("announcements", "Объявления", level >= 4 ? "отправка в отделение" : "сообщения клуба и вложения", "announcements"));
   }
   if (level >= 5) {
     cards.push(menuCard("reports", "Отчёты", "посещаемость и нормативы", "reports"));
@@ -832,7 +818,7 @@ const viewMinLevels: Record<ViewKey, number> = {
   normatives: 0,
   learning: 0,
   notifications: 3,
-  announcements: 4,
+  announcements: 3,
   appeals: 3,
   reports: 5,
   people: 3,
@@ -1538,17 +1524,16 @@ export function App({ webApp }: Props) {
           <NotificationInbox onOpen={(path) => navigate(path)} />
         )}
 
-        {!isAuthenticating && hasToken && activeView === "announcements" && level >= 4 && (
+        {!isAuthenticating && hasToken && activeView === "announcements" && level >= 3 && (
           <AnnouncementsView
             items={announcements.data ?? []}
             level={level}
             squads={squadsList.data ?? adminSquads.data ?? []}
             profileSquadId={profile.squad_id}
-            onCreate={(payload) =>
-              createAnnouncement.mutate(payload, {
-                onSuccess: (item: { id: number }) => sendAnnouncement.mutate(item.id),
-              })
-            }
+            onCreate={async (payload) => {
+              const item = await createAnnouncement.mutateAsync(payload);
+              await sendAnnouncement.mutateAsync(item.id);
+            }}
             isSubmitting={createAnnouncement.isPending || sendAnnouncement.isPending}
           />
         )}
@@ -3554,9 +3539,10 @@ function AnnouncementsView({
   level: number;
   squads: Squad[];
   profileSquadId: number | null;
-  onCreate: (payload: AnnouncementPayload) => void;
+  onCreate: (payload: AnnouncementPayload) => Promise<void>;
   isSubmitting: boolean;
 }) {
+  const focusId = useRecordFocus("id", "announcement", items.map((item) => item.id).join(","));
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [targetType, setTargetType] = useState<"ALL" | "SQUAD">(() => level >= 6 ? "ALL" : "SQUAD");
@@ -3564,6 +3550,37 @@ function AnnouncementsView({
   const [sendToApp, setSendToApp] = useState(true);
   const [sendToTg, setSendToTg] = useState(true);
   const [attachment, setAttachment] = useState<{ id: number; name: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+  const submitting = useRef(false);
+  const request = useRef<{ snapshot: string; id: string } | null>(null);
+  const submit = async () => {
+    if (submitting.current || !canSubmit || upload.isPending) return;
+    submitting.current = true;
+    setBusy(true);
+    setNotice("");
+    const payload: AnnouncementPayload = {
+      title: title.trim(), body: body.trim(), target_type: targetType,
+      target_squad_id: selectedTargetSquadId, file_id: attachment?.id ?? null,
+      status_code: "DRAFT", send_to_tg: sendToTg, send_to_app: sendToApp,
+    };
+    const snapshot = JSON.stringify(payload);
+    if (request.current?.snapshot !== snapshot) request.current = { snapshot, id: crypto.randomUUID() };
+    try {
+      await onCreate({ ...payload, client_request_id: request.current.id });
+      setTitle("");
+      setBody("");
+      setAttachment(null);
+      request.current = null;
+      setNotice("Объявление отправлено в очередь доставки. Можно создать новое.");
+    } catch {
+      setNotice("Не удалось подтвердить отправку. Данные сохранены — повторите попытку: дубликат не создастся.");
+      toast("Не удалось отправить объявление", "error");
+    } finally {
+      submitting.current = false;
+      setBusy(false);
+    }
+  };
   const upload = useUploadFile();
   const openFile = useOpenFile();
   const ownSquadLabel = squads.find((squad) => squad.id === profileSquadId)?.name ?? (profileSquadId ? `Отделение #${profileSquadId}` : "отделение не назначено");
@@ -3587,7 +3604,7 @@ function AnnouncementsView({
         <h2>Объявления</h2>
         <span>{items.length} записей</span>
       </div>
-      <div className={`${styles.formBlock} ${styles.announcementComposer}`}>
+      {level >= 4 && <fieldset disabled={busy || isSubmitting} className={`${styles.formBlock} ${styles.announcementComposer}`}>
         <label className={styles.fieldLabel}>
           <span>Заголовок</span>
           <input placeholder="Коротко о главном" value={title} onChange={(e) => setTitle(e.target.value)} />
@@ -3632,6 +3649,7 @@ function AnnouncementsView({
             )}
             <FilePicker
               accept={FILE_PREVIEW_ACCEPT}
+              disabled={busy || isSubmitting || upload.isPending}
               label={upload.isPending ? "Загружаем..." : attachment ? "Заменить файл" : "Прикрепить файл"}
               className={`${styles.fileButton} ${styles.secondaryFileButton}`}
               onFile={async (file) => {
@@ -3650,35 +3668,28 @@ function AnnouncementsView({
           <textarea placeholder="Текст объявления" rows={2} value={body} onChange={(e) => setBody(e.target.value)} />
         </label>
         <div className={styles.announcementChannels} role="group" aria-label="Каналы отправки">
-          <button type="button" data-active={sendToApp} onClick={() => setSendToApp((value) => !value)}>Приложение</button>
-          <button type="button" data-active={sendToTg} onClick={() => setSendToTg((value) => !value)}>Telegram</button>
+          <button type="button" aria-pressed={sendToApp} data-active={sendToApp} onClick={() => setSendToApp((value) => !value)}>Приложение</button>
+          <button type="button" aria-pressed={sendToTg} data-active={sendToTg} onClick={() => setSendToTg((value) => !value)}>Telegram</button>
         </div>
         <button
           className={styles.primaryButton}
           type="button"
-          disabled={!canSubmit || isSubmitting || upload.isPending}
-          onClick={() => onCreate({
-            title,
-            body,
-            target_type: targetType,
-            target_squad_id: selectedTargetSquadId,
-            file_id: attachment?.id ?? null,
-            status_code: "DRAFT",
-            send_to_tg: sendToTg,
-            send_to_app: sendToApp,
-          })}
+          disabled={!canSubmit || busy || isSubmitting || upload.isPending}
+          onClick={() => void submit()}
         >
-          {isSubmitting ? "Отправляем..." : "Отправить объявление"}
+          {busy || isSubmitting ? "Отправляем..." : "Отправить объявление"}
         </button>
-      </div>
+      </fieldset>}
+      {notice && <p role="status">{notice}</p>}
       <div className={styles.list}>
         {items.length === 0 && <Empty text="Объявлений пока нет" />}
         {items.map((item) => (
-          <article className={styles.row} key={item.id}>
+          <article className={styles.row} data-linked={focusId === item.id} id={`announcement-${item.id}`} tabIndex={-1} key={item.id}>
             <AppIcon code="announcements" />
             <div>
               <strong>{item.title}</strong>
-              <span>{codeLabel(item.status_code)} · {item.body?.slice(0, 60)}</span>
+              <span>{item.status_code === "SENT" ? "Отправлено" : item.status_code === "PUBLISHED" ? "Опубликовано" : item.status_code === "DRAFT" ? "Черновик" : codeLabel(item.status_code)}</span>
+              <p className={styles.announcementBody}>{item.body}</p>
             </div>
             {item.file_id && (
               <div className={styles.filePreviewActions}>
@@ -5099,19 +5110,6 @@ function AdminView({
   const [learningScope, setLearningScope] = useState<"main" | "candidates">("main");
   const [newCandEvent, setNewCandEvent] = useState({ title: "", start_datetime: "", place: "", description: "" });
   const birthdayTemplateRef = useRef<HTMLTextAreaElement>(null);
-  const [newTemplate, setNewTemplate] = useState({
-    title: "",
-    description: "",
-    week_days: "1",
-    week_parity: "",
-    start_time: "16:00",
-    end_time: "",
-    place: "",
-    squad_id: "",
-    valid_from: "",
-    valid_to: "",
-    requires_response: true,
-  });
   const [editingEventId, setEditingEventId] = useState<number | null>(null);
   const [eventEdits, setEventEdits] = useState<Record<number, {
     title: string;
@@ -5131,13 +5129,9 @@ function AdminView({
   const updateSquad = useUpdateSquad();
   const updateMenu = useUpdateMenuCard();
   const adminSchedule = useAdminSchedule(tab === "schedule");
-  const scheduleTemplates = useScheduleTemplates(tab === "schedule");
   const createEvent = useCreateScheduleEvent();
   const updateEvent = useUpdateScheduleEvent();
   const deleteEvent = useDeleteScheduleEvent();
-  const createTemplate = useCreateScheduleTemplate();
-  const deleteTemplate = useDeleteScheduleTemplate();
-  const generateTemplate = useGenerateScheduleTemplate();
   const adminAppeals = useAdminAppeals(tab === "appeals");
   const updateAppeal = useUpdateAppeal();
   const adminJoinEvents = useAdminJoinEvents(tab === "events");
@@ -5617,123 +5611,7 @@ function AdminView({
           {/* ── Schedule ── */}
           {tab === "schedule" && (
             <>
-              <div className={styles.formBlock}>
-                <strong className={styles.formTitle}>Шаблон занятий</strong>
-                <input placeholder="Название шаблона *" value={newTemplate.title} onChange={(e) => setNewTemplate({ ...newTemplate, title: e.target.value })} />
-                <textarea placeholder="Описание" rows={2} value={newTemplate.description} onChange={(e) => setNewTemplate({ ...newTemplate, description: e.target.value })} />
-                <label className={styles.fieldLabel}>
-                  <span>Дни недели ISO (1=пн, 3=ср)</span>
-                  <input value={newTemplate.week_days} onChange={(e) => setNewTemplate({ ...newTemplate, week_days: e.target.value })} />
-                </label>
-                <label className={styles.fieldLabel}>
-                  <span>Чередование</span>
-                  <select value={newTemplate.week_parity} onChange={(e) => setNewTemplate({ ...newTemplate, week_parity: e.target.value })}>
-                    <option value="">Каждую неделю</option>
-                    <option value="A">Неделя 1</option>
-                    <option value="B">Неделя 2</option>
-                  </select>
-                </label>
-                <div className={styles.twoCol}>
-                  <label className={styles.fieldLabel}>
-                    <span>Начало</span>
-                    <input type="time" value={newTemplate.start_time} onChange={(e) => setNewTemplate({ ...newTemplate, start_time: e.target.value })} />
-                  </label>
-                  <label className={styles.fieldLabel}>
-                    <span>Конец</span>
-                    <input type="time" value={newTemplate.end_time} onChange={(e) => setNewTemplate({ ...newTemplate, end_time: e.target.value })} />
-                  </label>
-                </div>
-                <input placeholder="Место" value={newTemplate.place} onChange={(e) => setNewTemplate({ ...newTemplate, place: e.target.value })} />
-                <select value={newTemplate.squad_id} onChange={(e) => setNewTemplate({ ...newTemplate, squad_id: e.target.value })}>
-                  <option value="">Для всех отделений</option>
-                  {squads.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                </select>
-                <div className={styles.twoCol}>
-                  <label className={styles.fieldLabel}>
-                    <span>Действует с</span>
-                    <input type="date" value={newTemplate.valid_from} onChange={(e) => setNewTemplate({ ...newTemplate, valid_from: e.target.value })} />
-                  </label>
-                  <label className={styles.fieldLabel}>
-                    <span>Действует до</span>
-                    <input type="date" value={newTemplate.valid_to} onChange={(e) => setNewTemplate({ ...newTemplate, valid_to: e.target.value })} />
-                  </label>
-                </div>
-                <label className={styles.checkboxLine}>
-                  <input type="checkbox" checked={newTemplate.requires_response} onChange={(e) => setNewTemplate({ ...newTemplate, requires_response: e.target.checked })} />
-                  <span>Требуется ответ участников</span>
-                </label>
-                <button
-                  type="button"
-                  disabled={!newTemplate.title.trim() || !newTemplate.week_days.trim() || !newTemplate.start_time || createTemplate.isPending}
-                  onClick={() => createTemplate.mutate(
-                    {
-                      title: newTemplate.title.trim(),
-                      description: newTemplate.description || undefined,
-                      week_days: newTemplate.week_days,
-                      week_parity: newTemplate.week_parity ? (newTemplate.week_parity as "A" | "B") : null,
-                      start_time: newTemplate.start_time,
-                      end_time: newTemplate.end_time || null,
-                      place: newTemplate.place || null,
-                      squad_id: newTemplate.squad_id ? Number(newTemplate.squad_id) : null,
-                      valid_from: newTemplate.valid_from || null,
-                      valid_to: newTemplate.valid_to || null,
-                      requires_response: newTemplate.requires_response,
-                    },
-                    { onSuccess: () => { setNewTemplate({ title: "", description: "", week_days: "1", week_parity: "", start_time: "16:00", end_time: "", place: "", squad_id: "", valid_from: "", valid_to: "", requires_response: true }); toast("Шаблон создан", "success"); } },
-                  )}
-                >
-                  {createTemplate.isPending ? "Создаём..." : "Создать шаблон"}
-                </button>
-              </div>
-              <div className={styles.list}>
-                {scheduleTemplates.data?.length === 0 && <Empty text="Шаблонов пока нет" />}
-                {scheduleTemplates.data?.map((template: ScheduleTemplate) => (
-                  <div className={styles.row} key={template.id}>
-                    <AppIcon code="schedule" />
-                    <div>
-                      <strong>
-                        {template.title}
-                        <span className={styles.inlineBadge}>
-                          {template.week_parity === "A" ? "1" : template.week_parity === "B" ? "2" : "каждую"}
-                        </span>
-                      </strong>
-                      <span>{template.week_days} · {template.start_time.slice(0, 5)}{template.place ? ` · ${template.place}` : ""}</span>
-                    </div>
-                    <div className={styles.commandStrip} style={{ gridColumn: "1/-1" }}>
-                      <button
-                        type="button"
-                        disabled={generateTemplate.isPending}
-                        onClick={() => generateTemplate.mutate(
-                          { id: template.id, days: 60 },
-                          {
-                            onSuccess: (created) => toast(
-                              created.length ? `Сгенерировано: ${created.length}` : "Новых событий нет: даты уже заняты или не подходят",
-                              created.length ? "success" : "info",
-                            ),
-                            onError: (error) => toast(scheduleTemplateErrorMessage(error), "error"),
-                          },
-                        )}
-                      >
-                        Сгенерировать на 60 дней
-                      </button>
-                      <button
-                        type="button"
-                        className={styles.btnNotComing}
-                        disabled={deleteTemplate.isPending}
-                        onClick={() => {
-                          if (!window.confirm(`Удалить шаблон «${template.title}» и закрыть будущие занятия по нему?`)) return;
-                          deleteTemplate.mutate(template.id, {
-                            onSuccess: () => toast("Шаблон удалён, будущие занятия закрыты", "warning"),
-                            onError: (error) => toast(apiErrorDetail(error) ?? "Не удалось удалить шаблон", "error"),
-                          });
-                        }}
-                      >
-                        Удалить шаблон
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <TemplateEditor squads={squads} />
               <div className={styles.formBlock}>
                 <strong className={styles.formTitle}>Разовое событие</strong>
                 <input placeholder="Название события *" value={newEvent.title} onChange={(e) => setNewEvent({ ...newEvent, title: e.target.value })} />

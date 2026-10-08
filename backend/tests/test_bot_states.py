@@ -10,18 +10,14 @@ from app import bot, vk_bot
 from app.roles import RoleLevel
 
 
-def test_telegram_menu_shows_my_id_for_every_role() -> None:
-    public_reply_buttons = [button.text for row in bot.main_keyboard(RoleLevel.PUBLIC_USER).keyboard for button in row]
-    public_inline_buttons = [
-        button.text for row in bot.main_menu_inline(RoleLevel.PUBLIC_USER).inline_keyboard for button in row
-    ]
-    participant_inline_buttons = [
-        button.text for row in bot.main_menu_inline(RoleLevel.PARTICIPANT).inline_keyboard for button in row
-    ]
-
-    assert "Мой ID" in public_reply_buttons
-    assert "Мой ID" in public_inline_buttons
-    assert "Мой ID" in participant_inline_buttons
+def test_telegram_id_is_easy_to_find_without_crowding_daily_menu() -> None:
+    public = [button.text for row in bot.main_menu_inline(RoleLevel.PUBLIC_USER).inline_keyboard for button in row]
+    account = [button.text for row in bot.main_menu_inline(RoleLevel.PARTICIPANT, "account").inline_keyboard for button in row]
+    daily = [button.text for row in bot.main_menu_inline(RoleLevel.PARTICIPANT).inline_keyboard for button in row]
+    assert "Мой ID" in public
+    assert "Мой ID" in account
+    assert "Мои данные" in daily
+    assert "Мой ID" not in daily
 
 
 @pytest.mark.asyncio
@@ -59,7 +55,7 @@ async def test_telegram_cancel_clears_any_fsm_state(monkeypatch: pytest.MonkeyPa
     await bot.cancel_dialog(message, state)
 
     state.clear.assert_awaited_once()
-    assert "отменено" in message.answer.await_args.args[0].casefold()
+    assert any("отменено" in call.args[0].casefold() for call in message.answer.await_args_list)
 
 
 @pytest.mark.asyncio

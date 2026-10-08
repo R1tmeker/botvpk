@@ -216,7 +216,8 @@ import {
 } from "../components/LazyCharts";
 import { StatNumber } from "../components/StatNumber";
 import { ToastContainer, toast } from "../components/Toast";
-import { PromoCard, PromoStrip, AdminPromoCard, PromoEditForm } from "../components/PromoCard";
+import { PromoCard, AdminPromoCard, PromoEditForm } from "../components/PromoCard";
+import { PromoCarousel } from "../components/PromoCarousel";
 import { MilestoneToast } from "../components/Confetti";
 
 function FilePicker({ accept, onFile, label = "Прикрепить файл", className, iconSrc, disabled = false }: {
@@ -708,13 +709,12 @@ const roleLevels: Record<RoleCode, number> = {
   SUPER_ADMIN: 9,
 };
 
-type DashboardBlockCode = "next_event" | "personal_stats" | "commander_summary" | "promo";
+type DashboardBlockCode = "next_event" | "personal_stats" | "commander_summary";
 
 const dashboardBlocks: Array<{ code: DashboardBlockCode; title: string; required: boolean; commanderOnly?: boolean }> = [
   { code: "next_event", title: "Ближайшее занятие", required: true },
   { code: "personal_stats", title: "Личная статистика", required: false },
   { code: "commander_summary", title: "Сводка отделения", required: false, commanderOnly: true },
-  { code: "promo", title: "Инфоблок", required: false },
 ];
 
 const iconByCode: Record<string, LucideIcon> = {
@@ -840,135 +840,17 @@ function avatarPath(fileId: number | null | undefined) {
   return fileId ? apiPath(`/files/avatars/${fileId}`) : null;
 }
 
-function runPromoAction(block: PromoBlock, navigate: (view: string) => void) {
-  if (block.button_url) {
-    window.open(block.button_url, "_blank", "noopener");
-    return;
-  }
-  const sectionMap: Record<string, string> = {
-    OPEN_SECTION: "dashboard",
-    OPEN_SCHEDULE: "schedule",
-    OPEN_NORMATIVE: "normatives",
-    OPEN_COURSE: "learning",
-    OPEN_FORM: "appeals",
-  };
-  const section = block.action_type_code ? sectionMap[block.action_type_code] : null;
-  if (section) navigate(section);
-}
-
-function StatusCarousel({
-  profile,
-  level,
-  unreadCount,
-  promo,
-  navigate,
-}: {
-  profile: UserProfile;
-  level: number;
-  unreadCount: number;
-  promo: PromoBlock[];
-  navigate: (view: string) => void;
-}) {
-  const slides = useMemo(
-    () => [
-      { type: "profile" as const, key: "profile" },
-      ...promo.filter((block) => block.is_active).slice(0, 5).map((block) => ({
-        type: "promo" as const,
-        key: `promo-${block.id}`,
-        block,
-      })),
-    ],
-    [promo],
-  );
-  const [index, setIndex] = useState(0);
-  const [carouselPaused, setCarouselPaused] = useState(false);
-  const touchStartX = useRef<number | null>(null);
-  const current = slides[index % slides.length];
-  const goTo = useCallback((next: number) => {
-    setIndex((next + slides.length) % slides.length);
-  }, [slides.length]);
-
-  useEffect(() => {
-    if (index >= slides.length) setIndex(0);
-  }, [index, slides.length]);
-
-  useEffect(() => {
-    if (slides.length <= 1 || carouselPaused || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return undefined;
-    const timer = window.setInterval(() => {
-      if (!document.hidden) goTo(index + 1);
-    }, 6500);
-    return () => window.clearInterval(timer);
-  }, [goTo, index, slides.length, carouselPaused]);
-
-  const promoTheme: Record<string, string> = {
-    INFO: "linear-gradient(135deg, rgba(41,128,185,0.96), rgba(31,111,168,0.96))",
-    SUCCESS: "linear-gradient(135deg, rgba(39,174,96,0.96), rgba(30,148,80,0.96))",
-    WARNING: "linear-gradient(135deg, rgba(230,126,34,0.96), rgba(212,96,16,0.96))",
-    DANGER: "linear-gradient(135deg, rgba(231,76,60,0.96), rgba(192,57,43,0.96))",
-    PROMO: "linear-gradient(135deg, rgba(18,37,83,0.98), rgba(44,74,138,0.96))",
-    DEFAULT: "linear-gradient(135deg, rgba(18,37,83,0.98), rgba(44,74,138,0.96))",
-  };
-
+function ProfilePanel({ profile, level, unreadCount }: { profile: UserProfile; level: number; unreadCount: number }) {
   return (
-    <section
-      className={`${styles.statusPanel} ${styles.statusCarousel} ${current.type === "promo" ? styles.statusPromoPanel : ""}`}
-      style={current.type === "promo" ? { background: promoTheme[current.block.style_code] ?? promoTheme.DEFAULT } : undefined}
-      onMouseEnter={() => setCarouselPaused(true)}
-      onMouseLeave={() => setCarouselPaused(false)}
-      onFocusCapture={() => setCarouselPaused(true)}
-      onBlurCapture={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setCarouselPaused(false);
-      }}
-      onTouchStart={(event) => { touchStartX.current = event.touches[0].clientX; }}
-      onTouchEnd={(event) => {
-        if (touchStartX.current === null || slides.length <= 1) return;
-        const diff = touchStartX.current - event.changedTouches[0].clientX;
-        if (Math.abs(diff) > 42) goTo(index + (diff > 0 ? 1 : -1));
-        touchStartX.current = null;
-      }}
-    >
-      {current.type === "profile" ? (
-        <>
-          <div key={`${current.key}-info`} className={styles.carouselSlide}>
-            <h1>{level >= 3 ? "Личный кабинет" : "Вступление в клуб"}</h1>
-            <p>{profile.full_name}</p>
-          </div>
-          <dl key={`${current.key}-stats`} className={styles.carouselSlide}>
-            <div>
-              <dt>Отделение</dt>
-              <dd>{profile.squad_id ?? "—"}</dd>
-            </div>
-            <div>
-              <dt>Уведомления</dt>
-              <dd>{unreadCount}</dd>
-            </div>
-          </dl>
-        </>
-      ) : (
-        <div key={current.key} className={`${styles.statusPromoContent} ${styles.carouselSlide}`}>
-          <span>Промо ВПК</span>
-          <h1>{current.block.title}</h1>
-          {current.block.body && <p>{current.block.body}</p>}
-          {current.block.button_text && (current.block.button_url || current.block.action_type_code) && (
-            <button type="button" onClick={() => runPromoAction(current.block, navigate)}>
-              {current.block.button_text}
-            </button>
-          )}
-        </div>
-      )}
-      {slides.length > 1 && (
-        <div className={styles.statusDots} aria-label="Слайды">
-          {slides.map((slide, dotIndex) => (
-            <button
-              key={slide.key}
-              type="button"
-              aria-label={`Открыть слайд ${dotIndex + 1}`}
-              data-active={dotIndex === index % slides.length}
-              onClick={() => goTo(dotIndex)}
-            />
-          ))}
-        </div>
-      )}
+    <section className={styles.statusPanel} aria-label="Личный кабинет">
+      <div>
+        <h1>{level >= 3 ? "Личный кабинет" : "Вступление в клуб"}</h1>
+        <p>{profile.full_name}</p>
+      </div>
+      <dl>
+        <div><dt>Отделение</dt><dd>{profile.squad_id ?? "—"}</dd></div>
+        <div><dt>Уведомления</dt><dd>{unreadCount}</dd></div>
+      </dl>
     </section>
   );
 }
@@ -1274,13 +1156,8 @@ export function App({ webApp }: Props) {
 
       {showDashboardChrome && (
         <>
-          <StatusCarousel
-            profile={profile}
-            level={level}
-            unreadCount={unreadCount}
-            promo={promo}
-            navigate={openView}
-          />
+          <ProfilePanel profile={profile} level={level} unreadCount={unreadCount} />
+          <PromoCarousel blocks={promo} navigate={openView} />
 
           <section className={styles.menuGrid} aria-label="Разделы">
             {gridCards.map((card) => (
@@ -1379,7 +1256,6 @@ export function App({ webApp }: Props) {
               attendance={visibleAttendance}
               normatives={visibleNormatives}
               attendanceStats={attendanceStats.data}
-              promo={promo}
               settings={dashboardSettings}
               streak={myStreak.data ?? null}
               activityFeed={activityFeed.data ?? []}
@@ -1869,7 +1745,6 @@ function Dashboard({
   attendance,
   normatives,
   attendanceStats,
-  promo,
   settings,
   streak,
   activityFeed,
@@ -1887,7 +1762,6 @@ function Dashboard({
   attendance: AttendanceRecord[];
   normatives: Normative[];
   attendanceStats?: ReportSummary;
-  promo: PromoBlock[];
   settings: DashboardSetting[];
   streak: StreakData;
   activityFeed: ActivityItem[];
@@ -1982,7 +1856,7 @@ function Dashboard({
               />
             );
           }
-          return <PromoStrip key={block.code} blocks={promo} navigate={navigate} />;
+          return null;
         })}
       </div>
       <DashboardCustomizer

@@ -17,7 +17,7 @@ const AUDIENCE_LABELS: Record<string, string> = {
   PARTICIPANT: "Участники", COMMANDER: "Командиры", ADMIN: "Администраторы",
 };
 
-function openAction(block: PromoBlock, navigate: NavigateFn) {
+export function openPromoAction(block: PromoBlock, navigate: NavigateFn) {
   if (block.button_url) {
     window.open(block.button_url, "_blank", "noopener");
     return;
@@ -65,7 +65,7 @@ export function PromoCard({ block, navigate, compact = false }: { block: PromoBl
           type="button"
           className={styles.cardBtn}
           style={{ background: theme.btnBg, color: theme.btnText }}
-          onClick={() => openAction(block, navigate)}
+          onClick={() => openPromoAction(block, navigate)}
         >
           {block.button_text}
         </button>

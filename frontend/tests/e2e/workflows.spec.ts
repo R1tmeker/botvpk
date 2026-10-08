@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { mockApp } from "./fixtures/app";
+import { mockApp, longName } from "./fixtures/app";
 
 test.use({ locale: "ru-RU", timezoneId: "America/New_York" });
 
@@ -125,4 +125,79 @@ test("participant can open an announcement and its attachment without composer c
   await expect(page.getByText(body, { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Открыть вложение" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Отправить объявление" })).toHaveCount(0);
+});
+
+const promoSlides = [
+  { id: 11, title: "Новый сезон в ВПК «Звезда»", body: "Тренировки, новые навыки и команда рядом. Посмотри ближайшие занятия и выбери своё направление.", button_text: "К расписанию", action_type_code: "OPEN_SCHEDULE", style_code: "PROMO", sort_order: 0, is_active: true },
+  { id: 12, title: "Стань сильнее вместе с командой", body: "Проверь свою подготовку и следи за личным прогрессом.", button_text: "Открыть нормативы", action_type_code: "OPEN_NORMATIVE", style_code: "INFO", sort_order: 1, is_active: true },
+  { id: 13, title: "Есть идея для клуба?", body: "Расскажи о ней командованию — предложения участников помогают нам становиться лучше.", button_text: "Написать", action_type_code: "OPEN_FORM", style_code: "SUCCESS", sort_order: 2, is_active: true },
+  { id: 14, title: "Неактивное промо", style_code: "PROMO", sort_order: 3, is_active: false },
+];
+
+for (const [theme, width] of [["dark", 320], ["light", 390]] as const) {
+  test(`promo is a separate slider below profile ${theme} ${width}px`, async ({ page }, info) => {
+    await page.setViewportSize({ width, height: 844 });
+    await mockApp(page, "SUPER_ADMIN", theme);
+    await page.route("**/api/dashboard/bootstrap", (route) => route.fulfill({ json: { settings: [], promo: promoSlides, action_items: [] } }));
+    await page.goto("/");
+    const profile = page.getByRole("region", { name: "Личный кабинет", exact: true });
+    const slider = page.getByRole("region", { name: "Промо клуба", exact: true });
+    await expect(slider.getByRole("heading", { name: promoSlides[0].title })).toBeVisible();
+    await expect(profile.getByText(longName)).toBeVisible();
+    expect(await slider.evaluate((element) => element.previousElementSibling?.getAttribute("aria-label"))).toBe("Личный кабинет");
+    expect(await slider.evaluate((element) => element.nextElementSibling?.getAttribute("aria-label"))).toBe("Разделы");
+    await expect(page.getByRole("heading", { name: promoSlides[0].title })).toHaveCount(1);
+    await slider.getByRole("button", { name: "Следующее промо" }).click();
+    await expect(slider.getByRole("heading", { name: promoSlides[1].title })).toBeVisible();
+    await expect(profile.getByText(longName)).toBeVisible();
+    await slider.getByRole("button", { name: "Промо 3", exact: true }).click();
+    await expect(slider.getByRole("button", { name: "Промо 3", exact: true })).toHaveAttribute("aria-current", "true");
+    await slider.dispatchEvent("touchstart", { touches: [{ identifier: 1, clientX: 250, clientY: 200 }] });
+    await slider.dispatchEvent("touchend", { changedTouches: [{ identifier: 1, clientX: 100, clientY: 204 }] });
+    await expect(slider.getByRole("heading", { name: promoSlides[0].title })).toBeVisible();
+    // The synthetic swipe must not turn into an accidental CTA click.
+    await slider.click({ position: { x: 4, y: 4 } });
+    await expect(slider.getByRole("button", { name: "Приостановить промо" })).toHaveCount(0);
+    const targets = await slider.locator("button").evaluateAll((buttons) => buttons.map((button) => ({ width: button.getBoundingClientRect().width, height: button.getBoundingClientRect().height })));
+    expect(targets.every(({ width, height }) => width >= 44 && height >= 44)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
+    await page.screenshot({ path: info.outputPath("home-promo.png") });
+    await slider.getByRole("button", { name: "К расписанию" }).click();
+    await expect(page).toHaveURL(/\/schedule$/);
+  });
+}
+
+test("empty promo is hidden and a single promo has no slider controls", async ({ page }) => {
+  await mockApp(page, "PARTICIPANT", "dark");
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Личный кабинет", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Промо клуба", exact: true })).toHaveCount(0);
+  await page.route("**/api/dashboard/bootstrap", (route) => route.fulfill({ json: { settings: [], promo: [promoSlides[0]], action_items: [] } }));
+  await page.reload();
+  const slider = page.getByRole("region", { name: "Промо клуба", exact: true });
+  await expect(slider.getByRole("heading", { name: promoSlides[0].title })).toBeVisible();
+  await expect(slider.getByRole("button", { name: "Следующее промо" })).toHaveCount(0);
+});
+
+test("promo rotates automatically and pauses while a control has focus", async ({ page }) => {
+  await mockApp(page, "PARTICIPANT", "dark");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.clock.install();
+  await page.route("**/api/dashboard/bootstrap", (route) => route.fulfill({ json: { settings: [], promo: promoSlides.slice(0, 2), action_items: [] } }));
+  await page.goto("/");
+  const slider = page.getByRole("region", { name: "Промо клуба", exact: true });
+  await expect(slider.getByRole("heading", { name: promoSlides[0].title })).toBeVisible();
+  await page.clock.runFor(6600);
+  await expect(slider.getByRole("heading", { name: promoSlides[1].title })).toBeVisible();
+  await slider.getByRole("button", { name: "Следующее промо" }).focus();
+  await page.clock.runFor(7000);
+  await expect(slider.getByRole("heading", { name: promoSlides[1].title })).toBeVisible();
+  const pause = slider.getByRole("button", { name: "Приостановить промо" });
+  await pause.dispatchEvent("touchstart", { touches: [{ identifier: 1, clientX: 220, clientY: 260 }] });
+  await pause.dispatchEvent("touchend", { changedTouches: [{ identifier: 1, clientX: 220, clientY: 260 }] });
+  await pause.click();
+  await expect(slider.getByRole("button", { name: "Включить автопереключение промо" })).toBeVisible();
+  await page.locator("h1").click();
+  await page.clock.runFor(7000);
+  await expect(slider.getByRole("heading", { name: promoSlides[1].title })).toBeVisible();
 });

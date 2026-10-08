@@ -1,0 +1,61 @@
+.carousel {
+  --promo-accent: #b9cfff;
+  position: relative;
+  isolation: isolate;
+  min-width: 0;
+  overflow: hidden;
+  margin-top: 14px;
+  padding: 20px 20px 12px;
+  border: 1px solid rgba(150, 179, 245, 0.3);
+  border-radius: 18px;
+  background: radial-gradient(ellipse at 100% 0%, rgba(97, 135, 231, 0.3), transparent 65%), linear-gradient(125deg, #122248, #263d70);
+  color: #fff;
+  box-shadow: 0 8px 24px rgba(6, 18, 44, 0.16);
+  touch-action: pan-y;
+
+  &::before, &::after {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    right: -55px;
+    top: -90px;
+    width: 220px;
+    height: 220px;
+    border: 1px solid rgba(210, 225, 255, 0.11);
+    border-radius: 50%;
+    pointer-events: none;
+  }
+  &::after { right: -88px; top: -115px; width: 290px; height: 290px; }
+  &[data-style="SUCCESS"] { --promo-accent: #a5eed0; background: linear-gradient(125deg, #103e3d, #205c56); }
+  &[data-style="WARNING"] { --promo-accent: #ffe1a8; background: linear-gradient(125deg, #543820, #6b482f); }
+  &[data-style="DANGER"] { --promo-accent: #ffc4c3; background: linear-gradient(125deg, #572a38, #753848); }
+  &[data-style="INFO"] { --promo-accent: #b1e3ff; background: linear-gradient(125deg, #15374e, #245575); }
+
+  button { font: inherit; cursor: pointer; }
+  button:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
+}
+
+.eyebrow { display: flex; align-items: center; gap: 7px; color: var(--promo-accent); font-size: 11px; font-weight: 800; letter-spacing: 0.07em; text-transform: uppercase; }
+.eyebrow svg { width: 15px; height: 15px; }
+.slide {
+  min-width: 0;
+  padding-block: 12px 8px;
+  animation: enter 280ms ease both;
+  h2 { margin: 0; max-width: 700px; color: #fff; font-size: clamp(21px, 4.5vw, 28px); font-weight: 850; line-height: 1.2; overflow-wrap: anywhere; }
+  p { margin: 10px 0 0; max-width: 700px; color: #e2e9f7; font-size: 14px; line-height: 1.55; white-space: pre-line; overflow-wrap: anywhere; }
+}
+.carousel .action { display: inline-flex; align-items: center; justify-content: center; gap: 12px; max-width: 100%; min-height: 44px; margin-top: 16px; padding: 10px 16px; border: 1px solid rgba(255, 255, 255, 0.8); border-radius: 12px; background: #f0f4ff; color: #152b53; font-size: 13px; font-weight: 800; overflow-wrap: anywhere; text-align: start; }
+.action svg { flex: 0 0 17px; width: 17px; height: 17px; }
+.controls { display: flex; align-items: center; justify-content: space-between; gap: 4px; margin-inline: -8px; }
+.pages, .arrows { display: flex; align-items: center; min-width: 0; }
+.carousel .dot { position: relative; flex: 0 0 44px; width: 44px; height: 44px; padding: 0; border: 0; background: transparent; }
+.dot::after { content: ""; position: absolute; top: 19px; left: 19px; width: 6px; height: 6px; border-radius: 6px; background: rgba(255, 255, 255, 0.4); transition: width 200ms, left 200ms; }
+.dot[aria-current="true"]::after { left: 12px; width: 20px; background: #fff; }
+.counter { padding-left: 8px; color: #d5dff2; font-size: 12px; font-variant-numeric: tabular-nums; }
+.carousel .arrows button { display: grid; place-items: center; flex: 0 0 44px; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 12px; background: transparent; color: #e0e9ff; }
+.arrows svg { width: 19px; height: 19px; }
+@media (hover: hover) { .carousel .arrows button:hover { background: rgba(255, 255, 255, 0.1); } .carousel .action:hover { background: #fff; } }
+@media (max-width: 359px) { .carousel { padding: 16px 14px 8px; } }
+@media (min-width: 600px) { .carousel { padding: 24px 24px 12px; } }
+@keyframes enter { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: translateX(0); } }
+@media (prefers-reduced-motion: reduce) { .slide { animation: none; } .dot::after { transition: none; } }

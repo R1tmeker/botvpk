@@ -19,6 +19,8 @@ from ..models import (
 )
 from ..roles import CONFIRMED_ROLES, RoleLevel
 from ..utils.audit import record_audit
+from ..config import get_settings
+from ..utils.timezones import format_club_datetime
 from .attendance import sync_automatic_grade
 
 
@@ -108,37 +110,29 @@ async def pending_event_responses(
 
 
 async def _send_response_reminders(session: AsyncSession, *, now: datetime, scoped_squad_id: int | None) -> int:
-    affected = 0
+    if not await session.scalar(select(func.pg_try_advisory_xact_lock(825739103))):
+        return 0
+    events_by_user: dict[int, list[ScheduleEvent]] = {}
     for event, missing in await pending_event_responses(session, now=now, scoped_squad_id=scoped_squad_id):
-        recent = set(
-            (
-                await session.scalars(
-                    select(Notification.user_id).where(
-                        Notification.user_id.in_(missing),
-                        Notification.type_code == "EVENT_RESPONSE_REMINDER",
-                        Notification.entity_name == "schedule_events",
-                        Notification.entity_id == event.id,
-                        Notification.created_at >= now - timedelta(hours=24),
-                    )
-                )
-            ).all()
-        )
-        for user_id in sorted(missing - recent):
-            session.add(
-                Notification(
-                    user_id=user_id,
-                    type_code="EVENT_RESPONSE_REMINDER",
-                    category_code="SCHEDULE",
-                    title="Нужен ответ на событие",
-                    body=f"Подтвердите участие: {event.title}",
-                    entity_name="schedule_events",
-                    entity_id=event.id,
-                    deep_link=f"/schedule?event={event.id}",
-                    send_to_tg=True,
-                )
-            )
-            affected += 1
-    return affected
+        for user_id in missing:
+            events_by_user.setdefault(user_id, []).append(event)
+    if not events_by_user:
+        return 0
+    recent = set((await session.scalars(select(Notification.user_id).where(
+        Notification.user_id.in_(events_by_user), Notification.type_code == "EVENT_RESPONSE_REMINDER",
+        Notification.created_at >= now - timedelta(hours=24),
+    ))).all())
+    for user_id in sorted(events_by_user.keys() - recent):
+        events = events_by_user[user_id]
+        lines = [f"• {format_club_datetime(event.start_datetime, get_settings().timezone, '%d.%m %H:%M')} — {event.title}" for event in events[:10]]
+        if len(events) > 10:
+            lines.append(f"И ещё занятий: {len(events) - 10}.")
+        session.add(Notification(
+            user_id=user_id, type_code="EVENT_RESPONSE_REMINDER", category_code="SCHEDULE",
+            title="Подтвердите участие в занятиях", body="\n".join(lines) + "\n\nОткройте расписание и выберите ответы.",
+            entity_name="schedule_response_reminders", deep_link="/schedule", send_to_tg=True,
+        ))
+    return len(events_by_user.keys() - recent)
 
 
 async def _assign_pending_normatives(
@@ -303,6 +297,7 @@ async def _retry_failed_notifications(session: AsyncSession, *, now: datetime) -
     for item in items:
         item.delivery_error = None
         item.deliver_after = now
+        item.vk_retry_after = now
     return len(items)
 
 

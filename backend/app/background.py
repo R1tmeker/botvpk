@@ -34,6 +34,7 @@ from .models.file import File as StoredFile
 from .services.delivery import vk_rate_limit_pause
 from .services.notification_delivery import announcement_attachment, deliver_telegram_notification, deliver_vk_notification
 from .services.notifications import quiet_hours_delivery_time
+from .services.vk_delivery_policy import VK_QUEUE_LOCK, pending_vk_statement, suppression_reason
 from .services.web_push import send_web_push_notification, web_push_available
 from .utils.audit import utcnow
 from .utils.timezones import club_timezone_label, format_club_datetime
@@ -129,6 +130,10 @@ async def _notification_exists(
 
 def _build_notification_keyboard(notification: Notification, settings: Settings) -> InlineKeyboardMarkup | None:
     """Return inline keyboard for notifications that need one."""
+    if notification.type_code == "EVENT_RESPONSE_REMINDER":
+        return InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="Ответить в расписании", callback_data="menu:schedule"),
+        ]])
     if notification.type_code == "SCHEDULE_POLL" and notification.entity_id:
         event_id = notification.entity_id
         return InlineKeyboardMarkup(inline_keyboard=[[
@@ -284,34 +289,21 @@ async def send_pending_vk_notifications(settings: Settings) -> None:
     if not settings.vk_bot_enabled or not settings.vk_group_token:
         return
     async with AsyncSessionLocal() as session:
-        preference = aliased(NotificationPreference)
+        # This also covers multiple backend replicas and overlapping releases.
+        if not await session.scalar(select(func.pg_try_advisory_xact_lock(VK_QUEUE_LOCK))):
+            return
         now = utcnow()
-        rows = (
-            await session.execute(
-                select(Notification, User.vk_id)
-                .join(User, User.id == Notification.user_id)
-                .outerjoin(
-                    preference,
-                    and_(
-                        preference.user_id == Notification.user_id,
-                        preference.category_code == Notification.category_code,
-                    ),
-                )
-                .where(
-                    Notification.send_to_tg.is_(True),
-                    Notification.vk_sent_at.is_(None),
-                    or_(preference.id.is_(None), preference.vk_enabled.is_(True)),
-                    or_(Notification.deliver_after.is_(None), Notification.deliver_after <= now),
-                    User.vk_id.is_not(None),
-                    User.status_code == "ACTIVE",
-                )
-                .order_by(Notification.created_at)
-                .limit(50)
-            )
-        ).all()
+        rows = (await session.execute(pending_vk_statement(now))).all()
         if not rows:
             return
         for notification, vk_id in rows:
+            reason = await suppression_reason(session, notification, now)
+            if reason:
+                notification.vk_suppressed_at = now
+                notification.vk_suppression_reason = reason
+                if notification.tg_sent_at is not None:
+                    notification.delivery_error = None
+                continue
             user_preference = await session.scalar(
                 select(NotificationPreference).where(
                     NotificationPreference.user_id == notification.user_id,
@@ -334,9 +326,11 @@ async def send_pending_vk_notifications(settings: Settings) -> None:
                     vk_notification_keyboard(notification, settings.site_url or settings.mini_app_url), stored)
                 await vk_rate_limit_pause()
                 notification.vk_sent_at = utcnow()
+                notification.vk_retry_after = None
                 notification.delivery_error = None
             except Exception as exc:  # noqa: BLE001
                 notification.delivery_error = str(exc)[:2000]
+                notification.vk_retry_after = now + timedelta(minutes=5)
                 logger.exception("Failed to send VK notification id=%s", notification.id)
         await session.commit()
 

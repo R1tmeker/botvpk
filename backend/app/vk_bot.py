@@ -36,6 +36,7 @@ from .services.heartbeat import start_heartbeat_thread
 from .services.normatives import submit_normative as submit_normative_service
 from .services.observability import configure_json_logging, init_sentry
 from .services.sessions import consume_fixed_window_limit, delete_user_sessions
+from .services import vk_inbound
 from .utils.audit import record_audit
 from .utils.channel_link import redeem_link_code
 from .utils.password import hash_password, verify_password
@@ -1200,6 +1201,28 @@ async def _go_back(message, user: User, site_url: str | None) -> None:
 
 
 async def handle_message(message) -> None:
+    if getattr(message, "out", False) or message.from_id <= 0:
+        return
+    redis = _get_redis()
+    peer = getattr(message, "peer_id", message.from_id)
+    if peer != message.from_id:
+        # Do not answer every ordinary message in a group conversation.
+        if (message.text or "").strip().casefold() not in {"/start", "/menu", "меню", "начать"}:
+            return
+        if not await vk_inbound.claim(f"botvpk:vk:group-help:{peer}", redis, ttl=600):
+            return
+    key = vk_inbound.message_key(message)
+    if key and not await vk_inbound.claim(key, redis):
+        return
+    try:
+        await _handle_message(vk_inbound.RepeatableReplies(message, key) if key else message)
+    except Exception:
+        if key:
+            await vk_inbound.release(key, redis)
+        raise
+
+
+async def _handle_message(message) -> None:
     settings = get_settings()
     vk_id = message.from_id
     text = (message.text or "").strip()

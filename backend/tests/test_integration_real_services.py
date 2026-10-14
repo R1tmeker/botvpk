@@ -190,3 +190,58 @@ async def test_bot_queries_include_custom_checkin_windows_and_current_events() -
             assert "Custom window" in text
             assert not actionable
         await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_vk_queue_paces_recipients_preserves_files_and_suppresses_duplicates(monkeypatch):
+    from app import background
+    from app.models import Notification
+    from app.services.vk_delivery_policy import pending_vk_statement
+    now = utcnow()
+    async with AsyncSessionLocal() as session:
+        users = [User(telegram_id=int(f"95{secrets.randbelow(10**8):08d}"), vk_id=int(f"95{secrets.randbelow(10**8):08d}"), full_name="VK Delivery Integration", role_code="PARTICIPANT", status_code="ACTIVE") for _ in range(2)]
+        session.add_all(users)
+        await session.flush()
+        items = [Notification(user_id=user.id, type_code="SYSTEM", entity_name="integration_antispam", entity_id=1, title="Same automated message", body="Body", created_at=now-timedelta(minutes=2), send_to_tg=True) for user in users for _ in range(3)]
+        session.add_all(items)
+        await session.flush()
+        settings = SimpleNamespace(vk_bot_enabled=True, vk_group_token="test", site_url=None, mini_app_url=None, timezone="Asia/Barnaul")
+        context = AsyncMock()
+        context.__aenter__.return_value = session
+        monkeypatch.setattr(background, "AsyncSessionLocal", lambda: context)
+        monkeypatch.setattr(background, "utcnow", lambda: now)
+        monkeypatch.setattr(session, "commit", AsyncMock(side_effect=session.flush))
+        send = AsyncMock()
+        monkeypatch.setattr(background, "deliver_vk_notification", send)
+        monkeypatch.setattr(background, "vk_rate_limit_pause", AsyncMock())
+        await background.send_pending_vk_notifications(settings)
+        assert send.await_count == 2  # One per recipient, despite six queued items.
+        assert not (await session.execute(pending_vk_statement(now))).all()
+        monkeypatch.setattr(background, "utcnow", lambda: now+timedelta(minutes=2))
+        await background.send_pending_vk_notifications(settings)
+        assert send.await_count == 2  # Exact automated repeats remain in inbox only.
+        assert sum(item.vk_suppressed_at is not None for item in items) == 2
+        assert await session.scalar(select(func.count(Notification.id)).where(Notification.id.in_([item.id for item in items]))) == 6
+        await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_mass_reminder_is_one_digest_per_member_and_repeat_click_is_safe(monkeypatch):
+    from app.models import Notification
+    from app.services import action_center
+    now = utcnow()
+    async with AsyncSessionLocal() as session:
+        user = User(telegram_id=int(f"94{secrets.randbelow(10**8):08d}"), full_name="Reminder Integration", role_code="PARTICIPANT", status_code="ACTIVE")
+        session.add(user)
+        await session.flush()
+        events = [ScheduleEvent(title=f"Class {index}", start_datetime=now+timedelta(days=index+1), created_by_user_id=user.id) for index in range(4)]
+        session.add_all(events)
+        await session.flush()
+        monkeypatch.setattr(action_center, "pending_event_responses", AsyncMock(return_value=[(event, {user.id}) for event in events]))
+        assert await action_center._send_response_reminders(session, now=now, scoped_squad_id=None) == 1
+        await session.flush()
+        assert await action_center._send_response_reminders(session, now=now, scoped_squad_id=None) == 0
+        queued = list((await session.scalars(select(Notification).where(Notification.user_id==user.id))).all())
+        assert len(queued) == 1 and all(event.title in queued[0].body for event in events)
+        assert queued[0].deep_link == "/schedule"
+        await session.rollback()

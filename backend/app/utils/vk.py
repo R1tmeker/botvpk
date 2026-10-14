@@ -23,6 +23,8 @@ def notification_keyboard(notification, site_url: str | None) -> str:
                 [button("Уточню", {**base, "response_code": "MAYBE"})]]
     elif notification.entity_name == "appeals" and notification.entity_id:
         rows.append([button("Переписка", {"action": "appeal_thread", "id": notification.entity_id, "page": 0})])
+    elif notification.type_code == "EVENT_RESPONSE_REMINDER":
+        rows.append([button("Ответить в расписании", {"action": "menu", "section": "schedule"})])
     rows.append([button("Подробнее", {"action": "inbox_view", "id": notification.id, "page": 0})])
     if site_url and notification.deep_link and notification.deep_link.startswith("/") and not notification.deep_link.startswith("//") and "\\" not in notification.deep_link:
         from urllib.parse import urljoin

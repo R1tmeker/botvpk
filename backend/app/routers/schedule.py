@@ -32,7 +32,7 @@ from ..services.schedule_templates import generate_events, notify_schedule_chang
 from ..services.events import respond_to_event
 from ..services.realtime import publish_realtime_event
 from ..utils.audit import model_snapshot, record_audit, utcnow
-from ..utils.timezones import current_local_date, local_day_utc_bounds
+from ..utils.timezones import current_local_date, format_club_datetime, local_day_utc_bounds
 
 router = APIRouter(prefix="/schedule", tags=["schedule"])
 
@@ -302,7 +302,7 @@ async def create_event(
         new_value=payload.model_dump(mode="json"),
     )
     if event.requires_response:
-        start_str = event.start_datetime.strftime("%d.%m %H:%M") if event.start_datetime else "—"
+        start_str = format_club_datetime(event.start_datetime, get_settings().timezone, "%d.%m %H:%M") if event.start_datetime else "—"
         place_str = f"\nМесто: {event.place}" if event.place else ""
         participants = (await session.scalars(
             select(UserModel).where(

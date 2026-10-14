@@ -12,7 +12,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from .config import Settings
+from .config import Settings, get_settings
 from .database import AsyncSessionLocal
 from .models import (
     Appeal,
@@ -36,6 +36,7 @@ from .services.notification_delivery import announcement_attachment, deliver_tel
 from .services.notifications import quiet_hours_delivery_time
 from .services.web_push import send_web_push_notification, web_push_available
 from .utils.audit import utcnow
+from .utils.timezones import club_timezone_label, format_club_datetime
 from .utils.vk import notification_keyboard as vk_notification_keyboard
 
 logger = logging.getLogger(__name__)
@@ -414,10 +415,8 @@ async def materialize_absent_responses() -> None:
                 .where(
                     EventResponse.response_code.in_(("NOT_COMING", "NO")),
                     ScheduleEvent.status_code != "CANCELLED",
-                    (
-                        (ScheduleEvent.end_datetime.is_not(None) & (ScheduleEvent.end_datetime <= now))
-                        | (ScheduleEvent.start_datetime <= now)
-                    ),
+                    func.coalesce(ScheduleEvent.end_datetime, ScheduleEvent.start_datetime + timedelta(minutes=20)) <= now,
+                    func.coalesce(ScheduleEvent.self_checkin_closes_at, ScheduleEvent.start_datetime) <= now,
                 )
                 .limit(200)
             )
@@ -501,6 +500,7 @@ async def remind_commanders_about_attendance() -> None:
 async def send_event_reminders_2h() -> None:
     """Runs every 15m. Sends a personalized reminder 2h before event start."""
     now = utcnow()
+    club_timezone = get_settings().timezone
     window_start = now + timedelta(hours=2)
     window_end = now + timedelta(hours=2, minutes=15)  # matches job interval
 
@@ -543,7 +543,8 @@ async def send_event_reminders_2h() -> None:
                     continue
                 response = await _get_user_event_response(session, user.id, event.id)
                 rc = response.response_code if response else None
-                start_str = event.start_datetime.strftime("%H:%M")
+                start_str = format_club_datetime(event.start_datetime, club_timezone, "%H:%M")
+                start_str += f" · {club_timezone_label(club_timezone)}"
                 place_str = f" • {event.place}" if event.place else ""
                 if rc == "COMING":
                     body = f"Через 2 часа занятие «{event.title}»!\n{start_str}{place_str}\nВы сказали «Приду»"
@@ -581,8 +582,8 @@ async def send_morning_briefing(settings: Settings) -> None:
     now_local = datetime.now(tz)
     today_local_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
     today_local_end = today_local_start + timedelta(days=1)
-    today_start = today_local_start.astimezone(timezone.utc).replace(tzinfo=None)
-    today_end = today_local_end.astimezone(timezone.utc).replace(tzinfo=None)
+    today_start = today_local_start.astimezone(timezone.utc)
+    today_end = today_local_end.astimezone(timezone.utc)
 
     async with AsyncSessionLocal() as session:
         events = list(
@@ -646,9 +647,9 @@ async def send_morning_briefing(settings: Settings) -> None:
             if user.id in already_sent_ids:
                 continue
 
-            lines: list[str] = ["Доброе утро!"]
+            lines: list[str] = ["Доброе утро!", f"Время клуба: {club_timezone_label(settings.timezone)}."]
             for event in user_events:
-                start_str = event.start_datetime.strftime("%H:%M")
+                start_str = format_club_datetime(event.start_datetime, settings.timezone, "%H:%M")
                 place_str = f" · {event.place}" if event.place else ""
                 resp = responses_map.get((user.id, event.id))
                 response_label = {"COMING": "Приду", "NOT_COMING": "Не приду", "MAYBE": "Пока не знаю"}.get(resp.response_code if resp else "", "Без ответа")
@@ -945,7 +946,7 @@ async def check_overdue_normatives() -> None:
                     )
                 ).all()
             )
-            deadline_str = norm.deadline_at.strftime("%d.%m %H:%M") if norm.deadline_at else "—"
+            deadline_str = format_club_datetime(norm.deadline_at, get_settings().timezone, "%d.%m %H:%M") if norm.deadline_at else "—"
             for user in users:
                 if user.id in submitted_user_ids:
                     continue

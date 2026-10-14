@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, or_, select
 
 from ..config import get_settings
 from ..models import Attendance, EventResponse, Normative, NormativeSubmission, ScheduleEvent, User
 from ..roles import role_level
+from ..utils.timezones import club_timezone_label, format_club_datetime
 from .event_response_policy import EventResponseError, validate_event_available
 
 
 def local_time(value: datetime) -> str:
-    return value.astimezone(ZoneInfo(get_settings().timezone)).strftime("%d.%m.%Y %H:%M")
+    return format_club_datetime(value, get_settings().timezone)
 
 
 def accessible_events(user: User):
@@ -45,7 +45,7 @@ async def schedule_card(session, user: User, page: int = 0):
     except EventResponseError:
         actionable = False
     label = {"COMING": "Приду", "NOT_COMING": "Не приду", "MAYBE": "Уточню"}.get(response, "Нет ответа" if event.requires_response else "Не требуется")
-    lines = [event.title[:255], local_time(event.start_datetime)]
+    lines = [event.title[:255], local_time(event.start_datetime), f"Время клуба: {club_timezone_label(get_settings().timezone)}."]
     if event.place:
         lines.append(f"Место: {event.place[:400]}")
     if event.description:

@@ -647,12 +647,14 @@ async def _send_notification(message, user: User, payload: dict, site_url: str |
     rows = []
     if item.entity_name == "appeals" and item.entity_id:
         rows.append([_text_button("Переписка", payload={"action": "appeal_thread", "id": item.entity_id, "page": 0})])
+    detail_url = None
     if site_url and item.deep_link:
         from urllib.parse import urljoin
         if item.deep_link.startswith("/") and not item.deep_link.startswith("//") and "\\" not in item.deep_link:
-            rows.append([_link_button("Открыть на сайте", urljoin(site_url.rstrip("/") + "/", item.deep_link.lstrip("/")))])
+            detail_url = urljoin(site_url.rstrip("/") + "/", item.deep_link.lstrip("/"))
     rows.append([_text_button("← Назад", payload={"action": "inbox_page", "page": page_number(payload.get("page", 0)) or 0, "unread": payload.get("unread") is True})])
-    await message.answer(f"{item.title[:255]}\n{local_time(item.created_at)}\n\n{(item.body or 'Без дополнительного текста.')[:3000]}", keyboard=inline_keyboard(rows))
+    text = f"{item.title[:255]}\n{local_time(item.created_at)}\n\n{(item.body or 'Без дополнительного текста.')[:3000]}"
+    await message.answer(with_site_link(text, detail_url), keyboard=inline_keyboard(rows))
     await publish_realtime_event(get_settings(), event_type="notifications.read", user_id=user.id, query_keys=["notifications", "dashboard"])
 
 

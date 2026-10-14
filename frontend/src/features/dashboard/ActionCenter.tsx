@@ -3,7 +3,7 @@ import styles from "../../screens/App.module.scss";
 
 export function actionItemLabel(actionCode: string): string {
   return {
-    send_reminder: "Напомнить всем",
+    send_reminder: "Напомнить участникам",
     assign_reviewer: "Взять в работу",
     assign: "Назначить на себя",
     mark_all_present: "Все присутствовали",
@@ -27,7 +27,7 @@ export function ActionCenter({
     <section className={styles.actionCenter} aria-labelledby="action-center-title">
       <div className={styles.actionCenterHeader}>
         <h3 id="action-center-title">Требует действия</h3>
-        <span>{items.reduce((sum, item) => sum + item.count, 0)}</span>
+        <span>Задачи: {items.length}</span>
       </div>
       <div className={styles.actionCenterList}>
         {items.map((item) => (

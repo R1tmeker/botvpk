@@ -54,6 +54,47 @@ async function contrast(page: Page, selector: string) {
 }
 
 for (const theme of ["dark", "light"]) {
+  test(`action counts, readable history and Barnaul time ${theme}`, async ({ page }, info) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.clock.setFixedTime(new Date("2026-10-14T08:00:00Z"));
+    await mockApp(page, "SUPER_ADMIN", theme);
+    const event = { id: 42, title: "Занятие в ВУЦ", start_datetime: "2026-10-14T09:00:00Z", end_datetime: "2026-10-14T10:00:00Z",
+      status_code: "PLANNED", squad_id: null, requires_response: true, my_response_code: null, self_checkin_enabled: false };
+    await page.route("**/api/schedule", route => route.fulfill({ json: [event] }));
+    await page.route("**/api/attendance/my?**", route => route.fulfill({ json: [{ ...history[0], event_id: 42, event_title: event.title, event_start_datetime: event.start_datetime }] }));
+    await page.route("**/api/dashboard/bootstrap", route => route.fulfill({ json: { settings: [], promo: [], action_items: [
+      { code: "MISSING_EVENT_RESPONSES", title: "Участники без ответа", description: "Занятий: 4 · ожидается ответов: 8.", severity: "warning", count: 3, deep_link: "/schedule", bulk_actions: ["send_reminder"] },
+      { code: "NOTIFICATION_DELIVERY_ERRORS", title: "Ошибки доставки уведомлений", description: "Не доставлено уведомлений: 11. Это сообщения, а не число участников.", severity: "critical", count: 11, deep_link: "/admin", bulk_actions: ["retry_delivery"] },
+    ] } }));
+    await page.goto("/");
+    await expect(page.getByText("Задачи: 2", { exact: true })).toBeVisible();
+    await expect(page.getByText("ожидается ответов: 8", { exact: false })).toBeVisible();
+    await contrast(page, '[class*="actionCenter"]');
+    await page.locator('[class*="actionCenter"]').first().screenshot({ path: info.outputPath(`action-counts-${theme}.png`) });
+    await page.goto("/attendance");
+    await page.getByRole("button", { name: "История", exact: true }).click();
+    await expect(page.getByText("Занятие в ВУЦ", { exact: true })).toBeVisible();
+    await expect(page.getByText("Присутствовал · 14.10.2026, 16:00", { exact: true })).toBeVisible();
+    await contrast(page, '[class*="_row_"] strong, [class*="_row_"] span');
+    await page.screenshot({ path: info.outputPath(`history-${theme}.png`) });
+    await page.goto("/announcements");
+    const select = page.locator('label').filter({ has: page.locator('span', { hasText: /^Получатели$/ }) }).locator('select');
+    expect((await select.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await page.goto("/admin");
+    await page.getByRole("button", { name: "Расписание", exact: true }).click();
+    let created: Record<string, unknown> | null = null;
+    await page.route("**/api/schedule/events", async route => {
+      created = route.request().postDataJSON();
+      await route.fulfill({ json: { ...event, ...created } });
+    });
+    await page.getByPlaceholder("Название события *", { exact: true }).fill("Время Барнаула");
+    await page.getByLabel("Начало * · Барнаул (МСК+4)", { exact: true }).fill("2026-10-14T16:00");
+    await page.getByRole("button", { name: "Создать событие", exact: true }).click();
+    await expect.poll(() => created?.start_datetime).toBe("2026-10-14T09:00:00.000Z");
+  });
+}
+
+for (const theme of ["dark", "light"]) {
   for (const width of [320, 390, 768]) {
     test(`reported visual defects ${theme} ${width}px`, async ({ page }, info) => {
       test.setTimeout(90_000);

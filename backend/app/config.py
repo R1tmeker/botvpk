@@ -10,7 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     bot_token: str = Field(..., alias="BOT_TOKEN")
     database_url: str = Field(..., alias="DATABASE_URL")
-    timezone: str = Field("Asia/Novosibirsk", validation_alias=AliasChoices("TZ", "TIMEZONE"))
+    timezone: str = Field("Asia/Barnaul", validation_alias=AliasChoices("TZ", "TIMEZONE"))
     app_env: str = Field("development", alias="APP_ENV")
     api_host: str = Field("0.0.0.0", alias="API_HOST")
     api_port: int = Field(8000, alias="API_PORT")

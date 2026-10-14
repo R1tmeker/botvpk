@@ -6,7 +6,7 @@ import {
 } from "../../api/queries";
 import { toast } from "../../components/Toast";
 import type { ScheduleTemplate, Squad } from "../../types/api";
-import { getAppTimezone } from "../../utils/format";
+import { getAppTimezoneLabel } from "../../utils/format";
 import styles from "../../screens/App.module.scss";
 
 const weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
@@ -84,7 +84,7 @@ export function TemplateEditor({ squads }: { squads: Squad[] }) {
   return <>
     <div className={styles.formBlock} ref={editor}>
       <strong className={styles.formTitle}>{editing ? `Редактирование: ${editing.title}` : "Регулярные занятия"}</strong>
-      <p className={styles.templateHint}>Выберите дни и время, проверьте даты и создайте занятия. Время клуба: {getAppTimezone()}.</p>
+      <p className={styles.templateHint}>Выберите дни и время, проверьте даты и создайте занятия. Время клуба: {getAppTimezoneLabel()}.</p>
       <fieldset className={styles.templateFields} disabled={busy || preview.isPending}>
         <label className={styles.fieldLabel}><span>Название шаблона *</span><input ref={titleInput} maxLength={255} placeholder="Например, строевая подготовка" value={form.title} onChange={(e) => patch({ title: e.target.value })} /></label>
         <fieldset className={styles.templateDays}><legend>Дни занятий *</legend>

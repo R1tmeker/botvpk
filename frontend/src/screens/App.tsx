@@ -173,6 +173,7 @@ import {
   formatPhoneDisplay,
   formatUnreadCount,
   getAppTimezone,
+  getAppTimezoneLabel,
   phoneInputToRaw,
   setAppTimezone,
   toDateTimeLocal,
@@ -2331,7 +2332,7 @@ function CandidateEventDetail({
           <strong>{event.place || "место уточняется"}</strong>
         </div>
         <div>
-          <span>Окончание · {getAppTimezone()}</span>
+          <span>Окончание · {getAppTimezoneLabel()}</span>
           <strong>{event.end_datetime ? formatDate(event.end_datetime) : "по ситуации"}</strong>
         </div>
         {event.capacity !== null && (
@@ -5491,7 +5492,7 @@ function AdminView({
                 <input placeholder="Название события *" value={newEvent.title} onChange={(e) => setNewEvent({ ...newEvent, title: e.target.value })} />
                 <div className={styles.twoCol}>
                   <label className={styles.fieldLabel}>
-                    <span>Начало * · {getAppTimezone()}</span>
+                    <span>Начало * · {getAppTimezoneLabel()}</span>
                     <input type="datetime-local" value={newEvent.start_datetime} onChange={(e) => setNewEvent({ ...newEvent, start_datetime: e.target.value })} />
                   </label>
                   <label className={styles.fieldLabel}>
@@ -5951,7 +5952,7 @@ function AdminView({
               <div className={styles.formBlock}>
                 <label className={styles.fieldLabel}><span>Название события *</span><input required aria-label="Название события для кандидатов" placeholder="Название события *" value={newCandEvent.title} onChange={(e) => setNewCandEvent({ ...newCandEvent, title: e.target.value })} /></label>
                 <label className={styles.fieldLabel}>
-                  <span>Начало * · {getAppTimezone()}</span>
+                  <span>Начало * · {getAppTimezoneLabel()}</span>
                   <input type="datetime-local" value={newCandEvent.start_datetime} onChange={(e) => setNewCandEvent({ ...newCandEvent, start_datetime: e.target.value })} />
                 </label>
                 <input placeholder="Место проведения" value={newCandEvent.place} onChange={(e) => setNewCandEvent({ ...newCandEvent, place: e.target.value })} />

@@ -8,6 +8,16 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def format_club_datetime(value: datetime, timezone_name: str, pattern: str = "%d.%m.%Y %H:%M") -> str:
+    """Database timestamps are UTC; never infer the host's local timezone."""
+    aware = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    return aware.astimezone(ZoneInfo(timezone_name)).strftime(pattern)
+
+
+def club_timezone_label(timezone_name: str) -> str:
+    return {"Asia/Barnaul": "Барнаул (МСК+4)", "Asia/Novosibirsk": "Новосибирск (МСК+4)"}.get(timezone_name, timezone_name)
+
+
 def current_local_date(timezone_name: str, *, now: datetime | None = None) -> date:
     current = now or utc_now()
     if current.tzinfo is None:

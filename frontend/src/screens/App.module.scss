@@ -1081,21 +1081,21 @@
 }
 
 .btnComing {
-  border-color: #27ae60 !important;
+  border-color: #19753d !important;
   color: #fff !important;
-  background: #27ae60 !important;
+  background: #19753d !important;
 }
 
 .btnNotComing {
-  border-color: #e74c3c !important;
+  border-color: #c13028 !important;
   color: #fff !important;
-  background: #e74c3c !important;
+  background: #c13028 !important;
 }
 
 .btnMaybe {
-  border-color: #95a5a6 !important;
+  border-color: #515f76 !important;
   color: #fff !important;
-  background: #95a5a6 !important;
+  background: #515f76 !important;
 }
 
 .btnComingOutline {
@@ -2543,7 +2543,7 @@ button[data-active="true"] .navIcon {
     min-height: 28px;
     border-radius: 999px;
     color: #fff;
-    background: var(--red);
+    background: #c13028;
     font-size: 12px;
     font-weight: 900;
   }
@@ -4820,3 +4820,23 @@ button[data-active="true"] .navIcon {
 .announcementBody { white-space: pre-wrap; overflow-wrap: anywhere; margin: 10px 0 0; color: var(--text); line-height: 1.5; }
 
 .shell .templateFields .secondaryButton, .shell .templateCard .secondaryButton { background: var(--surface-strong); color: var(--text); border: 1px solid var(--border); }
+
+/* Keep text legible independently of Telegram's system theme and native controls. */
+.shell .row strong, .shell .nextItem strong { color: var(--text); }
+.shell .row > .appIcon { color: var(--text-soft); }
+.shell .fileButton {
+  background: var(--surface-strong) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border) !important;
+}
+.shell select {
+  appearance: none;
+  -webkit-appearance: none;
+  min-height: 44px;
+  min-block-size: 44px;
+  padding-inline-end: 36px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-soft) 50%), linear-gradient(135deg, var(--text-soft) 50%, transparent 50%) !important;
+  background-position: calc(100% - 20px) center, calc(100% - 15px) center !important;
+  background-size: 5px 5px !important;
+  background-repeat: no-repeat !important;
+}

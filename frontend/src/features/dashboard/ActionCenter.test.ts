@@ -4,7 +4,7 @@ import { actionItemLabel } from "./ActionCenter";
 
 describe("actionItemLabel", () => {
   it("localizes known command actions", () => {
-    expect(actionItemLabel("send_reminder")).toBe("Напомнить всем");
+    expect(actionItemLabel("send_reminder")).toBe("Напомнить участникам");
     expect(actionItemLabel("retry_delivery")).toBe("Повторить доставку");
   });
 

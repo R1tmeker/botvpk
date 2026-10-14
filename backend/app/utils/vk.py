@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import random
 import json
+import logging
 
 import httpx
 
 VK_API_URL = "https://api.vk.com/method"
 VK_API_VERSION = "5.199"
+logger = logging.getLogger(__name__)
 
 
 def notification_keyboard(notification, site_url: str | None) -> str:
@@ -29,7 +31,9 @@ def notification_keyboard(notification, site_url: str | None) -> str:
 
 
 class VkApiError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, error_code: int | None = None):
+        super().__init__(message)
+        self.error_code = error_code
 
 
 async def vk_call(token: str, method: str, params: dict) -> dict:
@@ -39,7 +43,7 @@ async def vk_call(token: str, method: str, params: dict) -> dict:
     data = resp.json()
     if "error" in data:
         err = data["error"]
-        raise VkApiError(f"VK {method} failed: {err.get('error_code')} {err.get('error_msg')}")
+        raise VkApiError(f"VK {method} failed: {err.get('error_code')} {err.get('error_msg')}", error_code=err.get("error_code"))
     return data.get("response", {})
 
 
@@ -61,7 +65,47 @@ async def send_vk_message(
         params["keyboard"] = keyboard
     if attachment:
         params["attachment"] = attachment
-    return await vk_call(token, "messages.send", params)
+    try:
+        return await vk_call(token, "messages.send", params)
+    except VkApiError as exc:
+        # VK can reject an otherwise valid external domain in open_link. The
+        # rejected message was not accepted; preserve native buttons and retry
+        # this same message ID once instead of blocking notification delivery.
+        if exc.error_code != 911 or "invalid link" not in str(exc).lower() or not keyboard:
+            raise
+        changed, fallback = keyboard_without_links(keyboard)
+        if not changed:
+            raise
+        params = params.copy()
+        if fallback:
+            params["keyboard"] = fallback
+        else:
+            params.pop("keyboard", None)
+        logger.warning("VK rejected an external keyboard link; retrying with native buttons")
+        return await vk_call(token, "messages.send", params)
+
+
+def keyboard_without_links(keyboard: str) -> tuple[bool, str | None]:
+    try:
+        data = json.loads(keyboard)
+    except (ValueError, TypeError):
+        return False, None
+    if not isinstance(data, dict) or not isinstance(data.get("buttons"), list):
+        return False, None
+    rows, changed = [], False
+    for row in data["buttons"]:
+        if not isinstance(row, list) or any(not isinstance(button, dict) or not isinstance(button.get("action"), dict) for button in row):
+            return False, None
+        native = [button for button in row if button["action"].get("type") != "open_link"]
+        changed |= len(native) != len(row)
+        if native:
+            rows.append(native)
+    if not changed:
+        return False, None
+    if not rows:
+        return True, None
+    data["buttons"] = rows
+    return True, json.dumps(data, ensure_ascii=False)
 
 
 async def upload_vk_attachment(token: str, peer_id: int, path: str, mime_type: str) -> str:

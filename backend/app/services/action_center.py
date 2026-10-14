@@ -66,12 +66,13 @@ async def _unclosed_events(
     return result
 
 
-async def _send_response_reminders(
+async def pending_event_responses(
     session: AsyncSession,
     *,
     now: datetime,
     scoped_squad_id: int | None,
-) -> int:
+) -> list[tuple[ScheduleEvent, set[int]]]:
+    """The same eligible member/event pairs drive both the card and reminders."""
     event_query = select(ScheduleEvent).where(
         ScheduleEvent.requires_response.is_(True),
         ScheduleEvent.status_code != "CANCELLED",
@@ -83,35 +84,37 @@ async def _send_response_reminders(
         event_query = event_query.where(
             (ScheduleEvent.squad_id.is_(None)) | (ScheduleEvent.squad_id == scoped_squad_id)
         )
+    events = list((await session.scalars(event_query.order_by(ScheduleEvent.start_datetime, ScheduleEvent.id).limit(100))).all())
+    if not events:
+        return []
+    users_query = select(User.id, User.squad_id).where(User.status_code == "ACTIVE", User.role_code.in_(CONFIRMED_ROLES))
+    if scoped_squad_id is not None:
+        users_query = users_query.where(User.squad_id == scoped_squad_id)
+    users = (await session.execute(users_query)).all()
+    responses = (await session.execute(select(EventResponse.event_id, EventResponse.user_id).where(
+        EventResponse.event_id.in_([event.id for event in events]),
+        EventResponse.response_code.in_(("COMING", "NOT_COMING")),
+    ))).all()
+    answered: dict[int, set[int]] = {}
+    for event_id, user_id in responses:
+        answered.setdefault(event_id, set()).add(user_id)
+    pending = []
+    for event in events:
+        eligible = {user_id for user_id, user_squad in users if event.squad_id is None or user_squad == event.squad_id}
+        missing = eligible - answered.get(event.id, set())
+        if missing:
+            pending.append((event, missing))
+    return pending
+
+
+async def _send_response_reminders(session: AsyncSession, *, now: datetime, scoped_squad_id: int | None) -> int:
     affected = 0
-    for event in (await session.scalars(event_query.limit(100))).all():
-        target_squad_id = event.squad_id if event.squad_id is not None else scoped_squad_id
-        user_query = select(User).where(
-            User.status_code == "ACTIVE",
-            User.role_code.in_(CONFIRMED_ROLES),
-        )
-        if target_squad_id is not None:
-            user_query = user_query.where(User.squad_id == target_squad_id)
-        users = list((await session.scalars(user_query)).all())
-        if not users:
-            continue
-        user_ids = [user.id for user in users]
-        answered = set(
-            (
-                await session.scalars(
-                    select(EventResponse.user_id).where(
-                        EventResponse.event_id == event.id,
-                        EventResponse.user_id.in_(user_ids),
-                        EventResponse.response_code.in_(("COMING", "NOT_COMING")),
-                    )
-                )
-            ).all()
-        )
+    for event, missing in await pending_event_responses(session, now=now, scoped_squad_id=scoped_squad_id):
         recent = set(
             (
                 await session.scalars(
                     select(Notification.user_id).where(
-                        Notification.user_id.in_(user_ids),
+                        Notification.user_id.in_(missing),
                         Notification.type_code == "EVENT_RESPONSE_REMINDER",
                         Notification.entity_name == "schedule_events",
                         Notification.entity_id == event.id,
@@ -120,12 +123,10 @@ async def _send_response_reminders(
                 )
             ).all()
         )
-        for user in users:
-            if user.id in answered or user.id in recent:
-                continue
+        for user_id in sorted(missing - recent):
             session.add(
                 Notification(
-                    user_id=user.id,
+                    user_id=user_id,
                     type_code="EVENT_RESPONSE_REMINDER",
                     category_code="SCHEDULE",
                     title="Нужен ответ на событие",

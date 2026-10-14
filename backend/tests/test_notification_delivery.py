@@ -5,6 +5,7 @@ import pytest
 from aiogram.types import FSInputFile
 
 from app.services import notification_delivery as delivery
+from app.utils import vk
 
 
 def test_telegram_announcement_button_opens_full_announcement():
@@ -70,3 +71,28 @@ async def test_vk_attachment_is_native_and_retries_use_same_message_id(tmp_path,
     assert send.await_args.kwargs["attachment"] == "photo-123_456"
     assert send.await_args.kwargs["keyboard"] == "buttons"
     assert send.await_args_list[0].kwargs["random_id"] == send.await_args_list[1].kwargs["random_id"]
+
+
+async def test_vk_rejected_site_link_keeps_message_attachment_and_native_buttons(monkeypatch):
+    import json
+    keyboard = vk.notification_keyboard(SimpleNamespace(type_code="ANNOUNCEMENT", id=42, deep_link="/announcements?id=42", entity_name="announcements", entity_id=42), "https://example.com")
+    call = AsyncMock(side_effect=[vk.VkApiError("button has invalid link", error_code=911), {"message_id": 7}])
+    monkeypatch.setattr(vk, "vk_call", call)
+    result = await vk.send_vk_message("test", 123, "Text", keyboard=keyboard, attachment="photo-1_2", random_id=4200)
+    assert result == {"message_id": 7}
+    first, retry = [args.args[2] for args in call.await_args_list]
+    assert first["random_id"] == retry["random_id"] == 4200
+    assert first["attachment"] == retry["attachment"] == "photo-1_2"
+    assert first["message"] == retry["message"] == "Text"
+    actions = [button["action"] for row in json.loads(retry["keyboard"])["buttons"] for button in row]
+    assert [action["label"] for action in actions] == ["Подробнее"]
+    assert all(action["type"] == "text" for action in actions)
+
+
+@pytest.mark.parametrize("code,message", [(901,"Cannot send"), (911,"Invalid color")])
+async def test_vk_other_errors_are_not_masked(monkeypatch, code, message):
+    call = AsyncMock(side_effect=vk.VkApiError(message, error_code=code))
+    monkeypatch.setattr(vk, "vk_call", call)
+    with pytest.raises(vk.VkApiError):
+        await vk.send_vk_message("test", 123, "Text", keyboard='{"inline":true,"buttons":[]}')
+    call.assert_awaited_once()

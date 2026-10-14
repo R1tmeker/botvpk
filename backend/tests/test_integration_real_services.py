@@ -82,6 +82,34 @@ async def test_postgres_self_checkin_is_idempotent_inside_transaction() -> None:
 
 
 @pytest.mark.asyncio
+async def test_automatic_absence_waits_for_the_end_of_class(monkeypatch):
+    from app import background
+    from app.models import Attendance, EventResponse
+    now = utcnow()
+    async with AsyncSessionLocal() as session:
+        user = User(telegram_id=int(f"96{secrets.randbelow(10**8):08d}"), full_name="Absence Integration", role_code="PARTICIPANT", status_code="ACTIVE")
+        session.add(user)
+        await session.flush()
+        event = ScheduleEvent(title="Ongoing class", start_datetime=now-timedelta(minutes=5), end_datetime=now+timedelta(hours=1), created_by_user_id=user.id)
+        session.add(event)
+        await session.flush()
+        session.add(EventResponse(event_id=event.id, user_id=user.id, response_code="NOT_COMING"))
+        await session.flush()
+        monkeypatch.setattr(session, "commit", AsyncMock(side_effect=session.flush))
+        context = AsyncMock()
+        context.__aenter__.return_value = session
+        monkeypatch.setattr(background, "AsyncSessionLocal", lambda:context)
+        monkeypatch.setattr(background, "utcnow", lambda:now)
+        await background.materialize_absent_responses()
+        query = select(Attendance).where(Attendance.event_id==event.id, Attendance.user_id==user.id)
+        assert await session.scalar(query) is None
+        monkeypatch.setattr(background, "utcnow", lambda:now+timedelta(hours=2))
+        await background.materialize_absent_responses()
+        assert (await session.scalar(query)).status_code == "ABSENT"
+        await session.rollback()
+
+
+@pytest.mark.asyncio
 async def test_announcement_retry_and_telegram_only_delivery_are_idempotent(monkeypatch):
     from uuid import uuid4
     from app.models import Announcement, Notification

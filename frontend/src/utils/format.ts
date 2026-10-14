@@ -1,11 +1,15 @@
-let appTimezone = "Asia/Novosibirsk";
+let appTimezone = "Asia/Barnaul";
 
 export function setAppTimezone(timezone: string) {
-  appTimezone = timezone || "Asia/Novosibirsk";
+  appTimezone = timezone || "Asia/Barnaul";
 }
 
 export function getAppTimezone(): string {
   return appTimezone;
+}
+
+export function getAppTimezoneLabel(): string {
+  return ({ "Asia/Barnaul": "Барнаул (МСК+4)", "Asia/Novosibirsk": "Новосибирск (МСК+4)" } as Record<string, string>)[appTimezone] ?? appTimezone;
 }
 
 export function formatPhoneDisplay(raw: string | null | undefined): string {

@@ -12,7 +12,6 @@ from ..dependencies.auth import CurrentUser, require_role
 from ..models import (
     Appeal,
     Attendance,
-    EventResponse,
     JoinApplication,
     MenuCard,
     NormativeSubmission,
@@ -22,10 +21,10 @@ from ..models import (
     User,
     UserDashboardSetting,
 )
-from ..roles import CONFIRMED_ROLES, RoleLevel
+from ..roles import RoleLevel
 from ..schemas.core import DashboardSettingRead, DashboardSettingsUpdate, MessageResponse
 from ..schemas.product import ActionItem, ActionItemExecutionResult, DashboardBootstrap
-from ..services.action_center import ActionCenterError, execute_action_item
+from ..services.action_center import ActionCenterError, execute_action_item, pending_event_responses
 from ..services.realtime import publish_realtime_event
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -119,52 +118,19 @@ async def dashboard_action_items(
     items: list[ActionItem] = []
     scoped_squad_id = current_user.squad_id if current_user.role_level < RoleLevel.SQUAD_COMMANDER else None
 
-    upcoming_query = select(ScheduleEvent).where(
-        ScheduleEvent.requires_response.is_(True),
-        ScheduleEvent.status_code != "CANCELLED",
-        ScheduleEvent.start_datetime > now,
-        ScheduleEvent.start_datetime <= now + timedelta(days=14),
-        (ScheduleEvent.response_deadline_at.is_(None)) | (ScheduleEvent.response_deadline_at >= now),
-    )
-    if scoped_squad_id is not None:
-        upcoming_query = upcoming_query.where(
-            (ScheduleEvent.squad_id.is_(None)) | (ScheduleEvent.squad_id == scoped_squad_id)
-        )
-    upcoming = list((await session.scalars(upcoming_query.limit(100))).all())
-    missing_responses = 0
-    next_response_due = None
-    for event in upcoming:
-        users_query = select(func.count(User.id)).where(
-            User.status_code == "ACTIVE",
-            User.role_code.in_(CONFIRMED_ROLES),
-        )
-        if event.squad_id is not None:
-            users_query = users_query.where(User.squad_id == event.squad_id)
-        elif scoped_squad_id is not None:
-            users_query = users_query.where(User.squad_id == scoped_squad_id)
-        expected = int(await session.scalar(users_query) or 0)
-        answered_query = select(func.count(EventResponse.id)).join(User, User.id == EventResponse.user_id).where(
-            EventResponse.event_id == event.id, EventResponse.response_code.in_(("COMING", "NOT_COMING")),
-            User.status_code == "ACTIVE", User.role_code.in_(CONFIRMED_ROLES),
-        )
-        if event.squad_id is not None:
-            answered_query = answered_query.where(User.squad_id == event.squad_id)
-        elif scoped_squad_id is not None:
-            answered_query = answered_query.where(User.squad_id == scoped_squad_id)
-        answered = int(await session.scalar(answered_query) or 0)
-        missing = max(0, expected - answered)
-        missing_responses += missing
-        if missing and event.response_deadline_at and (next_response_due is None or event.response_deadline_at < next_response_due):
-            next_response_due = event.response_deadline_at
-    if missing_responses:
+    pending = await pending_event_responses(session, now=now, scoped_squad_id=scoped_squad_id)
+    missing_people = set().union(*(user_ids for _, user_ids in pending))
+    missing_responses = sum(len(user_ids) for _, user_ids in pending)
+    deadlines = [event.response_deadline_at for event, _ in pending if event.response_deadline_at]
+    if missing_people:
         items.append(
             ActionItem(
                 code="MISSING_EVENT_RESPONSES",
                 title="Участники без ответа",
-                description="Запросите ответы на ближайшие события.",
+                description=f"Занятий: {len(pending)} · ожидается ответов: {missing_responses}. Период — ближайшие 14 дней.",
                 severity="warning",
-                count=missing_responses,
-                due_at=next_response_due,
+                count=len(missing_people),
+                due_at=min(deadlines) if deadlines else None,
                 deep_link="/schedule?filter=unanswered",
                 bulk_actions=["send_reminder"],
             )
@@ -279,7 +245,7 @@ async def dashboard_action_items(
                 ActionItem(
                     code="NOTIFICATION_DELIVERY_ERRORS",
                     title="Ошибки доставки уведомлений",
-                    description="Проверьте канал и повторите неуспешные отправки.",
+                    description=f"Не доставлено уведомлений: {delivery_errors}. Это сообщения, а не число участников.",
                     severity="critical",
                     count=delivery_errors,
                     due_at=now,

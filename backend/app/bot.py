@@ -2281,7 +2281,7 @@ async def inline_schedule(query: InlineQuery) -> None:
 
     results = []
     for event in events:
-        start_str = event.start_datetime.strftime("%d.%m %H:%M")
+        start_str = bot_event_time(event.start_datetime)
         place_str = f" · {event.place}" if event.place else ""
         text = f"{event.title}\n{start_str}{place_str}"
         results.append(

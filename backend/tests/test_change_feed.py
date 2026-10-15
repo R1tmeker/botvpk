@@ -81,16 +81,24 @@ async def test_new_application_reaches_admins_once_and_skips_inactive_reviewers(
 async def test_authenticated_candidates_also_receive_status_updates(monkeypatch, level):
     from fastapi import FastAPI
     from httpx import ASGITransport, AsyncClient
+    from app.database import get_db_session
     from app.dependencies.auth import get_current_user
     from app.routers import events
 
+    session = AsyncMock()
+
+    async def database_session():
+        yield session
+
     async def fake_stream(*args, **kwargs):
+        session.close.assert_awaited_once()
         yield 'event: connected\ndata: {"type":"connected"}\n\n'
 
     monkeypatch.setattr(events, "event_stream", fake_stream)
     app = FastAPI()
     app.include_router(events.router)
     app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(user_id=7, role_level=level)
+    app.dependency_overrides[get_db_session] = database_session
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/events/stream")
         assert response.status_code == 200

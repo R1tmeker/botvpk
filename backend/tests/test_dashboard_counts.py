@@ -42,7 +42,7 @@ async def test_pending_pairs_exclude_archived_people_and_ineligible_events():
 
 @pytest.mark.asyncio
 async def test_dashboard_counts_people_once_across_multiple_classes(monkeypatch):
-    event = SimpleNamespace(response_deadline_at=None)
+    event = SimpleNamespace(start_datetime=datetime.now(timezone.utc) + timedelta(hours=2), end_datetime=None, response_deadline_at=datetime.now(timezone.utc) - timedelta(days=1))
     monkeypatch.setattr(dashboard, "pending_event_responses", AsyncMock(return_value=[(event, {1, 2}), (event, {1, 2, 3})]))
     db = AsyncMock()
     db.scalar.return_value = 0
@@ -52,3 +52,4 @@ async def test_dashboard_counts_people_once_across_multiple_classes(monkeypatch)
     assert items[0].count == 3
     assert "Открытых голосований: 2" in items[0].description
     assert "ожидается ответов: 5" in items[0].description
+    assert items[0].due_at == event.start_datetime + timedelta(days=1)

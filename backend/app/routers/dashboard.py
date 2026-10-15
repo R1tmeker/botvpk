@@ -22,6 +22,7 @@ from ..models import (
     UserDashboardSetting,
 )
 from ..roles import RoleLevel
+from ..services.event_response_policy import response_window
 from ..schemas.core import DashboardSettingRead, DashboardSettingsUpdate, MessageResponse
 from ..schemas.product import ActionItem, ActionItemExecutionResult, DashboardBootstrap
 from ..services.action_center import ActionCenterError, execute_action_item, pending_event_responses
@@ -121,7 +122,7 @@ async def dashboard_action_items(
     pending = await pending_event_responses(session, now=now, scoped_squad_id=scoped_squad_id)
     missing_people = set().union(*(user_ids for _, user_ids in pending))
     missing_responses = sum(len(user_ids) for _, user_ids in pending)
-    deadlines = [event.response_deadline_at for event, _ in pending if event.response_deadline_at]
+    deadlines = [response_window(event)[1] for event, _ in pending]
     if missing_people:
         items.append(
             ActionItem(

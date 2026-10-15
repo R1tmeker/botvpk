@@ -14,7 +14,7 @@ router = APIRouter(prefix="/events", tags=["events"])
 @router.get("/stream")
 async def stream_events(
     request: Request,
-    current_user: CurrentUser = Depends(require_role(RoleLevel.PARTICIPANT)),
+    current_user: CurrentUser = Depends(require_role(RoleLevel.PUBLIC_USER)),
     settings: Settings = Depends(get_settings),
 ) -> StreamingResponse:
     return StreamingResponse(

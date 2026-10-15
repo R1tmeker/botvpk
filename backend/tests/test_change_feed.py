@@ -74,3 +74,27 @@ async def test_new_application_reaches_admins_once_and_skips_inactive_reviewers(
         assert all(item.send_to_tg and item.send_to_app and item.priority_code == "URGENT" for item in notices)
         assert all("application=22" in item.deep_link for item in notices)
     engine.dispose()
+
+
+@pytest.mark.parametrize("level", [0, 1, 2, 3, 9])
+@pytest.mark.asyncio
+async def test_authenticated_candidates_also_receive_status_updates(monkeypatch, level):
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+    from app.dependencies.auth import get_current_user
+    from app.routers import events
+
+    async def fake_stream(*args, **kwargs):
+        yield 'event: connected\ndata: {"type":"connected"}\n\n'
+
+    monkeypatch.setattr(events, "event_stream", fake_stream)
+    app = FastAPI()
+    app.include_router(events.router)
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(user_id=7, role_level=level)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/events/stream")
+        assert response.status_code == 200
+        assert "event: connected" in response.text
+        app.dependency_overrides.clear()
+        response = await client.get("/events/stream")
+        assert response.status_code == 401

@@ -95,7 +95,12 @@ export function useRealtimeInvalidation(enabled: boolean) {
       keys.clear();
     };
     const refresh = () => { void queryClient.invalidateQueries(); };
-    source.addEventListener("connected", refresh);
+    let hasConnected = false;
+    source.addEventListener("connected", () => {
+      // Initial queries already load fresh data. Reconnects must recover missed changes.
+      if (hasConnected) refresh();
+      hasConnected = true;
+    });
     source.addEventListener("invalidate", (event) => {
       try {
         const payload = JSON.parse((event as MessageEvent<string>).data) as { query_keys?: string[] };

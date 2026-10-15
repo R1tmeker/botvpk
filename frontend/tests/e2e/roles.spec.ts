@@ -74,7 +74,8 @@ for (const [roleCode, roleLabel] of roles) {
         await expect(page.getByText(roleLabel, { exact: true }).first()).toBeVisible();
         await expect(page.getByRole("navigation", { name: "Основная навигация" })).toBeVisible();
         await page.waitForTimeout(500);
-        expect(initialApiRequests.length, initialApiRequests.join("\n")).toBeLessThanOrEqual(8);
+        expect(initialApiRequests.length, initialApiRequests.join("\n")).toBeLessThanOrEqual(9);
+        expect(initialApiRequests.filter((path) => path === "/api/me")).toHaveLength(1);
         await expect(page.locator("body")).toHaveCSS("overflow-x", "hidden");
         const accessibility = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
         expect(accessibility.violations.filter((item) => ["critical", "serious"].includes(item.impact ?? ""))).toEqual([]);

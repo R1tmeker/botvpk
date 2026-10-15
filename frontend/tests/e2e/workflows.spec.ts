@@ -277,9 +277,17 @@ test("role changes reach an already open app through the change stream", async (
   await page.route("**/api/me", (route) => route.fulfill({ json: { id: 1, full_name: longName, role_code: role, status_code: "ACTIVE", squad_id: 1 } }));
   await page.goto("/");
   await expect(page.getByText("Участник", { exact: true }).first()).toBeVisible();
+  await page.evaluate(() => {
+    for (const source of (window as unknown as { changeStreams: EventTarget[] }).changeStreams) source.dispatchEvent(new Event("connected"));
+  });
   role = "SUPER_ADMIN";
   await notifyChange(page, ["me", "admin", "users"]);
   await expect(page.getByText("Супер-администратор", { exact: true }).first()).toBeVisible();
+  role = "PARTICIPANT";
+  await page.evaluate(() => {
+    for (const source of (window as unknown as { changeStreams: EventTarget[] }).changeStreams) source.dispatchEvent(new Event("connected"));
+  });
+  await expect(page.getByText("Участник", { exact: true }).first()).toBeVisible();
 });
 
 test("voting and bulk selection exclude future days and remain open after class", async ({ page }) => {

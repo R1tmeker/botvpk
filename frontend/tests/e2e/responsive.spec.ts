@@ -68,7 +68,7 @@ test("notifications load older pages and navigate to a related event", async ({ 
 test("selected event responses use one bulk request", async ({ page }) => {
   await page.clock.setFixedTime(new Date("2026-10-08T12:00:00Z"));
   await mockApp(page, "PARTICIPANT", "light");
-  let list: Array<Omit<typeof events[number], "my_response_code"> & { my_response_code: string | null }> = events.map((event, index) => ({ ...event, start_datetime: `2026-10-${String(9 + index).padStart(2, "0")}T10:00:00Z` }));
+  let list: Array<Omit<typeof events[number], "my_response_code"> & { my_response_code: string | null }> = events.map((event, index) => ({ ...event, start_datetime: `2026-10-09T${String(8 + index).padStart(2, "0")}:00:00Z` }));
   await page.route("**/api/schedule", (route) => route.fulfill({ json: list }));
   await page.route("**/api/schedule/events/respond-bulk", async (route) => {
     const payload = route.request().postDataJSON();

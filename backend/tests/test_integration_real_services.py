@@ -103,7 +103,7 @@ async def test_automatic_absence_waits_for_the_end_of_class(monkeypatch):
         await background.materialize_absent_responses()
         query = select(Attendance).where(Attendance.event_id==event.id, Attendance.user_id==user.id)
         assert await session.scalar(query) is None
-        monkeypatch.setattr(background, "utcnow", lambda:now+timedelta(hours=2))
+        monkeypatch.setattr(background, "utcnow", lambda:now+timedelta(days=2))
         await background.materialize_absent_responses()
         assert (await session.scalar(query)).status_code == "ABSENT"
         await session.rollback()
@@ -188,7 +188,7 @@ async def test_bot_queries_include_custom_checkin_windows_and_current_events() -
         assert card is not None
         if card.id == event.id:
             assert "Custom window" in text
-            assert not actionable
+            assert actionable
         await session.rollback()
 
 
@@ -244,4 +244,36 @@ async def test_mass_reminder_is_one_digest_per_member_and_repeat_click_is_safe(m
         queued = list((await session.scalars(select(Notification).where(Notification.user_id==user.id))).all())
         assert len(queued) == 1 and all(event.title in queued[0].body for event in events)
         assert queued[0].deep_link == "/schedule"
+        await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_postgres_weekly_normative_history_and_repeated_submission(monkeypatch):
+    from datetime import date, datetime, timezone
+    from app.models import Normative, NormativeSubmission
+    from app.services import normatives
+
+    now = datetime(2026, 10, 11, 16, 59, 59, tzinfo=timezone.utc)
+    monkeypatch.setattr(normatives, "utcnow", lambda: now)
+    monkeypatch.setattr(normatives, "_commander_recipients", AsyncMock(return_value=[]))
+    async with AsyncSessionLocal() as session:
+        user = User(telegram_id=int(f"93{secrets.randbelow(10**8):08d}"), full_name="Weekly Cycle Integration", role_code="PARTICIPANT", status_code="ACTIVE")
+        session.add(user)
+        await session.flush()
+        normative = Normative(title="Weekly integration", type_code="GENERAL", recurrence_days=7, recurrence_start_date=date(2026, 10, 5), created_by_user_id=user.id)
+        session.add(normative)
+        await session.flush()
+        args = dict(normative=normative, submitter=user, status_code="SUBMITTED", comment="First week", file_ids=[], audit_action_code="test.weekly", audit_value={})
+        first = await normatives.submit_normative(session, **args)
+        first.status_code = "ACCEPTED"
+        await session.flush()
+        assert await normatives.submit_normative(session, **args) is first
+        now += timedelta(seconds=1)
+        second = await normatives.submit_normative(session, **args)
+        await session.flush()
+        assert second.id != first.id
+        assert first.status_code == "ACCEPTED"
+        assert first.period_start_date == date(2026, 10, 5)
+        assert second.period_start_date == date(2026, 10, 12)
+        assert len((await session.scalars(select(NormativeSubmission).where(NormativeSubmission.normative_id == normative.id))).all()) == 2
         await session.rollback()

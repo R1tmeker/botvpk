@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Protocol
 
 from ..roles import RoleLevel
@@ -11,6 +11,7 @@ class EventLike(Protocol):
     status_code: str
     requires_response: bool
     start_datetime: datetime
+    end_datetime: datetime | None
     response_deadline_at: datetime | None
 
 
@@ -25,6 +26,11 @@ class EventResponseError(ValueError):
         self.code = code
 
 
+def response_window(event: EventLike) -> tuple[datetime, datetime]:
+    """Voting is independent of attendance: one day before through one day after."""
+    return event.start_datetime - timedelta(days=1), (getattr(event, "end_datetime", None) or event.start_datetime) + timedelta(days=1)
+
+
 def validate_event_available(event: EventLike, *, role: RoleLevel, squad_id: int | None, now: datetime) -> None:
     if role < RoleLevel.PARTICIPANT:
         raise EventResponseError("FORBIDDEN", "Ответы доступны после подтверждения участия.")
@@ -32,12 +38,13 @@ def validate_event_available(event: EventLike, *, role: RoleLevel, squad_id: int
         raise EventResponseError("FORBIDDEN", "Это занятие недоступно вашему отделению.")
     if event.status_code == "CANCELLED":
         raise EventResponseError("CANCELLED", "Занятие отменено.")
-    if now >= event.start_datetime:
-        raise EventResponseError("STARTED", "Занятие уже началось, ответ закрыт.")
     if not event.requires_response:
         raise EventResponseError("NOT_REQUIRED", "Для этого занятия ответ не требуется.")
-    if event.response_deadline_at and now > event.response_deadline_at and role < RoleLevel.DEPUTY_SQUAD_COMMANDER:
-        raise EventResponseError("DEADLINE", "Срок ответа уже прошёл.")
+    opens, closes = response_window(event)
+    if now < opens:
+        raise EventResponseError("NOT_OPEN", "Голосование откроется за сутки до занятия.")
+    if now >= closes:
+        raise EventResponseError("CLOSED", "Голосование закрыто: прошли сутки после окончания занятия.")
 
 
 def validate_response_details(

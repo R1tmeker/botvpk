@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..database import Base
@@ -16,6 +16,8 @@ class Normative(Base):
     description: Mapped[str | None] = mapped_column(Text)
     type_code: Mapped[str] = mapped_column(String(100), nullable=False)
     deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    recurrence_days: Mapped[int | None] = mapped_column(Integer)
+    recurrence_start_date: Mapped[date | None] = mapped_column(Date)
     target_audience: Mapped[str] = mapped_column(String(50), nullable=False, server_default="ALL")
     squad_id: Mapped[int | None] = mapped_column(ForeignKey("squads.id", ondelete="SET NULL"))
     file_id: Mapped[int | None] = mapped_column(ForeignKey("files.id", ondelete="SET NULL"))
@@ -43,11 +45,14 @@ class NormativeSubmission(Base):
         Index("idx_normative_submissions_status", "status_code"),
         Index("idx_normative_submissions_user_submitted", "user_id", "submitted_at"),
         Index("idx_normative_submissions_status_submitted", "status_code", "submitted_at"),
+        UniqueConstraint("normative_id", "user_id", "period_start_date", name="uq_normative_submission_period"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     normative_id: Mapped[int] = mapped_column(ForeignKey("normatives.id", ondelete="CASCADE"), nullable=False)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    period_start_date: Mapped[date | None] = mapped_column(Date)
+    period_end_date: Mapped[date | None] = mapped_column(Date)
     status_code: Mapped[str] = mapped_column(String(50), nullable=False, server_default="PENDING")
     file_id: Mapped[int | None] = mapped_column(ForeignKey("files.id", ondelete="SET NULL"))
     comment: Mapped[str | None] = mapped_column(Text)

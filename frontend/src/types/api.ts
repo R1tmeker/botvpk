@@ -53,6 +53,8 @@ export type MenuCard = {
 };
 
 export type ScheduleEvent = {
+  response_opens_at?: string | null;
+  response_closes_at?: string | null;
   id: number;
   template_id: number | null;
   event_type_code: string;
@@ -164,6 +166,12 @@ export type AttendanceGrade = {
 };
 
 export type Normative = {
+  recurrence_days?: 7 | null;
+  recurrence_start_date?: string | null;
+  current_period_start_date?: string | null;
+  current_period_end_date?: string | null;
+  next_reset_at?: string | null;
+  is_submission_open?: boolean;
   id: number;
   title: string;
   description: string | null;
@@ -191,6 +199,8 @@ export type Notification = {
 };
 
 export type NormativeSubmission = {
+  period_start_date?: string | null;
+  period_end_date?: string | null;
   id: number;
   normative_id: number;
   user_id: number;

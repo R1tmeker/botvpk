@@ -22,7 +22,7 @@ async def test_pending_pairs_exclude_archived_people_and_ineligible_events():
         db.add_all([User(id=i, full_name=f"User {i}", telegram_id=990000000+i, squad_id=1 if i<3 else 2,
                          role_code="PUBLIC_USER" if i==5 else "PARTICIPANT", status_code="ARCHIVED" if i==4 else "ACTIVE") for i in range(1, 6)])
         for i in range(1, 8):
-            db.add(ScheduleEvent(id=i, title=f"Event {i}", start_datetime=now+timedelta(days=i) if i!=7 else now-timedelta(days=1),
+            db.add(ScheduleEvent(id=i, title=f"Event {i}", start_datetime=now+timedelta(hours=i*4) if i<6 else now+timedelta(days=2) if i==6 else now-timedelta(days=1),
                                  squad_id=2 if i==3 else None, created_by_user_id=1,
                                  requires_response=i!=5, status_code="CANCELLED" if i==4 else "PLANNED",
                                  response_deadline_at=now-timedelta(minutes=1) if i==6 else None))
@@ -50,5 +50,5 @@ async def test_dashboard_counts_people_once_across_multiple_classes(monkeypatch)
     items = await dashboard.dashboard_action_items(SimpleNamespace(role_level=RoleLevel.SUPER_ADMIN, squad_id=None), db)
     assert len(items) == 1
     assert items[0].count == 3
-    assert "Занятий: 2" in items[0].description
+    assert "Открытых голосований: 2" in items[0].description
     assert "ожидается ответов: 5" in items[0].description

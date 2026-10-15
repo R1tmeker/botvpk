@@ -27,7 +27,7 @@ from ..schemas.core import (
     ScheduleTemplateUpdate,
 )
 from ..services.attendance import SelfCheckInError, self_check_in, sync_automatic_grade
-from ..services.event_response_policy import EventResponseError, validate_event_available
+from ..services.event_response_policy import EventResponseError, response_window, validate_event_available
 from ..services.schedule_templates import generate_events, notify_schedule_changes, occurrence_dates, validate_template
 from ..services.events import respond_to_event
 from ..services.realtime import publish_realtime_event
@@ -65,6 +65,7 @@ async def get_week_a_start(session: AsyncSession) -> date | None:
 
 def serialize_event(event: ScheduleEvent, response_by_event: dict[int, str | None] | None = None) -> ScheduleEventRead:
     data = ScheduleEventRead.model_validate(event)
+    data.response_opens_at, data.response_closes_at = response_window(event)
     if response_by_event is not None:
         data.my_response_code = response_by_event.get(event.id)
     return data
@@ -320,6 +321,7 @@ async def create_event(
                 entity_name="schedule_events",
                 entity_id=event.id,
                 send_to_tg=True,
+                deliver_after=max(utcnow(), response_window(event)[0]),
             ))
     await session.commit()
     await session.refresh(event)

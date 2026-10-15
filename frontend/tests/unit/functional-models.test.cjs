@@ -21,15 +21,26 @@ const { filterMaterials, learningProgress } = loadModel("learning");
 const now = Date.parse("2026-10-08T10:00:00Z");
 const event = { requires_response: true, status_code: "PLANNED", start_datetime: "2026-10-08T12:00:00Z", response_deadline_at: "2026-10-08T11:00:00Z" };
 
-test("response closes on cancellation, start, and participant deadline", () => {
-  assert.equal(responseIsOpen(event, 3, now), true);
-  for (const value of [{ status_code: "CANCELLED" }, { start_datetime: new Date(now).toISOString() }, { requires_response: false }, { response_deadline_at: "2026-10-08T09:00:00Z" }]) {
-    assert.equal(responseIsOpen({ ...event, ...value }, 3, now), false);
+test("voting uses the same 24-hour opening and closing window for every role", () => {
+  const start = Date.parse(event.start_datetime);
+  const end = start + 2 * 3600_000;
+  const item = { ...event, end_datetime: new Date(end).toISOString() };
+  for (const level of [3, 4, 9]) {
+    assert.equal(responseIsOpen(item, level, start - 86400_001), false);
+    assert.equal(responseIsOpen(item, level, start - 86400_000), true);
+    assert.equal(responseIsOpen(item, level, start), true);
+    assert.equal(responseIsOpen(item, level, end + 86400_000 - 1), true);
+    assert.equal(responseIsOpen(item, level, end + 86400_000), false);
   }
+  assert.equal(responseIsOpen(item, 2, start), false);
+  assert.equal(responseIsOpen({ ...item, status_code: "CANCELLED" }, 9, start), false);
+  assert.equal(responseIsOpen({ ...item, requires_response: false }, 9, start), false);
 });
-test("commander deadline override still respects cancellation and start", () => {
-  assert.equal(responseIsOpen({ ...event, response_deadline_at: "2026-10-08T09:00:00Z" }, 4, now), true);
-  assert.equal(responseIsOpen({ ...event, status_code: "CANCELLED" }, 9, now), false);
+test("obsolete manual deadlines do not close the new voting window", () => {
+  assert.equal(responseIsOpen({ ...event, response_deadline_at: "2026-10-08T09:00:00Z" }, 3, now), true);
+  const item = { ...event, response_opens_at: "2026-10-08T10:00:00Z", response_closes_at: "2026-10-08T11:00:00Z" };
+  assert.equal(responseIsOpen(item, 3, now), true);
+  assert.equal(responseIsOpen(item, 3, now + 3600_000), false);
 });
 test("MAYBE remains in the list requiring a final answer", () => {
   for (const code of [undefined, null, "MAYBE"]) assert.equal(needsFinalResponse({ ...event, my_response_code: code }), true);
@@ -60,7 +71,8 @@ test("ongoing class stays visible while check-in remains open", () => {
   const ongoing = { ...event, self_checkin_enabled: true, start_datetime: "2026-10-08T09:50:00Z", end_datetime: null };
   assert.equal(checkInIsOpen(ongoing, now), true);
   assert.equal(eventIsArchived(ongoing, now), false);
-  assert.equal(eventIsArchived(ongoing, now + 21 * 60_000), true);
+  assert.equal(eventIsArchived(ongoing, now + 21 * 60_000), false);
+  assert.equal(eventIsArchived(ongoing, Date.parse(ongoing.start_datetime) + 86_400_000), true);
 });
 test("check-in respects explicit boundaries and cancellation", () => {
   const item = { ...event, self_checkin_enabled: true, self_checkin_opens_at: "2026-10-08T10:00:00Z", self_checkin_closes_at: "2026-10-08T10:01:00Z" };
@@ -133,4 +145,19 @@ test("DST week still has seven calendar days", () => {
   const range = schedulePeriod("week", Date.parse("2026-03-29T12:00:00Z"), "Europe/Berlin");
   assert.equal(range.from, "2026-03-23");
   assert.equal(range.to, "2026-03-30");
+});
+
+const { currentSubmission, normativeDraftKey } = loadModel("normatives");
+test("weekly results and drafts stay in their own cycle; once results are permanent", () => {
+  const normative = { id: 1, recurrence_days: 7, current_period_start_date: "2026-10-12" };
+  const previous = { normative_id: 1, period_start_date: "2026-10-05", status_code: "ACCEPTED", submitted_at: "2026-10-10T12:00:00Z" };
+  assert.equal(currentSubmission(normative, [previous]), undefined);
+  const current = { ...previous, period_start_date: "2026-10-12", status_code: "PENDING", submitted_at: "2026-10-12T12:00:00Z" };
+  assert.equal(currentSubmission(normative, [previous, current]), current);
+  assert.notEqual(normativeDraftKey(1, normative, "files"), normativeDraftKey(1, { ...normative, current_period_start_date: "2026-10-05" }, "files"));
+  assert.notEqual(normativeDraftKey(1, normative, "files"), normativeDraftKey(2, normative, "files"));
+  const once = { id: 1, recurrence_days: null };
+  const permanent = { ...previous, period_start_date: null };
+  assert.equal(currentSubmission(once, [permanent, current]), permanent);
+  assert.equal(normativeDraftKey(1, once, "comment"), "draft:normative:1:1:comment");
 });

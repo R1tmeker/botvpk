@@ -6,7 +6,7 @@ from uuid import UUID
 
 from ..services.join_input import normalize_join_phone, validate_join_birth_date
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class ORMModel(BaseModel):
@@ -226,6 +226,8 @@ class ScheduleEventRead(ORMModel):
     late_after_minutes: int = 5
     is_overridden: bool = False
     response_deadline_at: datetime | None = None
+    response_opens_at: datetime | None = None
+    response_closes_at: datetime | None = None
     grading_type: str
     file_id: int | None = None
     my_response_code: str | None = None
@@ -419,6 +421,12 @@ class NormativeRead(ORMModel):
     description: str | None = None
     type_code: str
     deadline_at: datetime | None = None
+    recurrence_days: int | None = None
+    recurrence_start_date: date | None = None
+    current_period_start_date: date | None = None
+    current_period_end_date: date | None = None
+    next_reset_at: datetime | None = None
+    is_submission_open: bool = True
     target_audience: str
     squad_id: int | None = None
     file_id: int | None = None
@@ -430,7 +438,19 @@ class NormativeRead(ORMModel):
     updated_at: datetime | None = None
 
 
-class NormativeCreate(BaseModel):
+class NormativeCycleFields(BaseModel):
+    recurrence_days: Literal[7] | None = None
+    recurrence_start_date: date | None = None
+
+    @field_validator("recurrence_start_date")
+    @classmethod
+    def monday_start(cls, value: date | None) -> date | None:
+        if value is not None and value.weekday() != 0:
+            raise ValueError("Недельный цикл должен начинаться в понедельник в 00:00 по Барнаулу.")
+        return value
+
+
+class NormativeCreate(NormativeCycleFields):
     title: str = Field(min_length=1, max_length=255)
     description: str | None = None
     type_code: str = "GENERAL"
@@ -443,7 +463,7 @@ class NormativeCreate(BaseModel):
     is_active: bool = True
 
 
-class NormativeUpdate(BaseModel):
+class NormativeUpdate(NormativeCycleFields):
     title: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = None
     type_code: str | None = None
@@ -460,6 +480,8 @@ class NormativeSubmissionRead(ORMModel):
     id: int
     normative_id: int
     user_id: int
+    period_start_date: date | None = None
+    period_end_date: date | None = None
     normative_title: str | None = None
     user_full_name: str | None = None
     status_code: str
@@ -476,6 +498,7 @@ class NormativeSubmissionRead(ORMModel):
 
 
 class NormativeSubmitRequest(BaseModel):
+    period_start_date: date | None = None
     file_id: int | None = None
     file_ids: list[int] | None = None
     comment: str | None = None

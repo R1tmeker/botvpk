@@ -72,7 +72,7 @@ export {
 } from "../features/identity/api";
 
 const LIVE_QUERY_OPTIONS = {
-  refetchInterval: () => typeof document !== "undefined" && document.visibilityState === "visible" ? 60_000 : false,
+  refetchInterval: () => typeof document !== "undefined" && document.visibilityState === "visible" ? 15_000 : false,
   refetchIntervalInBackground: false,
   refetchOnMount: true,
   refetchOnReconnect: true,
@@ -88,18 +88,31 @@ export function useRealtimeInvalidation(enabled: boolean) {
   useEffect(() => {
     if (!enabled || typeof EventSource === "undefined") return;
     const source = new EventSource(`${apiBaseUrl.replace(/\/$/, "")}/events/stream`, { withCredentials: true });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const keys = new Set<string>();
+    const flush = () => {
+      for (const key of keys) queryClient.invalidateQueries({ queryKey: [key] });
+      keys.clear();
+    };
+    const refresh = () => { void queryClient.invalidateQueries(); };
+    source.addEventListener("connected", refresh);
     source.addEventListener("invalidate", (event) => {
       try {
         const payload = JSON.parse((event as MessageEvent<string>).data) as { query_keys?: string[] };
         for (const key of payload.query_keys ?? []) {
-          queryClient.invalidateQueries({ queryKey: [key] });
-          if (key === "appeals") queryClient.invalidateQueries({ queryKey: ["admin", "appeals"] });
+          keys.add(key);
+          if (key === "appeals") keys.add("admin");
         }
       } catch {
         queryClient.invalidateQueries();
       }
+      clearTimeout(timer);
+      timer = setTimeout(flush, 100);
     });
-    return () => source.close();
+    window.addEventListener("online", refresh);
+    const visible = () => { if (document.visibilityState === "visible") refresh(); };
+    document.addEventListener("visibilitychange", visible);
+    return () => { source.close(); clearTimeout(timer); window.removeEventListener("online", refresh); document.removeEventListener("visibilitychange", visible); };
   }, [enabled, queryClient]);
 }
 
@@ -111,6 +124,7 @@ export function useMe(enabled: boolean) {
       return data;
     },
     enabled,
+    ...LIVE_QUERY_OPTIONS,
   });
 }
 
@@ -422,6 +436,7 @@ export function useAdminApplications(enabled: boolean) {
       return data;
     },
     enabled,
+    ...LIVE_QUERY_OPTIONS,
   });
 }
 
@@ -630,9 +645,9 @@ export function useSendAnnouncement() {
 export function useSubmitNormative() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ normativeId, comment, fileId, fileIds }: { normativeId: number; comment?: string; fileId?: number | null; fileIds?: number[] }) => {
+    mutationFn: async ({ normativeId, comment, fileId, fileIds, periodStartDate }: { normativeId: number; comment?: string; fileId?: number | null; fileIds?: number[]; periodStartDate?: string | null }) => {
       const ids = fileIds?.length ? fileIds : (fileId ? [fileId] : []);
-      const { data } = await api.post(`/normatives/${normativeId}/submit`, { comment, file_id: ids[0] ?? undefined, file_ids: ids });
+      const { data } = await api.post(`/normatives/${normativeId}/submit`, { comment, file_id: ids[0] ?? undefined, file_ids: ids, period_start_date: periodStartDate });
       return data;
     },
     onSuccess: (submission) => {
@@ -643,6 +658,7 @@ export function useSubmitNormative() {
       queryClient.invalidateQueries({ queryKey: ["normatives", "submissions", "my"] });
       queryClient.invalidateQueries({ queryKey: ["normatives", "submissions", "pending"] });
       queryClient.invalidateQueries({ queryKey: ["normatives", "submissions", "history"] });
+      queryClient.invalidateQueries({ queryKey: ["normatives", "progress"] });
     },
   });
 }
@@ -679,6 +695,7 @@ export function useReviewSubmission() {
       queryClient.invalidateQueries({ queryKey: ["normatives", "submissions", "my"] });
       queryClient.invalidateQueries({ queryKey: ["normatives", "submissions", "pending"] });
       queryClient.invalidateQueries({ queryKey: ["normatives", "submissions", "history"] });
+      queryClient.invalidateQueries({ queryKey: ["normatives", "progress"] });
     },
   });
 }
@@ -1441,7 +1458,7 @@ export function useNormativesAdmin(enabled: boolean) {
 export function useCreateNormative() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (payload: { title: string; description?: string; type_code?: string; target_audience?: string; squad_id?: number | null; instruction_video_file_id?: number | null; instruction_video_url?: string | null; is_active?: boolean }) => {
+    mutationFn: async (payload: { title: string; description?: string; recurrence_days?: 7 | null; type_code?: string; target_audience?: string; squad_id?: number | null; instruction_video_file_id?: number | null; instruction_video_url?: string | null; is_active?: boolean }) => {
       const { data } = await api.post<Normative>("/normatives", payload);
       return data;
     },
@@ -1455,7 +1472,7 @@ export function useCreateNormative() {
 export function useUpdateNormative() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, ...payload }: { id: number; title?: string; description?: string; is_active?: boolean; target_audience?: string; squad_id?: number | null; instruction_video_file_id?: number | null; instruction_video_url?: string | null }) => {
+    mutationFn: async ({ id, ...payload }: { id: number; title?: string; description?: string; recurrence_days?: 7 | null; is_active?: boolean; target_audience?: string; squad_id?: number | null; instruction_video_file_id?: number | null; instruction_video_url?: string | null }) => {
       const { data } = await api.patch<Normative>(`/normatives/${id}`, payload);
       return data;
     },

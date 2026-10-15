@@ -6,9 +6,10 @@ from sqlalchemy import func, or_, select
 
 from ..config import get_settings
 from ..models import Attendance, EventResponse, Normative, NormativeSubmission, ScheduleEvent, User
-from ..roles import role_level
+from ..roles import RoleLevel, role_level
 from ..utils.timezones import club_timezone_label, format_club_datetime
-from .event_response_policy import EventResponseError, validate_event_available
+from .event_response_policy import EventResponseError, response_window, validate_event_available
+from .normative_cycles import is_current_submission, normative_period
 
 
 def local_time(value: datetime) -> str:
@@ -32,7 +33,7 @@ async def schedule_card(session, user: User, page: int = 0):
     now = datetime.now(timezone.utc)
     events = list((await session.scalars(select(ScheduleEvent).where(
         accessible_events(user), ScheduleEvent.status_code != "CANCELLED",
-        or_(func.coalesce(ScheduleEvent.end_datetime, ScheduleEvent.start_datetime) >= now,
+        or_(func.coalesce(ScheduleEvent.end_datetime, ScheduleEvent.start_datetime) + timedelta(days=1) > now,
             func.coalesce(ScheduleEvent.self_checkin_closes_at, ScheduleEvent.start_datetime + timedelta(minutes=20)) >= now),
     ).order_by(ScheduleEvent.start_datetime, ScheduleEvent.id).offset(page).limit(2))).all())
     if not events:
@@ -51,12 +52,12 @@ async def schedule_card(session, user: User, page: int = 0):
     if event.description:
         lines.append(event.description[:700])
     lines.append(f"Ваш ответ: {label}")
+    opens, closes = response_window(event)
     if actionable:
-        if event.response_deadline_at:
-            lines.append(f"Ответить до: {local_time(event.response_deadline_at)}")
+        lines.append(f"Голосование до: {local_time(closes)}")
         lines.append("Ответ о планах не заменяет отметку присутствия.")
     elif event.requires_response:
-        lines.append("Приём ответов закрыт.")
+        lines.append(f"Голосование откроется: {local_time(opens)}" if now < opens else "Приём ответов закрыт.")
     return event, "\n".join(lines), actionable, len(events) > 1
 
 
@@ -79,13 +80,18 @@ async def normatives_text(session, user: User, page: int = 0) -> tuple[str, bool
         .order_by(NormativeSubmission.submitted_at.desc(), NormativeSubmission.id.desc()))).all()) if rows else []
     latest = {}
     for item in submissions:
-        latest.setdefault(item.normative_id, item)
+        normative = next((norm for norm in rows if norm.id == item.normative_id), None)
+        if normative and is_current_submission(normative, item):
+            latest.setdefault(item.normative_id, item)
     labels = {"PENDING": "На проверке", "SUBMITTED": "На проверке", "PENDING_REVIEW": "На проверке", "ACCEPTED": "Принят", "REJECTED": "Отклонён", "NEEDS_REDO": "Нужна доработка"}
     lines = [f"Нормативы · страница {page + 1}"]
     for item in rows[:5]:
         submission = latest.get(item.id)
         status = labels.get(submission.status_code, submission.status_code) if submission else "Ещё не сдавали"
-        lines.append(f"\n• {item.title[:160]}\nСрок: {local_time(item.deadline_at) if item.deadline_at else 'без срока'}\n{status}")
+        period = normative_period(item)
+        deadline = period.closes_at or item.deadline_at
+        cadence = "Каждую неделю · новый цикл в понедельник" if getattr(item, "recurrence_days", None) else "Разовый норматив"
+        lines.append(f"\n• {item.title[:160]}\n{cadence}\nСрок: {local_time(deadline) if deadline else 'без срока'}\n{status}")
         if submission and submission.reviewer_comment:
             lines.append(f"Проверяющий: {submission.reviewer_comment[:200]}")
     lines.append("\nДля сдачи пришлите сюда фото, видео или документ, затем выберите норматив." if rows else "Активных нормативов на этой странице нет.")
@@ -93,6 +99,12 @@ async def normatives_text(session, user: User, page: int = 0) -> tuple[str, bool
 
 
 async def normative_choices(session, user: User, page: int = 0, size: int = 5):
+    audiences = {"ALL", "SQUAD", user.role_code}
+    if role_level(user.role_code) >= RoleLevel.PARTICIPANT:
+        audiences.add("PARTICIPANTS")
+    if role_level(user.role_code) >= RoleLevel.DEPUTY_SQUAD_COMMANDER:
+        audiences.add("COMMANDERS")
     return list((await session.scalars(select(Normative).where(Normative.is_active.is_(True),
+        Normative.target_audience.in_(audiences),
         or_(Normative.squad_id.is_(None), Normative.squad_id == user.squad_id))
         .order_by(Normative.deadline_at.nullslast(), Normative.id).offset(page * size).limit(size + 1))).all())

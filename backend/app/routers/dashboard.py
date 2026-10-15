@@ -127,7 +127,7 @@ async def dashboard_action_items(
             ActionItem(
                 code="MISSING_EVENT_RESPONSES",
                 title="Участники без ответа",
-                description=f"Занятий: {len(pending)} · ожидается ответов: {missing_responses}. Период — ближайшие 14 дней.",
+                description=f"Открытых голосований: {len(pending)} · ожидается ответов: {missing_responses}.",
                 severity="warning",
                 count=len(missing_people),
                 due_at=min(deadlines) if deadlines else None,

@@ -236,7 +236,7 @@ async def test_attendance_shows_event_date_not_later_mark_date(member, session):
 @pytest.mark.asyncio
 async def test_schedule_card_uses_club_timezone_and_deadline_policy(member, session, monkeypatch):
     now = datetime.now(timezone.utc)
-    event = SimpleNamespace(id=5, title="Тренировка", squad_id=2, status_code="PLANNED", start_datetime=now + timedelta(days=1),
+    event = SimpleNamespace(id=5, title="Тренировка", squad_id=2, status_code="PLANNED", start_datetime=now + timedelta(days=2),
                             requires_response=True, response_deadline_at=now - timedelta(minutes=1), place="Зал", description="Форма спортивная")
     session.scalars.return_value = SimpleNamespace(all=lambda: [event])
     session.scalar.return_value = "COMING"
@@ -244,7 +244,7 @@ async def test_schedule_card_uses_club_timezone_and_deadline_policy(member, sess
     _, text, actionable, has_next = await bot_content.schedule_card(session, member)
     assert not actionable
     assert not has_next
-    assert "Приём ответов закрыт" in text
+    assert "Голосование откроется" in text
     assert (event.start_datetime + timedelta(hours=7)).strftime("%H:%M") in text
 
 
@@ -367,3 +367,31 @@ def test_dialog_and_commander_keyboards_have_back():
     assert any(button.callback_data == "menu:command" for row in journal.inline_keyboard for button in row)
     for keyboard in (vk_bot.cancel_keyboard(), vk_bot.appeal_urgency_keyboard(), vk_bot.normative_choice_keyboard([])):
         assert any(button['action']['label'] == "← Назад" for row in json.loads(keyboard)['buttons'] for button in row)
+
+
+@pytest.mark.parametrize("channel", ["telegram", "vk"])
+async def test_native_normative_submission_explains_closed_cycle_without_false_success(monkeypatch, member, session, vk_message, channel):
+    normative = SimpleNamespace(id=7, title="Приседания", squad_id=member.squad_id, is_active=True, recurrence_days=None)
+    session.get.return_value = normative
+    service = AsyncMock(side_effect=ValueError("Началась новая неделя. Откройте норматив заново."))
+    if channel == "telegram":
+        monkeypatch.setattr(bot, "find_user", AsyncMock(return_value=member))
+        monkeypatch.setattr(bot, "ensure_dialog_not_expired", AsyncMock(return_value=False))
+        monkeypatch.setattr(bot, "submit_normative_service", service)
+        state = AsyncMock()
+        state.get_data.return_value = {"file_id": "file", "user_id": member.id}
+        state.get_state.return_value = bot.NormativeFileStates.awaiting_normative_choice.state
+        callback = SimpleNamespace(data="norm_submit:7", from_user=SimpleNamespace(id=member.telegram_id), message=SimpleNamespace(edit_text=AsyncMock()), answer=AsyncMock())
+        await bot.normative_file_submit(callback, state)
+        assert "новая неделя" in callback.answer.await_args.args[0]
+        callback.message.edit_text.assert_not_awaited()
+        state.clear.assert_awaited_once()
+    else:
+        monkeypatch.setattr(vk_bot, "_get_event_state", AsyncMock(return_value={"step": "normative_attachment", "attachment_text": "photo"}))
+        monkeypatch.setattr(vk_bot, "_clear_event_state", AsyncMock())
+        monkeypatch.setattr(vk_bot, "submit_normative_service", service)
+        await vk_bot._handle_normative_submit_payload(vk_message, member, {"normative_id": 7}, "https://example.com")
+        assert "новая неделя" in vk_message.answer.await_args.args[0]
+        vk_bot._clear_event_state.assert_awaited_once()
+    session.commit.assert_not_awaited()
+    session.rollback.assert_awaited_once()

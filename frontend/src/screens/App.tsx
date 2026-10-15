@@ -4,8 +4,10 @@ import { NotificationInbox } from "../features/notifications/NotificationInbox";
 import { useNotificationSummary } from "../features/notifications/api";
 import { safeAppLink } from "../features/notifications/model";
 import { TemplateEditor } from "../features/schedule/TemplateEditor";
+import { NormativeProgress } from "../features/normatives/NormativeProgress";
+import { currentSubmission, normativeDraftKey } from "../features/normatives/model";
 import { useBulkEventResponse, useScheduleEvent } from "../features/schedule/api";
-import { checkInIsOpen, eventInPeriod, eventIsArchived, needsFinalResponse, recordId, responseIsOpen, schedulePeriod } from "../features/schedule/model";
+import { checkInIsOpen, eventInPeriod, eventIsArchived, needsFinalResponse, recordId, responseIsOpen, responseWindow, schedulePeriod } from "../features/schedule/model";
 import { useRecordFocus } from "../shared/ui/useRecordFocus";
 import { usePersistentDraft } from "../offline/usePersistentDraft";
 import { filterMaterials, learningProgress, type LearningFilter } from "../features/learning/model";
@@ -69,6 +71,7 @@ import {
   useLearningMaterials,
   useMarkMaterialViewed,
   useMenu,
+  useMe,
   useMyAttendance,
   useMyAttendanceStats,
   useMarkAttendance,
@@ -874,6 +877,15 @@ export function App({ webApp }: Props) {
   const prevStreakRef = useRef<number>(0);
   const webMode = !telegramMode;
   const hasToken = authStatus === "ready";
+  const refreshedProfile = useMe(hasToken);
+  useEffect(() => {
+    const updated = refreshedProfile.data;
+    if (updated && typeof updated.id === "number" && updated.role_code in roleLevels) setProfile(updated);
+  }, [refreshedProfile.data]);
+  useEffect(() => {
+    const code = (refreshedProfile.error as { response?: { status?: number } } | null)?.response?.status;
+    if (code === 401 || code === 403) setAuthStatus("missing_init_data");
+  }, [refreshedProfile.error]);
   const telegramUserId = webApp.initDataUnsafe?.user?.id ?? null;
   const initDataLength = telegramInitData.length;
   const isAuthenticating = authStatus === "checking" || auth.isPending;
@@ -1357,6 +1369,7 @@ export function App({ webApp }: Props) {
 
         {!isAuthenticating && hasToken && activeView === "normatives" && (
           <NormativesView
+            key={`${profile.id}:${visibleNormatives.map((item) => `${item.id}:${item.current_period_start_date ?? "once"}`).join(",")}`}
             userId={profile.id}
             items={visibleNormatives}
             submissions={mySubmissions.data ?? []}
@@ -1364,12 +1377,12 @@ export function App({ webApp }: Props) {
             history={submissionHistory.data ?? []}
             canSubmit={level >= 1}
             canReview={level >= 4}
-            onSubmit={(normativeId, comment, fileIds) =>
+            onSubmit={(normativeId, comment, fileIds, periodStartDate) =>
               submitNormative.mutate(
-                { normativeId, comment, fileIds },
+                { normativeId, comment, fileIds, periodStartDate },
                 {
                   onSuccess: () => { hapticSuccess(); toast("Сдача отправлена на проверку", "success"); },
-                  onError: () => { hapticError(); toast("Ошибка при отправке", "error"); },
+                  onError: (error) => { hapticError(); toast(apiErrorDetail(error) ?? "Ошибка при отправке", "error"); },
                 },
               )
             }
@@ -2638,7 +2651,7 @@ function ScheduleView({
               </strong>
               <span>{formatDate(event.start_datetime)} · {event.place ?? "место уточняется"}</span>
               {event.description && <p>{event.description}</p>}
-              {event.response_deadline_at && <small>Ответ до {formatDate(event.response_deadline_at)}</small>}
+              {event.requires_response && <small>{now < responseWindow(event).opens ? `Голосование откроется ${formatDate(new Date(responseWindow(event).opens).toISOString())}` : `Голосование до ${formatDate(new Date(responseWindow(event).closes).toISOString())}`}</small>}
             </div>
             {responseIsOpen(event, level, now) && tab !== "archive" && (
               <ResponseButtons
@@ -2649,7 +2662,7 @@ function ScheduleView({
                 onRespond={onRespond}
               />
             )}
-            {event.requires_response && !responseIsOpen(event, level, now) && tab !== "archive" && <span>Приём ответов закрыт</span>}
+            {event.requires_response && !responseIsOpen(event, level, now) && tab !== "archive" && <span>{now < responseWindow(event).opens ? "Ответить можно за сутки до занятия" : "Приём ответов закрыт"}</span>}
             {event.self_checkin_enabled && event.status_code !== "CANCELLED" && tab !== "archive" && (
               <button
                 type="button"
@@ -3047,24 +3060,8 @@ function AttendanceView({
   );
 }
 
-function getWeekStart(): Date {
-  const d = new Date();
-  const day = d.getDay();
-  d.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-
-function getNextMonday(): Date {
-  const d = new Date();
-  const day = d.getDay();
-  d.setDate(d.getDate() + (day === 0 ? 1 : 8 - day));
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-
 function formatShortDate(d: Date): string {
-  return new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long" }).format(d);
+  return new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long", timeZone: getAppTimezone() }).format(d);
 }
 
 /* ─────────── NormativesView ─────────── */
@@ -3087,7 +3084,7 @@ function NormativesView({
   history: NormativeSubmission[];
   canSubmit: boolean;
   canReview: boolean;
-  onSubmit: (normativeId: number, comment?: string, fileIds?: number[]) => void;
+  onSubmit: (normativeId: number, comment?: string, fileIds?: number[], periodStartDate?: string | null) => void;
   onReview: (submissionId: number, statusCode: string, reviewerComment?: string) => void;
   isBusy: boolean;
 }) {
@@ -3110,6 +3107,19 @@ function NormativesView({
     if (item) setTab(item.is_active ? "active" : canReview ? "archive" : "active");
   }, [linkedNormative, items, canReview]);
   const [offlineFiles, setOfflineFiles] = useState<Record<number, File[]>>({});
+
+  useEffect(() => {
+    if (!userId) return;
+    for (const item of activeItems) {
+      const current = currentSubmission(item, submissions);
+      if (current && (current.status_code === "ACCEPTED" || isPendingNormativeStatus(current.status_code))) {
+        void deleteOfflineValue(normativeDraftKey(userId, item, "comment"));
+        void deleteOfflineValue(normativeDraftKey(userId, item, "files"));
+        setComments((previous) => previous[item.id] ? { ...previous, [item.id]: "" } : previous);
+        setUploadedFiles((previous) => previous[item.id]?.length ? { ...previous, [item.id]: [] } : previous);
+      }
+    }
+  }, [items, submissions, userId]);
 
   const openVideoModal = async (url?: string | null, fileId?: number | null) => {
     if (url) {
@@ -3141,10 +3151,10 @@ function NormativesView({
   useEffect(() => {
     if (!userId) return;
     for (const item of activeItems) {
-      void loadOfflineValue<string>(`draft:normative:${userId}:${item.id}:comment`).then((saved) => {
+      void loadOfflineValue<string>(normativeDraftKey(userId, item, "comment")).then((saved) => {
         if (saved) setComments((previous) => ({ ...previous, [item.id]: saved }));
       });
-      void loadOfflineValue<File[]>(`draft:normative:${userId}:${item.id}:files`).then((saved) => {
+      void loadOfflineValue<File[]>(normativeDraftKey(userId, item, "files")).then((saved) => {
         if (saved?.length) {
           setOfflineFiles((previous) => ({ ...previous, [item.id]: saved }));
           setUploadedFiles((previous) => ({
@@ -3174,7 +3184,7 @@ function NormativesView({
             delete next[normativeId];
             return next;
           });
-          await deleteOfflineValue(`draft:normative:${userId}:${normativeId}:files`);
+          await deleteOfflineValue(normativeDraftKey(userId, items.find((item) => item.id === normativeId)!, "files"));
           toast("Файлы норматива загружены из черновика", "success");
         } catch {
           // Preserve files for the next retry.
@@ -3193,7 +3203,7 @@ function NormativesView({
         return;
       }
       const next = [...(offlineFiles[normativeId] ?? []), file];
-      await saveOfflineValue(`draft:normative:${userId}:${normativeId}:files`, next);
+      await saveOfflineValue(normativeDraftKey(userId, items.find((item) => item.id === normativeId)!, "files"), next);
       setOfflineFiles((previous) => ({ ...previous, [normativeId]: next }));
       setUploadedFiles((previous) => ({
         ...previous,
@@ -3226,52 +3236,26 @@ function NormativesView({
         <h2>Нормативы</h2>
         <span>{activeItems.length} активных</span>
       </div>
+      {(canSubmit || canReview) && <NormativeProgress canReview={canReview} />}
       <Tabs
         tabs={tabs}
         active={tab}
         onChange={(value) => setTab(value as typeof tab)}
       />
       <div className={styles.list}>
-        {tab === "active" && (
-          <>
-            {/* Progress overview */}
-            {activeItems.length > 0 && (
-              <div className={styles.chartsSection} style={{ marginBottom: 10 }}>
-                <div className={styles.chartSectionTitle}>Прогресс сдачи</div>
-                <div className={styles.normProgressList}>
-                  {activeItems.slice(0, 5).map((item) => {
-                    const sub = submissions.find((s) => s.normative_id === item.id);
-                    const pct = !sub ? 0 : sub.status_code === "ACCEPTED" ? 100 : isPendingNormativeStatus(sub.status_code) ? 50 : 10;
-                    const color = pct === 100 ? "#27ae60" : pct === 50 ? "#f39c12" : "#e8ecf0";
-                    return (
-                      <div key={item.id} className={styles.normProgressItem}>
-                        <strong>{item.title}</strong>
-                        <AnimatedProgress value={pct} max={100} color={color === "#e8ecf0" ? "#d0d6e2" : color} height={6} showPercent={false} />
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </>
-        )}
         {tab === "active" && (() => {
-          const weekStart = getWeekStart();
-          const nextMonday = getNextMonday();
           return activeItems.map((item) => {
             const attached = uploadedFiles[item.id] ?? [];
-            const acceptedThisWeek = submissions.find(
-              (s) => s.normative_id === item.id && s.status_code === "ACCEPTED" && new Date(s.submitted_at) >= weekStart,
-            );
-            const pendingSub = !acceptedThisWeek && submissions.find(
-              (s) => s.normative_id === item.id && isPendingNormativeStatus(s.status_code),
-            );
+            const current = currentSubmission(item, submissions);
+            const acceptedThisWeek = current?.status_code === "ACCEPTED" ? current : undefined;
+            const pendingSub = current && isPendingNormativeStatus(current.status_code) ? current : undefined;
             return (
               <article className={styles.row} key={item.id} id={`normative-${item.id}`} tabIndex={-1} data-linked={linkedNormative === item.id}>
                 <AppIcon code="norms" />
                 <div>
                   <strong>{item.title}</strong>
-                  <span>{item.description ?? "описание будет добавлено"} · до {formatDate(item.deadline_at)}</span>
+                  <span>{item.description ?? "описание будет добавлено"}</span>
+                  <small>{item.recurrence_days ? `Каждую неделю · текущий цикл до ${formatDate(item.next_reset_at ?? null)}` : `Разовый норматив · ${item.deadline_at ? `до ${formatDate(item.deadline_at)}` : "без срока"}`}</small>
                 </div>
                 {(item.instruction_video_url || item.instruction_video_file_id) && (
                   <VideoThumbnailCard
@@ -3285,7 +3269,7 @@ function NormativesView({
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                       <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/>
                     </svg>
-                    Сдан на этой неделе · следующая сдача с {formatShortDate(nextMonday)}
+                    {item.recurrence_days ? `Принято в текущем цикле · новая сдача с ${formatDate(item.next_reset_at ?? null)}` : "Норматив выполнен · результат сохранён"}
                   </div>
                 ) : pendingSub ? (
                   <div className={styles.normPending}>
@@ -3294,8 +3278,9 @@ function NormativesView({
                     </svg>
                     Отправлено на проверку командиру
                   </div>
-                ) : canSubmit ? (
+                ) : canSubmit && item.is_submission_open !== false ? (
                   <div className={styles.fileUploadArea}>
+                    {current && ["NEEDS_REDO", "REJECTED"].includes(current.status_code) && <div className={styles.normReadOnly}>Нужна пересдача{current.reviewer_comment ? ` · ${current.reviewer_comment}` : ""}</div>}
                     {attached.map((file) => (
                       <div className={styles.fileAttached} key={file.id}>
                         <span>{file.name}</span>
@@ -3310,8 +3295,8 @@ function NormativesView({
                                 ...previous,
                                 [item.id]: next.map((entry, fileIndex) => ({ id: -(fileIndex + 1), name: `${entry.name} · не загружен` })),
                               }));
-                              if (next.length) void saveOfflineValue(`draft:normative:${userId}:${item.id}:files`, next);
-                              else void deleteOfflineValue(`draft:normative:${userId}:${item.id}:files`);
+                              if (next.length) void saveOfflineValue(normativeDraftKey(userId, item, "files"), next);
+                              else void deleteOfflineValue(normativeDraftKey(userId, item, "files"));
                             } else {
                               setUploadedFiles((prev) => ({ ...prev, [item.id]: (prev[item.id] ?? []).filter((entry) => entry.id !== file.id) }));
                             }
@@ -3328,7 +3313,7 @@ function NormativesView({
                         onChange={(e) => {
                           const value = e.target.value;
                           setComments((prev) => ({ ...prev, [item.id]: value }));
-                          if (userId) void saveOfflineValue(`draft:normative:${userId}:${item.id}:comment`, value);
+                          if (userId) void saveOfflineValue(normativeDraftKey(userId, item, "comment"), value);
                         }}
                       />
                       <FilePicker
@@ -3343,13 +3328,13 @@ function NormativesView({
                       className={styles.iconAction}
                       type="button"
                       disabled={isBusy || upload.isPending || Boolean(offlineFiles[item.id]?.length)}
-                      onClick={() => onSubmit(item.id, comments[item.id] || undefined, attached.map((file) => file.id))}
+                      onClick={() => onSubmit(item.id, comments[item.id] || undefined, attached.map((file) => file.id), item.current_period_start_date)}
                     >
                       {offlineFiles[item.id]?.length ? "Ждём сеть для файлов" : isBusy || upload.isPending ? "Отправляем..." : "Отправить на проверку"}
                     </button>
                   </div>
                 ) : (
-                  <div className={styles.normReadOnly}>Требование доступно для просмотра. Сдача откроется после отправки анкеты.</div>
+                  <div className={styles.normReadOnly}>{canSubmit ? "Сдача откроется с начала первого недельного цикла." : "Требование доступно для просмотра. Сдача откроется после отправки анкеты."}</div>
                 )}
               </article>
             );
@@ -4961,6 +4946,7 @@ function AdminView({
   const [drawerRosterUser, setDrawerRosterUser] = useState<UserRecord | null>(null);
   const publicUsers = usePublicUsers(tab === "applications");
   const [newNorm, setNewNorm] = useState({
+    recurrence_days: null as 7 | null,
     title: "",
     description: "",
     target_audience: "PARTICIPANTS",
@@ -5098,6 +5084,7 @@ function AdminView({
     .filter((group) => group.tabs.length > 0);
   const currentLearningAudience = learningScope === "candidates" ? "CANDIDATE" : "PARTICIPANTS";
   const resetNewNorm = () => setNewNorm({
+    recurrence_days: null,
     title: "",
     description: "",
     target_audience: "PARTICIPANTS",
@@ -5787,9 +5774,9 @@ function AdminView({
                 {/* Detail drawer */}
                 {(drawerApp || drawerPublicUser || drawerRosterUser) && (
                   <ApplicantDetailDrawer
-                    app={drawerApp}
+                    app={drawerApp ? applications.find((app) => app.id === drawerApp.id) ?? drawerApp : null}
                     publicUser={drawerPublicUser}
-                    rosterUser={drawerRosterUser}
+                    rosterUser={drawerRosterUser ? users.find((user) => user.id === drawerRosterUser.id) ?? drawerRosterUser : null}
                     squads={squads}
                     applicationSquad={drawerApp ? applicationSquads[drawerApp.id] : undefined}
                     rejectReason={drawerApp ? rejectReasons[drawerApp.id] : undefined}
@@ -6017,6 +6004,8 @@ function AdminView({
               <div className={styles.formBlock}>
                 <input placeholder="Название норматива *" value={newNorm.title} onChange={(e) => setNewNorm({ ...newNorm, title: e.target.value })} />
                 <input placeholder="Описание" value={newNorm.description} onChange={(e) => setNewNorm({ ...newNorm, description: e.target.value })} />
+                <label className={styles.formField}>Повторение<select value={newNorm.recurrence_days ?? ""} onChange={(e) => setNewNorm({ ...newNorm, recurrence_days: e.target.value ? 7 : null })}><option value="">Один раз</option><option value="7">Каждую неделю</option></select></label>
+                {newNorm.recurrence_days && <p>Новый цикл — каждый понедельник в 00:00 по Барнаулу. История сдач сохраняется.</p>}
                 <input placeholder="Ссылка на видео правильного выполнения" value={newNorm.instruction_video_url} onChange={(e) => setNewNorm({ ...newNorm, instruction_video_url: e.target.value })} />
                 {newNorm.instruction_video_file_id && (
                   <div className={styles.fileAttached}>
@@ -6047,6 +6036,7 @@ function AdminView({
                   onClick={() => createNorm.mutate(
                     {
                       title: newNorm.title.trim(),
+                      recurrence_days: newNorm.recurrence_days,
                       description: newNorm.description || undefined,
                       target_audience: newNorm.target_audience,
                       squad_id: newNorm.squad_id ? Number(newNorm.squad_id) : null,
@@ -6067,11 +6057,13 @@ function AdminView({
                   <div>
                     <strong>{norm.title}</strong>
                     <span>{norm.target_audience}{norm.squad_id ? ` · ${squadMap.get(norm.squad_id) ?? "#" + norm.squad_id}` : ""} · {norm.is_active ? "активен" : "архив"}</span>
+                    <small>{norm.recurrence_days ? `Еженедельно · следующий цикл ${formatDate(norm.next_reset_at ?? null)}` : "Разовый норматив"}</small>
                     {(norm.instruction_video_url || norm.instruction_video_file_id) && (
                       <span style={{ color: "#1a2f5a" }}>Видео выполнения прикреплено</span>
                     )}
                   </div>
                   <div className={styles.memberControls}>
+                    <label>Повторение<select aria-label={`Повторение: ${norm.title}`} value={norm.recurrence_days ?? ""} disabled={updateNorm.isPending} onChange={(event) => updateNorm.mutate({ id: norm.id, recurrence_days: event.target.value ? 7 : null }, { onSuccess: () => toast("Повторение сохранено", "success") })}><option value="">Один раз</option><option value="7">Каждую неделю</option></select></label>
                     {norm.instruction_video_file_id && (
                       <button
                         type="button"
@@ -6768,6 +6760,7 @@ function SubmissionRow({
         {item.reviewed_at && (
           <span>Проверено {formatDate(item.reviewed_at)}{item.reviewer_full_name ? ` · ${item.reviewer_full_name}` : ""}</span>
         )}
+        {item.period_start_date && <small>Цикл: {item.period_start_date.split("-").reverse().join(".")} — {item.period_end_date?.split("-").reverse().join(".")}</small>}
         {item.comment && <span style={{ color: "#65708a" }}>Пояснение: {item.comment}</span>}
         {item.reviewer_comment && <span>Комментарий: {item.reviewer_comment}</span>}
         {item.grade_value && <span>Оценка: {item.grade_value}</span>}
@@ -6813,7 +6806,7 @@ function SubmissionRow({
       {onReview && (
         <>
           <input
-            style={{ gridColumn: "1/-1", border: "1px solid #d9deea", borderRadius: 10, padding: "8px 12px", fontSize: 16, fontFamily: "inherit", color: "#1a2f5a" }}
+            style={{ gridColumn: "1/-1", border: "1px solid var(--border)", borderRadius: 10, padding: "8px 12px", fontSize: 16, fontFamily: "inherit", color: "var(--text)", background: "var(--surface)" }}
             placeholder="Комментарий проверяющего (необязательно)"
             value={reviewComment}
             onChange={(e) => setReviewComment(e.target.value)}

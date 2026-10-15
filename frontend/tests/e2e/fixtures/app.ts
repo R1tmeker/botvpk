@@ -25,6 +25,7 @@ export async function mockApp(page: Page, role: string, theme: string) {
     const path = new URL(route.request().url()).pathname.replace(/^\/api/, "");
     let json: unknown = [];
     if (path === "/auth/session") json = { authenticated: true, app_timezone: "Asia/Barnaul", profile: { ...user, role_code: role } };
+    else if (path === "/me") json = { ...user, role_code: role };
     else if (path === "/events/stream") {
       await route.fulfill({ contentType: "text/event-stream", body: "event: connected\ndata: {}\n\n" }); return;
     } else if (path === "/dashboard/bootstrap") json = { settings: [], promo: [], action_items: [] };
@@ -37,6 +38,8 @@ export async function mockApp(page: Page, role: string, theme: string) {
     else if (path === "/attendance/streak/my") json = { current_streak: 0, best_streak: 3, total_events: 15, present_count: 12, percent: 80 };
     else if (path === "/attendance/my") json = [{ id: 1, event_id: 1, user_id: 1, status_code: "PRESENT", marked_at: "2026-10-07T12:00:00Z" }];
     else if (path === "/normatives" || path === "/admin/normatives") json = [1, 2].map((id) => ({ id, title: `Норматив ${id}: физическая подготовка участников`, description, is_active: true, deadline_at: null, type_code: "VIDEO", instruction_video_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" }));
+    else if (path === "/normatives/progress/my") json = { user_id: 1, full_name: longName, total: 2, accepted: 0, pending: 0, redo: 0, missing: 2, percent: 0, accepted_all_time: 0, items: [1, 2].map((id) => ({ normative_id: id, title: `Норматив ${id}`, status: "NOT_SUBMITTED" })) };
+    else if (path === "/normatives/progress/roster") json = [];
     else if (path === "/notifications/summary") json = { total: 1, unread: 1 };
     else if (path === "/notifications") json = [{ id: 1, title: "Обновление расписания занятий", body: description, type_code: "INFO", is_read: false, created_at: "2026-10-08T00:00:00Z" }];
     else if (path === "/announcements") json = [{ id: 1, title: "Объявление для участников клуба", body: description, status_code: "PUBLISHED", created_at: "2026-10-08T00:00:00Z", author_name: longName }];

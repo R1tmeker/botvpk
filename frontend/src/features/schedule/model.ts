@@ -1,9 +1,14 @@
 import type { ScheduleEvent } from "../../types/api";
 
 export function responseIsOpen(event: ScheduleEvent, level: number, now = Date.now()): boolean {
+  const { opens, closes } = responseWindow(event);
   return event.requires_response && event.status_code !== "CANCELLED"
-    && new Date(event.start_datetime).getTime() > now
-    && (level >= 4 || !event.response_deadline_at || new Date(event.response_deadline_at).getTime() >= now);
+    && level >= 3 && now >= opens && now < closes;
+}
+
+export function responseWindow(event: ScheduleEvent) {
+  return { opens: Date.parse(event.response_opens_at ?? event.start_datetime) - (event.response_opens_at ? 0 : 86_400_000),
+    closes: Date.parse(event.response_closes_at ?? event.end_datetime ?? event.start_datetime) + (event.response_closes_at ? 0 : 86_400_000) };
 }
 
 export function needsFinalResponse(event: ScheduleEvent): boolean {
@@ -22,7 +27,8 @@ export function eventIsArchived(event: ScheduleEvent, now = Date.now()): boolean
   const end = event.end_datetime ? new Date(event.end_datetime).getTime() : start;
   const checkInEnd = event.self_checkin_enabled
     ? event.self_checkin_closes_at ? new Date(event.self_checkin_closes_at).getTime() : start + 20 * 60_000 : start;
-  return event.status_code === "CANCELLED" || Math.max(start, end, checkInEnd) < now;
+  const responseEnd = event.requires_response ? responseWindow(event).closes : end;
+  return event.status_code === "CANCELLED" || Math.max(start, end, checkInEnd, responseEnd) <= now;
 }
 
 export function sameDayInTimezone(value: string, now: number, timezone: string): boolean {

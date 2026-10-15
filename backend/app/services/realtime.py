@@ -46,8 +46,8 @@ async def event_stream(
     *,
     user_id: int | None,
 ) -> AsyncIterator[str]:
-    yield 'event: connected\ndata: {"type":"connected"}\n\n'
     if not settings.redis_url:
+        yield 'event: connected\ndata: {"type":"connected"}\n\n'
         while not await request.is_disconnected():
             yield ": heartbeat\n\n"
             import asyncio
@@ -61,6 +61,7 @@ async def event_stream(
         channels.append(f"botvpk:user:{user_id}")
     await pubsub.subscribe(*channels)
     try:
+        yield 'event: connected\ndata: {"type":"connected"}\n\n'
         while not await request.is_disconnected():
             message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=15)
             if message and message.get("type") == "message":

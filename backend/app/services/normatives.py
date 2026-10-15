@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from datetime import date
+
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import Normative, NormativeSubmission, NormativeSubmissionFile, Notification, User
 from ..roles import ROLE_LEVELS, RoleLevel
 from ..utils.audit import model_snapshot, record_audit, utcnow
+from .normative_cycles import normative_period, period_submission_clause
+from .normative_progress import assigned_to
 
 
 HIGH_COMMANDER_ROLES = ("DEPUTY_PLATOON_COMMANDER", "PLATOON_COMMANDER", "ADMIN", "SUPER_ADMIN")
@@ -55,22 +59,42 @@ async def submit_normative(
     audit_value: dict,
     notification_body: str | None = None,
     notification_scope: str = "all_commanders",
+    expected_period_start: date | None = None,
 ) -> NormativeSubmission:
+    # Serialize repeated taps and submissions through Telegram/VK/API for this normative.
+    locked = await session.scalar(select(Normative).where(Normative.id == normative.id).with_for_update().execution_options(populate_existing=True))
+    if locked is not None:
+        normative = locked
+    now = utcnow()
+    period = normative_period(normative, now)
+    if expected_period_start is not None and expected_period_start != period.start:
+        raise ValueError("Началась новая неделя. Откройте норматив заново и отправьте работу для текущего периода.")
+    if not getattr(normative, "is_active", True) or (period.opens_at and now < period.opens_at):
+        raise ValueError("Сдача этого норматива ещё не открыта.")
+    if not assigned_to(normative, submitter):
+        raise ValueError("Этот норматив назначен другой группе участников.")
     submission = await session.scalar(
         select(NormativeSubmission).where(
             NormativeSubmission.normative_id == normative.id,
             NormativeSubmission.user_id == submitter.id,
+            period_submission_clause(normative, now),
         )
     )
     if submission is None:
-        submission = NormativeSubmission(normative_id=normative.id, user_id=submitter.id)
+        submission = NormativeSubmission(normative_id=normative.id, user_id=submitter.id, period_start_date=period.start, period_end_date=period.end)
         session.add(submission)
+    elif submission.status_code in {"ACCEPTED", "PENDING", "SUBMITTED", "PENDING_REVIEW"}:
+        return submission
     old = model_snapshot(submission, ["status_code", "file_id", "comment"]) if submission.id else None
 
     submission.status_code = status_code
     submission.comment = comment
-    submission.submitted_at = utcnow()
-    submission.updated_at = utcnow()
+    submission.submitted_at = now
+    submission.updated_at = now
+    submission.reviewer_comment = None
+    submission.grade_value = None
+    submission.reviewed_by_id = None
+    submission.reviewed_at = None
     if file_ids is not None:
         unique_file_ids = list(dict.fromkeys(file_ids))
         submission.file_id = unique_file_ids[0] if unique_file_ids else None

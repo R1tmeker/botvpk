@@ -19,6 +19,7 @@ from .models import (
     Attendance,
     AttendanceGrade,
     EventResponse,
+    JoinApplication,
     Normative,
     NormativeSubmission,
     NormativeSubmissionFile,
@@ -35,6 +36,10 @@ from .services.delivery import vk_rate_limit_pause
 from .services.notification_delivery import announcement_attachment, deliver_telegram_notification, deliver_vk_notification
 from .services.notifications import quiet_hours_delivery_time
 from .services.vk_delivery_policy import VK_QUEUE_LOCK, pending_vk_statement, suppression_reason
+from .services.event_response_policy import response_window
+from .services.normative_cycles import normative_period, period_submission_clause
+from .services.normative_progress import assigned_to
+from .services.join_notifications import notify_new_application
 from .services.web_push import send_web_push_notification, web_push_available
 from .utils.audit import utcnow
 from .utils.timezones import club_timezone_label, format_club_datetime
@@ -88,6 +93,8 @@ def create_scheduler(settings: Settings) -> AsyncIOScheduler:
     scheduler.add_job(remind_commanders_about_attendance, "interval", minutes=15, max_instances=1)
     # Every 15m: personalized event reminder 2h before start
     scheduler.add_job(send_event_reminders_2h, "interval", minutes=15, max_instances=1)
+    scheduler.add_job(open_event_voting, "interval", minutes=1, max_instances=1)
+    scheduler.add_job(reconcile_application_notifications, "interval", minutes=5, max_instances=1)
     # Daily at 07:00: morning briefing to all participants
     scheduler.add_job(send_morning_briefing, "cron", hour=7, minute=0, max_instances=1, args=[settings])
     # Hourly: SLA check for unanswered appeals
@@ -298,6 +305,8 @@ async def send_pending_vk_notifications(settings: Settings) -> None:
             return
         for notification, vk_id in rows:
             reason = await suppression_reason(session, notification, now)
+            if reason == "defer_until_open":
+                continue
             if reason:
                 notification.vk_suppressed_at = now
                 notification.vk_suppression_reason = reason
@@ -409,7 +418,7 @@ async def materialize_absent_responses() -> None:
                 .where(
                     EventResponse.response_code.in_(("NOT_COMING", "NO")),
                     ScheduleEvent.status_code != "CANCELLED",
-                    func.coalesce(ScheduleEvent.end_datetime, ScheduleEvent.start_datetime + timedelta(minutes=20)) <= now,
+                    func.coalesce(ScheduleEvent.end_datetime, ScheduleEvent.start_datetime) + timedelta(days=1) <= now,
                     func.coalesce(ScheduleEvent.self_checkin_closes_at, ScheduleEvent.start_datetime) <= now,
                 )
                 .limit(200)
@@ -563,6 +572,46 @@ async def send_event_reminders_2h() -> None:
                         send_to_tg=True,
                     )
                 )
+        await session.commit()
+
+
+async def open_event_voting() -> None:
+    """Announce newly open votes, including classes generated from templates."""
+    now = utcnow()
+    async with AsyncSessionLocal() as session:
+        if not await session.scalar(select(func.pg_try_advisory_xact_lock(825739104))):
+            return
+        events = list((await session.scalars(select(ScheduleEvent).where(
+            ScheduleEvent.requires_response.is_(True), ScheduleEvent.status_code != "CANCELLED",
+            ScheduleEvent.start_datetime > now, ScheduleEvent.start_datetime <= now + timedelta(days=1),
+        ))).all())
+        users = list((await session.scalars(select(User).where(User.status_code == "ACTIVE", User.role_code.in_(CONFIRMED_ROLE_CODES)))).all())
+        for event in events:
+            for user in users:
+                if event.squad_id is not None and user.squad_id != event.squad_id:
+                    continue
+                existing = await session.scalar(select(Notification.id).where(
+                    Notification.user_id == user.id, Notification.type_code == "SCHEDULE_POLL",
+                    Notification.entity_name.in_(("schedule_events", "schedule_events_response_open")), Notification.entity_id == event.id,
+                    or_(Notification.entity_name == "schedule_events_response_open", Notification.created_at >= response_window(event)[0], Notification.deliver_after >= response_window(event)[0]),
+                ))
+                response = await _get_user_event_response(session, user.id, event.id)
+                if existing or response and response.response_code in {"COMING", "NOT_COMING"}:
+                    continue
+                session.add(Notification(user_id=user.id, type_code="SCHEDULE_POLL", title=f"Открыто голосование: {event.title}",
+                    body=f"Занятие: {format_club_datetime(event.start_datetime, get_settings().timezone)}.\nОтветить можно до {format_club_datetime(response_window(event)[1], get_settings().timezone)}.\nОтвет не заменяет отметку посещаемости.",
+                    entity_name="schedule_events_response_open", entity_id=event.id, deep_link=f"/schedule?event={event.id}", send_to_tg=True))
+        await session.commit()
+
+
+async def reconcile_application_notifications() -> None:
+    """New reviewers also receive applications that still await a decision."""
+    async with AsyncSessionLocal() as session:
+        if not await session.scalar(select(func.pg_try_advisory_xact_lock(825739105))):
+            return
+        applications = list((await session.scalars(select(JoinApplication).where(JoinApplication.status_code == "NEW"))).all())
+        for application in applications:
+            await notify_new_application(session, application)
         await session.commit()
 
 
@@ -910,21 +959,24 @@ async def check_overdue_normatives() -> None:
                 await session.scalars(
                     select(Normative).where(
                         Normative.is_active.is_(True),
-                        Normative.deadline_at.is_not(None),
-                        Normative.deadline_at >= now,
-                        Normative.deadline_at <= in_3_days,
+                        or_(Normative.recurrence_days.is_not(None), and_(Normative.deadline_at >= now, Normative.deadline_at <= in_3_days)),
                     )
                 )
             ).all()
         )
         for norm in normatives:
+            period = normative_period(norm, now)
+            deadline = period.closes_at or norm.deadline_at
+            if deadline is None or not now <= deadline <= in_3_days:
+                continue
             # Find users who have NOT submitted
             submitted_user_ids = set(
                 (
                     await session.scalars(
                         select(NormativeSubmission.user_id).where(
                             NormativeSubmission.normative_id == norm.id,
-                            NormativeSubmission.status_code.not_in(("REJECTED",)),
+                            period_submission_clause(norm, now),
+                            NormativeSubmission.status_code.in_(("PENDING", "SUBMITTED", "PENDING_REVIEW", "ACCEPTED")),
                         )
                     )
                 ).all()
@@ -940,16 +992,15 @@ async def check_overdue_normatives() -> None:
                     )
                 ).all()
             )
-            deadline_str = format_club_datetime(norm.deadline_at, get_settings().timezone, "%d.%m %H:%M") if norm.deadline_at else "—"
+            deadline_str = format_club_datetime(deadline, get_settings().timezone, "%d.%m %H:%M")
             for user in users:
-                if user.id in submitted_user_ids:
+                if user.id in submitted_user_ids or not assigned_to(norm, user):
                     continue
-                exists = await _notification_exists(
-                    session, user_id=user.id, type_code="NORMATIVE", entity_name="normative_deadline_warn", entity_id=norm.id
-                )
+                exists = await session.scalar(select(Notification.id).where(Notification.user_id == user.id, Notification.type_code == "NORMATIVE", Notification.entity_name == "normative_deadline_warn", Notification.entity_id == norm.id,
+                    Notification.created_at >= period.opens_at if period.opens_at else True))
                 if exists:
                     continue
-                days_left = int((norm.deadline_at - now).total_seconds() // 86400) if norm.deadline_at else 0
+                days_left = int((deadline - now).total_seconds() // 86400)
                 session.add(
                     Notification(
                         user_id=user.id,

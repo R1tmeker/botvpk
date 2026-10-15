@@ -201,3 +201,101 @@ test("promo rotates automatically and pauses while a control has focus", async (
   await page.clock.runFor(7000);
   await expect(slider.getByRole("heading", { name: promoSlides[1].title })).toBeVisible();
 });
+
+async function mockChangeStream(page: import("@playwright/test").Page) {
+  await page.addInitScript(() => {
+    const scope = window as unknown as { changeStreams: EventTarget[]; EventSource: unknown };
+    scope.changeStreams = [];
+    scope.EventSource = class extends EventTarget {
+      constructor() { super(); scope.changeStreams.push(this); }
+      close() { /* isolated test stream */ }
+    };
+  });
+}
+async function notifyChange(page: import("@playwright/test").Page, keys: string[]) {
+  await page.evaluate((query_keys) => {
+    const scope = window as unknown as { changeStreams: EventTarget[] };
+    for (const source of scope.changeStreams) source.dispatchEvent(new MessageEvent("invalidate", { data: JSON.stringify({ query_keys }) }));
+  }, keys);
+}
+
+for (const theme of ["dark", "light"]) for (const width of [320, 390, 768]) {
+  test(`weekly normative cycle preserves history and refreshes progress ${theme} ${width}px`, async ({ page }, info) => {
+    await page.setViewportSize({ width, height: 960 });
+    await mockApp(page, "SUPER_ADMIN", theme);
+    await mockChangeStream(page);
+    let period = "2026-10-12";
+    const bodies: Record<string, unknown>[] = [];
+    const submissions: Record<string, unknown>[] = [{ id: 10, normative_id: 1, user_id: 1, period_start_date: "2026-10-05", status_code: "ACCEPTED", submitted_at: "2026-10-09T12:00:00Z", normative_title: "Приседания" }];
+    const progress = (id = 1, name = longName) => ({ user_id: id, full_name: name, total: 1, accepted: 0, pending: submissions.some((item) => item.period_start_date === period) ? 1 : 0, missing: submissions.some((item) => item.period_start_date === period) ? 0 : 1, redo: 0, accepted_all_time: 1, percent: 0, items: [{ normative_id: 1, title: "Приседания", status: "NOT_SUBMITTED" }] });
+    await page.route("**/api/normatives**", (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (route.request().method() === "POST") {
+        const body = route.request().postDataJSON(); bodies.push(body);
+        const submission = { id: 10 + bodies.length, normative_id: 1, user_id: 1, ...body, status_code: "SUBMITTED", submitted_at: "2026-10-12T12:00:00Z", normative_title: "Приседания" };
+        submissions.unshift(submission);
+        return route.fulfill({ json: submission });
+      }
+      if (path.endsWith("/progress/my")) return route.fulfill({ json: progress() });
+      if (path.endsWith("/progress/roster")) return route.fulfill({ json: [progress(), { ...progress(2, "Иванов Иван Иванович"), missing: 0, accepted: 1, percent: 100, items: [{ normative_id: 1, title: "Приседания", status: "ACCEPTED" }] }] });
+      return route.fulfill({ json: [{ id: 1, title: "Приседания", type_code: "GENERAL", is_active: true, recurrence_days: 7, current_period_start_date: period, current_period_end_date: period === "2026-10-12" ? "2026-10-19" : "2026-10-26", next_reset_at: period === "2026-10-12" ? "2026-10-18T17:00:00Z" : "2026-10-25T17:00:00Z", is_submission_open: true }] });
+    });
+    await page.route("**/api/submissions/**", (route) => route.fulfill({ json: submissions }));
+    await page.goto("/normatives");
+    const region = page.getByRole("region", { name: "Выполнение нормативов" });
+    await expect(region.getByText("За всё время принято сдач: 1.", { exact: false })).toBeVisible();
+    const submit = page.getByRole("button", { name: "Отправить на проверку", exact: true });
+    await expect(submit).toBeVisible();
+    await page.getByPlaceholder("Комментарий к сдаче...").fill("Работа первой недели");
+    await submit.click();
+    await expect(page.getByText("Отправлено на проверку командиру", { exact: true })).toBeVisible();
+    expect(bodies[0].period_start_date).toBe("2026-10-12");
+    period = "2026-10-19";
+    await notifyChange(page, ["normatives"]);
+    await expect(submit).toBeVisible();
+    await expect(page.getByPlaceholder("Комментарий к сдаче...")).toHaveValue("");
+    await page.getByRole("button", { name: "Мои сдачи", exact: true }).click();
+    await expect(page.getByText("Работа первой недели", { exact: false })).toBeVisible();
+    await page.getByRole("button", { name: "Активные", exact: true }).click();
+    await region.getByRole("button", { name: "Состав", exact: true }).click();
+    await region.getByText(longName, { exact: true }).click();
+    await expect(region.getByText("Не сдавал", { exact: true })).toBeVisible();
+    await region.getByLabel("Фильтр выполнения нормативов").selectOption("done");
+    await expect(region.getByText(longName, { exact: true })).toHaveCount(0);
+    await expect(region.getByText("Иванов Иван Иванович", { exact: true })).toBeVisible();
+    await region.getByText("Иванов Иван Иванович", { exact: true }).click();
+    await expect(region.getByText("Принято", { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
+    await region.screenshot({ path: info.outputPath("normative-roster.png") });
+  });
+}
+
+test("role changes reach an already open app through the change stream", async ({ page }) => {
+  await mockApp(page, "PARTICIPANT", "dark");
+  await mockChangeStream(page);
+  let role = "PARTICIPANT";
+  await page.route("**/api/me", (route) => route.fulfill({ json: { id: 1, full_name: longName, role_code: role, status_code: "ACTIVE", squad_id: 1 } }));
+  await page.goto("/");
+  await expect(page.getByText("Участник", { exact: true }).first()).toBeVisible();
+  role = "SUPER_ADMIN";
+  await notifyChange(page, ["me", "admin", "users"]);
+  await expect(page.getByText("Супер-администратор", { exact: true }).first()).toBeVisible();
+});
+
+test("voting and bulk selection exclude future days and remain open after class", async ({ page }) => {
+  await page.clock.setFixedTime(new Date("2026-10-14T03:00:00Z"));
+  await mockApp(page, "PARTICIPANT", "dark");
+  const rows = [
+    { id: 1, title: "Сегодня", start_datetime: "2026-10-14T05:00:00Z", end_datetime: "2026-10-14T07:00:00Z" },
+    { id: 2, title: "Послезавтра", start_datetime: "2026-10-16T05:00:00Z", end_datetime: "2026-10-16T07:00:00Z" },
+    { id: 3, title: "Вчера", start_datetime: "2026-10-13T05:00:00Z", end_datetime: "2026-10-13T07:00:00Z" },
+  ].map((event) => ({ ...event, requires_response: true, status_code: "PLANNED", response_deadline_at: "2026-10-01T00:00:00Z", my_response_code: null }));
+  await page.route("**/api/schedule**", (route) => route.fulfill({ json: new URL(route.request().url()).pathname.endsWith("current-week-type") ? {} : rows }));
+  await page.goto("/schedule");
+  await expect(page.locator("#event-1").getByRole("checkbox")).toBeVisible();
+  await expect(page.locator("#event-3").getByRole("checkbox")).toBeVisible();
+  await expect(page.locator("#event-2").getByRole("checkbox")).toHaveCount(0);
+  await expect(page.locator("#event-2").getByText("Ответить можно за сутки до занятия", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Выбрать без окончательного ответа", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Приду на выбранные (2)", exact: true })).toBeVisible();
+});

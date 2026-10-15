@@ -33,6 +33,7 @@ from .services.realtime import publish_realtime_event
 from .services.search import search_accessible
 from .services.events import respond_to_event
 from .services.heartbeat import start_heartbeat_thread
+from .services.normative_cycles import normative_period
 from .services.normatives import submit_normative as submit_normative_service
 from .services.observability import configure_json_logging, init_sentry
 from .services.sessions import consume_fixed_window_limit, delete_user_sessions
@@ -844,6 +845,7 @@ async def _start_normative_submission_from_vk(message, user: User, site_url: str
     await _set_event_state(
         message.from_id,
         step="normative_attachment",
+        started_at=datetime.now(timezone.utc).isoformat(),
         attachment_text=attachment_text,
     )
     await message.answer(
@@ -869,23 +871,34 @@ async def _handle_normative_submit_payload(message, user: User, payload: dict, s
             await message.answer("Норматив больше недоступен.", keyboard=main_keyboard(site_url))
             await _clear_event_state(message.from_id)
             return
-        submission = await submit_normative_service(
-            session,
-            normative=normative,
-            submitter=user,
-            status_code="PENDING",
-            comment=f"[VK attachment]\n{state.get('attachment_text', '')}",
-            file_ids=None,
-            audit_action_code="normative_submission.submit_via_vk",
-            audit_value={"normative_id": normative.id, "source": "vk"},
-            notification_body=f"{user.full_name} прислал вложение в VK по нормативу «{normative.title}».",
-            notification_scope="submitter_squad",
-        )
+        try:
+            submission = await submit_normative_service(
+                session,
+                normative=normative,
+                submitter=user,
+                status_code="PENDING",
+                comment=f"[VK attachment]\n{state.get('attachment_text', '')}",
+                file_ids=None,
+                audit_action_code="normative_submission.submit_via_vk",
+                audit_value={"normative_id": normative.id, "source": "vk"},
+                notification_body=f"{user.full_name} прислал вложение в VK по нормативу «{normative.title}».",
+                notification_scope="submitter_squad",
+                expected_period_start=normative_period(normative, datetime.fromisoformat(state["started_at"])).start if state.get("started_at") else None,
+            )
+        except ValueError as exc:
+            await session.rollback()
+            await _clear_event_state(message.from_id)
+            await message.answer(str(exc), keyboard=main_keyboard(site_url))
+            return
         await session.commit()
         await session.refresh(submission)
         normative_title = normative.title
     await _clear_event_state(message.from_id)
-    await message.answer(f"Сдача по нормативу «{normative_title}» отправлена командиру.", keyboard=main_keyboard(site_url))
+    await message.answer(
+        f"Норматив «{normative_title}» уже принят в текущем цикле. Повторная сдача не нужна."
+        if submission.status_code == "ACCEPTED" else f"Сдача по нормативу «{normative_title}» на проверке у командира.",
+        keyboard=main_keyboard(site_url),
+    )
 
 
 async def _unlink_vk(message, user: User) -> None:

@@ -39,18 +39,25 @@ class ResponsePolicyTests(unittest.TestCase):
     def test_commander_has_existing_cross_squad_permission(self):
         self.validate(event(squad_id=2), role=RoleLevel.SQUAD_COMMANDER)
 
-    def test_expired_deadline_cannot_be_bypassed_by_bulk_or_old_button(self):
-        with self.assertRaisesRegex(EventResponseError, "Срок ответа"):
-            self.validate(event(response_deadline_at=NOW - timedelta(seconds=1)))
+    def test_future_voting_cannot_be_bypassed_by_old_button_or_admin(self):
+        for role in (RoleLevel.PARTICIPANT, RoleLevel.ADMIN):
+            with self.assertRaisesRegex(EventResponseError, "за сутки"):
+                self.validate(event(start_datetime=NOW + timedelta(days=2)), role=role)
 
     def test_deadline_boundary_and_commander_override(self):
         self.validate(event(response_deadline_at=NOW))
         self.validate(event(response_deadline_at=NOW - timedelta(minutes=1)), role=RoleLevel.DEPUTY_SQUAD_COMMANDER)
 
-    def test_started_cancelled_and_non_response_events_are_rejected(self):
-        for item in (event(start_datetime=NOW), event(status_code="CANCELLED"), event(requires_response=False)):
+    def test_closed_cancelled_and_non_response_events_are_rejected(self):
+        for item in (event(start_datetime=NOW-timedelta(days=2)), event(status_code="CANCELLED"), event(requires_response=False)):
             with self.subTest(item=item), self.assertRaises(EventResponseError):
                 self.validate(item, role=RoleLevel.ADMIN)
+
+    def test_votes_open_exactly_one_day_before_and_close_one_day_after_end(self):
+        self.validate(event(start_datetime=NOW+timedelta(days=1)))
+        self.validate(event(start_datetime=NOW-timedelta(hours=26), end_datetime=NOW-timedelta(hours=23)))
+        with self.assertRaises(EventResponseError):
+            self.validate(event(start_datetime=NOW-timedelta(hours=26), end_datetime=NOW-timedelta(days=1)))
 
     def test_unknown_response_and_empty_absence_are_rejected(self):
         for code, comment in (("FORGED", None), ("NOT_COMING", "   ")):

@@ -6,6 +6,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import aliased
 
 from ..models import EventResponse, Notification, NotificationPreference, ScheduleEvent, User
+from .event_response_policy import response_window
 
 VK_QUEUE_LOCK = 825739102
 
@@ -47,21 +48,27 @@ async def suppression_reason(session, notification: Notification, now: datetime)
         return "expired_morning_briefing"
     if notification.type_code == "EVENT_RESPONSE_REMINDER" and notification.created_at < now - timedelta(days=1):
         return "expired_response_reminder"
-    if notification.entity_name in {"schedule_events", "schedule_events_2h"} and notification.type_code in {
+    if notification.entity_name in {"schedule_events", "schedule_events_2h", "schedule_events_response_open"} and notification.type_code in {
         "SCHEDULE_POLL", "SCHEDULE", "EVENT_RESPONSE_REMINDER",
     }:
         event = await session.get(ScheduleEvent, notification.entity_id)
-        if event is None or event.status_code == "CANCELLED" or (event.end_datetime or event.start_datetime) <= now:
+        if event is None or event.status_code == "CANCELLED":
             return "event_closed"
         if notification.type_code in {"SCHEDULE_POLL", "EVENT_RESPONSE_REMINDER"}:
-            if event.response_deadline_at and event.response_deadline_at < now:
+            opens, closes = response_window(event)
+            if now >= closes:
                 return "response_closed"
+            if now < opens:
+                notification.vk_retry_after = opens
+                return "defer_until_open"
             answered = await session.scalar(select(EventResponse.id).where(
                 EventResponse.event_id == event.id, EventResponse.user_id == notification.user_id,
                 EventResponse.response_code.in_(("COMING", "NOT_COMING")),
             ))
             if answered:
                 return "already_answered"
+        elif (event.end_datetime or event.start_datetime) <= now:
+            return "event_closed"
     # Conversations and announcements can intentionally contain repeated text.
     # Only automated notifications about the same entity are coalesced.
     if notification.type_code in {"SCHEDULE_POLL", "SCHEDULE", "EVENT_RESPONSE_REMINDER", "ATTENDANCE", "SYSTEM", "COMMANDER"} and notification.entity_name:

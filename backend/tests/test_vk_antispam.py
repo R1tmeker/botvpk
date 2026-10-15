@@ -109,9 +109,9 @@ async def test_group_chat_does_not_receive_instructions_on_every_message(monkeyp
 async def test_expired_schedule_poll_is_preserved_without_sending():
     now = utcnow()
     session = AsyncMock()
-    session.get.return_value = SimpleNamespace(status_code="PLANNED", start_datetime=now-timedelta(hours=2), end_datetime=now-timedelta(hours=1))
+    session.get.return_value = SimpleNamespace(id=9, status_code="PLANNED", start_datetime=now-timedelta(days=3), end_datetime=now-timedelta(days=2))
     incoming = SimpleNamespace(entity_name="schedule_events_2h", entity_id=9, type_code="SCHEDULE_POLL", created_at=now)
-    assert await suppression_reason(session, incoming, now) == "event_closed"
+    assert await suppression_reason(session, incoming, now) == "response_closed"
 
 
 async def test_already_answered_member_does_not_receive_another_poll():

@@ -7,8 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db_session
 from ..dependencies.auth import CurrentUser, get_current_user
-from ..models import ApplicationStatusHistory, CandidateEvent, CandidateEventResponse, JoinApplication, Notification, User
-from ..roles import PLATOON_ROLES, RoleCode
+from ..models import ApplicationStatusHistory, CandidateEvent, CandidateEventResponse, JoinApplication, User
+from ..roles import RoleCode
+from ..services.join_notifications import notify_new_application
 from ..schemas.core import (
     CandidateEventRead,
     CandidateEventResponseCreate,
@@ -73,19 +74,7 @@ async def create_application(
         entity_id=application.id,
         new_value=payload.model_dump(mode="json"),
     )
-    commanders = (await session.scalars(
-        select(User).where(User.status_code == "ACTIVE", User.role_code.in_(PLATOON_ROLES))
-    )).all()
-    for commander in commanders:
-        session.add(Notification(
-            user_id=commander.id,
-            type_code="NEW_APPLICATION",
-            title="Новая заявка",
-            body=f"{payload.full_name} подал(а) заявку на вступление.",
-            entity_name="join_applications",
-            entity_id=application.id,
-            send_to_tg=True,
-        ))
+    await notify_new_application(session, application)
     await session.commit()
     await session.refresh(application)
     return application

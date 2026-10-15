@@ -30,7 +30,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     WebAppInfo,
 )
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 
 from .config import get_settings
 from .database import AsyncSessionLocal
@@ -52,6 +52,7 @@ from .services.search import search_accessible
 from .services.realtime import publish_realtime_event
 from .services.heartbeat import heartbeat_loop
 from .services.observability import configure_json_logging, init_sentry
+from .services.normative_cycles import normative_period
 from .services.normatives import submit_normative as submit_normative_service
 from .utils.audit import record_audit
 from .utils.channel_link import issue_link_code
@@ -733,22 +734,8 @@ async def join_confirm(message: Message, state: FSMContext) -> None:
             entity_id=application.id,
             new_value={"telegram_id": message.from_user.id, "source": "bot"},
         )
-        commanders = list((await session.scalars(
-            select(User).where(
-                User.status_code == "ACTIVE",
-                User.role_code.in_(("PLATOON_COMMANDER", "DEPUTY_PLATOON_COMMANDER")),
-            )
-        )).all())
-        for commander in commanders:
-            session.add(Notification(
-                user_id=commander.id,
-                type_code="NEW_APPLICATION",
-                title="Новая заявка",
-                body=f"{data['full_name']} подал(а) заявку на вступление через бот.",
-                entity_name="join_applications",
-                entity_id=application.id,
-                send_to_tg=True,
-            ))
+        from .services.join_notifications import notify_new_application
+        await notify_new_application(session, application)
         await session.commit()
     await state.clear()
     await message.answer(
@@ -1736,13 +1723,12 @@ async def _upcoming_unanswered_events(session, user: User, limit: int = 7) -> li
     statement = select(ScheduleEvent).outerjoin(
         EventResponse, (EventResponse.event_id == ScheduleEvent.id) & (EventResponse.user_id == user.id),
     ).where(
-        ScheduleEvent.start_datetime > now, ScheduleEvent.status_code != "CANCELLED",
+        ScheduleEvent.start_datetime <= now + timedelta(days=1), ScheduleEvent.status_code != "CANCELLED",
+        func.coalesce(ScheduleEvent.end_datetime, ScheduleEvent.start_datetime) + timedelta(days=1) > now,
         or_(ScheduleEvent.squad_id.is_(None), ScheduleEvent.squad_id == user.squad_id),
         ScheduleEvent.requires_response.is_(True),
         or_(EventResponse.id.is_(None), EventResponse.response_code == "MAYBE"),
     )
-    if user_role(user) < RoleLevel.DEPUTY_SQUAD_COMMANDER:
-        statement = statement.where(or_(ScheduleEvent.response_deadline_at.is_(None), ScheduleEvent.response_deadline_at >= now))
     return list((await session.scalars(statement.order_by(ScheduleEvent.start_datetime).limit(limit))).all())
 
 
@@ -2114,29 +2100,37 @@ async def normative_file_submit(callback: CallbackQuery, state: FSMContext) -> N
         if not normative or not normative.is_active or (normative.squad_id is not None and normative.squad_id != user.squad_id):
             await callback.answer("Норматив недоступен.", show_alert=True)
             return
-        submission = await submit_normative_service(
-            session,
-            normative=normative,
-            submitter=user,
-            status_code="PENDING",
-            comment=f"[TG file_id: {file_id}]",
-            file_ids=None,
-            audit_action_code="normative_submission.submit_via_bot",
-            audit_value={"normative_id": norm_id, "telegram_file_id": file_id, "source": "bot"},
-            notification_body=f"{user.full_name} прислал файл на проверку по нормативу «{normative.title}».",
-            notification_scope="submitter_squad",
-        )
+        try:
+            submission = await submit_normative_service(
+                session,
+                normative=normative,
+                submitter=user,
+                status_code="PENDING",
+                comment=f"[TG file_id: {file_id}]",
+                file_ids=None,
+                audit_action_code="normative_submission.submit_via_bot",
+                audit_value={"normative_id": norm_id, "telegram_file_id": file_id, "source": "bot"},
+                notification_body=f"{user.full_name} прислал файл на проверку по нормативу «{normative.title}».",
+                notification_scope="submitter_squad",
+                expected_period_start=normative_period(normative, datetime.fromisoformat(data["started_at"])).start if data.get("started_at") else None,
+            )
+        except ValueError as exc:
+            await session.rollback()
+            await state.clear()
+            await callback.answer(str(exc), show_alert=True)
+            return
         await session.commit()
         await session.refresh(submission)
         normative_title = normative.title
     await state.clear()
     if callback.message:
         await callback.message.edit_text(
-            f"Файл принят на проверку по нормативу «{normative_title}».\nКомандир получил уведомление.",
+            (f"Норматив «{normative_title}» уже принят в текущем цикле. Повторная сдача не нужна."
+             if submission.status_code == "ACCEPTED" else f"Сдача по нормативу «{normative_title}» на проверке у командира."),
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="← К нормативам", callback_data="menu:normatives")]]),
             parse_mode=None,
         )
-    await callback.answer("Сдача отправлена!")
+    await callback.answer("Готово")
 
 
 # ──────────────────────── export ────────────────────────────────────────────

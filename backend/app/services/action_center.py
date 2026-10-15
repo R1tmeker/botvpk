@@ -78,9 +78,8 @@ async def pending_event_responses(
     event_query = select(ScheduleEvent).where(
         ScheduleEvent.requires_response.is_(True),
         ScheduleEvent.status_code != "CANCELLED",
-        ScheduleEvent.start_datetime > now,
-        ScheduleEvent.start_datetime <= now + timedelta(days=14),
-        (ScheduleEvent.response_deadline_at.is_(None)) | (ScheduleEvent.response_deadline_at >= now),
+        ScheduleEvent.start_datetime <= now + timedelta(days=1),
+        (ScheduleEvent.end_datetime > now - timedelta(days=1)) | ((ScheduleEvent.end_datetime.is_(None)) & (ScheduleEvent.start_datetime > now - timedelta(days=1))),
     )
     if scoped_squad_id is not None:
         event_query = event_query.where(
